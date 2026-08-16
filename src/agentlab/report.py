@@ -35,12 +35,18 @@ def render_report(
     baseline_recall: float | None = None,
     candidate_recall: float | None = None,
     total_tokens: int | None = None,
+    unpriced_models: list[str] | None = None,
 ) -> str:
     """Render `templates/report.md.j2` into a Markdown report string.
 
     Only `result`, `verdict_str`, `total_cost`, and `log_paths` are required;
     the remaining keyword-only fields are the experiment's config and per-arm
     numbers, rendered when supplied and omitted from the report otherwise.
+
+    `unpriced_models`, when non-empty, is stated on-record as a caveat next
+    to the cost total: those models' token usage has no known litellm price,
+    so `total_cost` excludes it and understates the true spend. A silent
+    stderr warning is not enough for a persisted, cost-honesty report.
     """
     template = _env.get_template("report.md.j2")
     return template.render(
@@ -57,4 +63,5 @@ def render_report(
         baseline_recall=baseline_recall,
         candidate_recall=candidate_recall,
         total_tokens=total_tokens,
+        unpriced_models=unpriced_models,
     )

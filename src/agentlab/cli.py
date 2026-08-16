@@ -157,6 +157,7 @@ def run_experiment(
         baseline_recall=mean_score(baseline.scores),
         candidate_recall=mean_score(candidate.scores),
         total_tokens=total_tokens(baseline.usages + candidate.usages),
+        unpriced_models=sorted(cost.unpriced_models),
     )
     experiment_dir.mkdir(parents=True, exist_ok=True)
     report_path = experiment_dir / "report.md"

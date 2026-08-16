@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from inspect_ai.analysis import SampleSummary, samples_df
 
-from agentlab.costs import run_cost
+from agentlab.costs import experiment_cost, resolve_price
 
 DEFAULT_SCORER_NAME = "recall_scorer"
 """Matches the scorer function name registered in compaction_task.py; Inspect
@@ -83,12 +83,19 @@ def total_cost(usages: list[tuple[str, int, int]]) -> CostBreakdown:
     which is correct for that pure module but too strict here: local/test
     runs against mockllm (or any other model absent from litellm's map) must
     still produce a report, just with those tokens excluded from the cost
-    total and flagged via `unpriced_models`."""
-    total = 0.0
+    total and flagged via `unpriced_models`. The summation itself stays
+    `costs.experiment_cost`'s job; this function only partitions `usages`
+    into priced and unpriced before delegating, rather than re-summing
+    per-usage costs itself."""
     unpriced: set[str] = set()
-    for model, input_tokens, output_tokens in usages:
+    priced_usages: list[tuple[str, int, int]] = []
+    for usage in usages:
+        model = usage[0]
         try:
-            total += run_cost(model, input_tokens, output_tokens)
+            resolve_price(model)
         except KeyError:
             unpriced.add(model)
+        else:
+            priced_usages.append(usage)
+    total = experiment_cost(priced_usages) if priced_usages else 0.0
     return CostBreakdown(total=total, unpriced_models=unpriced)

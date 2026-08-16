@@ -41,6 +41,10 @@
 {% if total_tokens is not none %}
 - Total tokens: {{ total_tokens }}
 {% endif %}
+{% if unpriced_models %}
+- Caveat: this total excludes usage from models with no known price: {{ unpriced_models | join(", ") }}.
+- The true cost is understated by an unknown amount; check the Inspect logs below for those models' token counts.
+{% endif %}
 
 ## Replay
 

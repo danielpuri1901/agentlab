@@ -39,6 +39,9 @@ def test_run_command_writes_report_with_verdict_offline(tmp_path):
     assert any(v in report_text for v in ("PROMOTE", "REJECT", "INCONCLUSIVE", "HOLD"))
     assert "mockllm/model" in report_text
     assert "Seed list: [0, 1]" in report_text
+    # mockllm has no litellm price, so the persisted report must carry the
+    # cost-honesty caveat on record, not just a transient stderr warning.
+    assert "excludes usage from models with no known price" in report_text
 
 
 def test_pilot_command_writes_pilot_json_offline(tmp_path):
