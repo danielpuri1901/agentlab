@@ -4,6 +4,7 @@ live AWS or makes a network call.
 """
 
 import asyncio
+from types import SimpleNamespace
 
 import boto3
 import pytest
@@ -95,6 +96,69 @@ def test_run_arm_uploads_log_and_writes_transitions(moto_fabric, monkeypatch):
     events = {item["event"] for item in items}
     assert {"ARM_STARTED", "ARM_COMPLETED"} <= events
     assert all(item["arm"] == "structured" for item in items)
+
+
+def _set_run_arm_env(monkeypatch, experiment_id):
+    monkeypatch.setenv("EXPERIMENT_ID", experiment_id)
+    monkeypatch.setenv("ARM_STYLE", "structured")
+    monkeypatch.setenv("MODEL", "mockllm/model")
+    monkeypatch.setenv("TASKS", "2")
+    monkeypatch.setenv("REPEATS", "1")
+    monkeypatch.setenv("N_FACTS", "3")
+    monkeypatch.setenv("FILLER_TURNS", "8")
+    monkeypatch.setenv("SUMMARY_BUDGET", "50")
+    monkeypatch.setenv("RESULTS_BUCKET", BUCKET)
+    monkeypatch.setenv("STATE_TABLE", TABLE)
+
+
+def test_run_arm_generic_failure_writes_arm_failed_and_exits_nonzero(moto_fabric, monkeypatch):
+    _s3, _dynamodb, table = moto_fabric
+    _set_run_arm_env(monkeypatch, "exp-test-fail-generic")
+
+    async def failing_run_arm(*args, **kwargs):
+        raise RuntimeError("boom: simulated provider failure")
+
+    # Patches the name as looked up inside agentlab.worker (imported there
+    # from eval_runner), not the original definition.
+    monkeypatch.setattr("agentlab.worker._run_arm", failing_run_arm)
+
+    result = runner.invoke(app, ["worker", "run-arm"])
+
+    assert result.exit_code != 0
+
+    items = table.scan()["Items"]
+    failed = [item for item in items if item["event"] == "ARM_FAILED"]
+    assert len(failed) == 1
+    assert failed[0]["detail"] == "boom: simulated provider failure"
+    assert failed[0]["arm"] == "structured"
+
+
+def test_run_arm_check_log_status_failure_writes_diagnosis_not_bare_exit_code(
+    moto_fabric, monkeypatch
+):
+    # Regression test: `check_log_status` raising a bare `typer.Exit(1)`
+    # means `str(exc)` is just "1" (click's Exit never calls
+    # `super().__init__(message)`); the ARM_FAILED item must carry the real
+    # diagnosis (arm name, status, log location) instead.
+    _s3, _dynamodb, table = moto_fabric
+    _set_run_arm_env(monkeypatch, "exp-test-fail-status")
+
+    async def fake_eval_async(*args, **kwargs):
+        return [SimpleNamespace(status="error", location="/tmp/fake/logs/structured.eval")]
+
+    monkeypatch.setattr("agentlab.eval_runner.eval_async", fake_eval_async)
+
+    result = runner.invoke(app, ["worker", "run-arm"])
+
+    assert result.exit_code != 0
+
+    items = table.scan()["Items"]
+    failed = [item for item in items if item["event"] == "ARM_FAILED"]
+    assert len(failed) == 1
+    detail = failed[0]["detail"]
+    assert detail != "1"
+    assert "structured" in detail
+    assert "/tmp/fake/logs/structured.eval" in detail
 
 
 def test_finalize_writes_report_and_matches_local_verdict(moto_fabric, monkeypatch, tmp_path):

@@ -31,6 +31,28 @@ def hypothesis_for(baseline_style: str, candidate_style: str) -> str:
     )
 
 
+class ArmRunError(typer.Exit):
+    """Raised when an eval run for one arm does not succeed.
+
+    Subclasses `typer.Exit` rather than a plain exception so every existing
+    call site that expects `typer.Exit` - the local CLI, and this module's
+    own tests - sees no behavior change: raising it still aborts a Typer
+    command with the given exit code. The point of the subclass is
+    `message`/`__str__`: `str(typer.Exit(1))` is just `"1"` (click's `Exit`
+    never calls `super().__init__(message)`), which loses the actual
+    diagnosis for callers that need more than the exit code - the cloud
+    worker's ARM_FAILED write needs the arm name, status, and log location,
+    not the number 1.
+    """
+
+    def __init__(self, message: str, code: int = 1) -> None:
+        super().__init__(code=code)
+        self.message = message
+
+    def __str__(self) -> str:
+        return self.message
+
+
 def check_log_status(log: EvalLog, arm_name: str) -> None:
     """Abort cleanly if an Inspect eval run for `arm_name` did not succeed.
 
@@ -41,12 +63,12 @@ def check_log_status(log: EvalLog, arm_name: str) -> None:
     log lives.
     """
     if log.status != "success":
-        typer.echo(
+        message = (
             f"error: eval run for arm '{arm_name}' did not succeed "
-            f"(status={log.status}); see log at {log.location}",
-            err=True,
+            f"(status={log.status}); see log at {log.location}"
         )
-        raise typer.Exit(1)
+        typer.echo(message, err=True)
+        raise ArmRunError(message)
 
 
 async def _run_arm(
