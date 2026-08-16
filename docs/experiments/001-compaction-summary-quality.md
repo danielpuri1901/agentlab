@@ -31,6 +31,13 @@ Three knobs, applied together:
 
 A screening pilot validates that these land both arms off ceiling (< 0.9) and off floor (> 0.1); if not, adjust knobs and re-register before the sized run.
 
+### Amendment 1 (2026-08-16, after screening pilot 1)
+
+Screening pilot 1 (10 tasks x 3 repeats, Nova Lite, 24 facts / 120 turns / budget 150, $0.12) FAILED the floor gate: naive recall 0.003, structured recall 0.136.
+Root cause is capacity, not summarizer quality: 24 facts x ~9 tokens of exact codes is ~220 tokens, which cannot fit in a 150-token budget even with perfect triage, so both arms are crushed and the delta degenerates toward "any preservation vs none".
+Amended knobs: `n_facts` 24 -> 12 (about 110 tokens of codes against the 150-token budget, a ~1.4x pressure ratio that forces triage but is physically satisfiable), `filler_turns` stays 120, budget stays 150.
+The sized run remains blocked until a screening pilot passes both gates.
+
 ## Design
 
 - Paired: both arms on identical task seeds, per-task deltas, clustered by task.
