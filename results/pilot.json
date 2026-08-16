@@ -1,7 +1,7 @@
 {
-  "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
-  "baseline_style": "naive",
-  "candidate_style": "structured",
+  "model": "bedrock/eu.amazon.nova-lite-v1:0",
+  "baseline_style": "structured",
+  "candidate_style": "codes_first",
   "seeds": [
     0,
     1,
@@ -18,20 +18,20 @@
   "n_facts": 12,
   "filler_turns": 120,
   "summary_budget": 150,
-  "mean_delta": 0.625,
-  "ci_low": 0.6109490633560977,
-  "ci_high": 0.6390509366439023,
+  "mean_delta": 0.2833333333333333,
+  "ci_low": 0.1051577055168163,
+  "ci_high": 0.46150896114985035,
   "n_tasks": 10,
-  "sd_task_delta": 0.019641855032959617,
+  "sd_task_delta": 0.24907235301622102,
   "mde": 0.1,
-  "required_tasks": 3,
-  "baseline_recall": 0.01944444444444444,
-  "candidate_recall": 0.6444444444444444,
-  "total_cost": 0.970261,
+  "required_tasks": 51,
+  "baseline_recall": 0.16944444444444445,
+  "candidate_recall": 0.4527777777777778,
+  "total_cost": 0.062913084,
   "unpriced_models": [],
-  "total_tokens": 796673,
+  "total_tokens": 733567,
   "log_paths": [
-    "/Users/danielpuri/Desktop/Projects/agentlab/results/pilot-logs/2026-08-16T14-39-23-00-00_compaction-task_mggdRN37gLBaz65XgaWxxW.eval",
-    "/Users/danielpuri/Desktop/Projects/agentlab/results/pilot-logs/2026-08-16T14-40-03-00-00_compaction-task_D6xYEQ5oTuret2quJR4Soh.eval"
+    "/Users/danielpuri/Desktop/Projects/agentlab/results/pilot-logs/2026-08-16T14-47-04-00-00_compaction-task_dFgRjeQwVCwghV7kBxC6iG.eval",
+    "/Users/danielpuri/Desktop/Projects/agentlab/results/pilot-logs/2026-08-16T14-47-13-00-00_compaction-task_7J2hn36PiSKT2STRq2MAC6.eval"
   ]
 }

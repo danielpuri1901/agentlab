@@ -6,18 +6,24 @@ to `agentlab.results` for extraction and `agentlab.stats`/`agentlab.report`
 for analysis and rendering.
 """
 
+import asyncio
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
-from inspect_ai import eval
+from inspect_ai import eval_async
 from inspect_ai.log import EvalLog
 
 from agentlab.compaction_task import compaction_task
 from agentlab.report import render_report
 from agentlab.results import extract_results, mean_score, total_cost, total_tokens
 from agentlab.stats import paired_analysis, required_tasks, verdict
+
+# eval_async has no display kwarg (sync eval only); silence Inspect's
+# progress UI process-wide instead.
+os.environ.setdefault("INSPECT_DISPLAY", "none")
 
 app = typer.Typer()
 
@@ -48,7 +54,7 @@ def check_log_status(log: EvalLog, arm_name: str) -> None:
         raise typer.Exit(1)
 
 
-def _run_arm(
+async def _run_arm(
     style: str,
     model: str,
     seeds: list[int],
@@ -66,9 +72,25 @@ def _run_arm(
         n_facts=n_facts,
         filler_turns=filler_turns,
     )
-    [log] = eval(task, epochs=repeats, log_dir=str(log_dir), display="none")
+    [log] = await eval_async(task, epochs=repeats, log_dir=str(log_dir))
     check_log_status(log, arm_name=style)
     return log
+
+
+async def _run_arms_in_one_loop(
+    model, seeds, repeats, log_dir, baseline_style, candidate_style,
+    summary_budget, n_facts, filler_turns,
+):
+    # Both arms must share one event loop: provider internals (e.g. the
+    # aiobotocore credential-refresh lock) bind to the loop of the first
+    # eval and crash a second eval run on a fresh loop.
+    baseline_log = await _run_arm(
+        baseline_style, model, seeds, repeats, log_dir, summary_budget, n_facts, filler_turns
+    )
+    candidate_log = await _run_arm(
+        candidate_style, model, seeds, repeats, log_dir, summary_budget, n_facts, filler_turns
+    )
+    return baseline_log, candidate_log
 
 
 def _run_paired(
@@ -82,11 +104,11 @@ def _run_paired(
     n_facts: int,
     filler_turns: int,
 ):
-    baseline_log = _run_arm(
-        baseline_style, model, seeds, repeats, log_dir, summary_budget, n_facts, filler_turns
-    )
-    candidate_log = _run_arm(
-        candidate_style, model, seeds, repeats, log_dir, summary_budget, n_facts, filler_turns
+    baseline_log, candidate_log = asyncio.run(
+        _run_arms_in_one_loop(
+            model, seeds, repeats, log_dir, baseline_style, candidate_style,
+            summary_budget, n_facts, filler_turns,
+        )
     )
     baseline = extract_results(baseline_log.location)
     candidate = extract_results(candidate_log.location)
