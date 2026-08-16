@@ -82,9 +82,11 @@ class TestCreditSmokeOffline:
 
     def test_claude_family_repeats_reach_target_spend(self):
         """Each Claude family's derived repeat count must land its expected
-        total at or just above TARGET_DOLLARS_PER_CLAUDE_FAMILY, so the
-        resulting Bedrock charge is legible in Cost Explorer instead of
-        vanishing into UI rounding (the bug this replaces)."""
+        total at or just above TARGET_DOLLARS_PER_CLAUDE_FAMILY, and in a
+        sane 10-50 call band: enough repeats for a real, attributable
+        Bedrock charge without needing a large dollar total (the
+        credit-coverage question is which billing entity a charge lands
+        under, not how big the charge is)."""
         for model_id, friendly_name in credit_smoke.get_model_configs():
             if friendly_name == "Nova Lite":
                 continue
@@ -98,11 +100,17 @@ class TestCreditSmokeOffline:
                 f"{friendly_name} expected total ${expected_total:.4f} not "
                 f"within one call's cost of target ${target}"
             )
+            assert 10 <= repeats <= 50, (
+                f"{friendly_name} repeats={repeats} outside the sane 10-50 call band"
+            )
             assert repeats <= credit_smoke.MAX_REPEATS_PER_FAMILY
 
-    def test_grand_expected_total_is_legible(self):
-        """Total expected spend across all families must land in a legible
-        multi-dollar range, not the sub-$0.01 total the original design produced."""
+    def test_grand_expected_total_in_sub_dollar_band(self):
+        """Total expected spend across all families must land in the
+        deliberately small sub-$2 band this design targets: enough calls per
+        family to be a believable signal, not the $5-6 the earlier
+        over-solved design produced, and not the sub-$0.01 the original bug
+        produced."""
         grand_total = 0.0
         for model_id, friendly_name in credit_smoke.get_model_configs():
             cost_per_call = credit_smoke.calculate_expected_cost(
@@ -111,27 +119,32 @@ class TestCreditSmokeOffline:
             repeats = credit_smoke.repeats_for_family(model_id, cost_per_call)
             grand_total += repeats * cost_per_call
 
-        assert grand_total >= 2 * credit_smoke.TARGET_DOLLARS_PER_CLAUDE_FAMILY, (
-            f"grand expected total ${grand_total:.2f} is not legible"
+        assert 2 * credit_smoke.TARGET_DOLLARS_PER_CLAUDE_FAMILY <= grand_total < 2.0, (
+            f"grand expected total ${grand_total:.2f} outside the sub-$2 target band"
         )
 
     def test_prompt_length(self):
-        """Verify the prompt is ~2000 tokens as specified in the brief.
-
-        The brief specifies: one fixed ~2,000-token request, which translates to
-        approximately 1500 words given English tokenization (~1.3 tokens per word).
-        """
+        """Verify the prompt lands around 8,000 tokens per the Finding 4
+        amendment: bigger per-call requests need fewer repeats to produce a
+        real, attributable charge."""
         prompt = credit_smoke.PROMPT
         # Rough tokenization: ~1.3 tokens per word on average for English
         word_count = len(prompt.split())
         rough_token_count = word_count * 1.3
 
-        # Enforce spec: 1600-2600 tokens (accounting for tokenizer variance)
-        assert 1600 <= rough_token_count <= 2600, (
+        # Enforce spec: 7000-9000 tokens (accounting for tokenizer variance)
+        assert 7000 <= rough_token_count <= 9000, (
             f"Prompt word count {word_count} (~{rough_token_count:.0f} tokens) "
-            f"outside spec range [1600, 2600]"
+            f"outside spec range [7000, 9000]"
+        )
+
+    def test_estimated_input_tokens_matches_prompt(self):
+        """ESTIMATED_INPUT_TOKENS is derived from PROMPT, not hardcoded, so
+        it can't silently drift out of sync with the actual prompt size."""
+        assert credit_smoke.ESTIMATED_INPUT_TOKENS == round(
+            len(credit_smoke.PROMPT.split()) * 1.3
         )
 
     def test_max_output_tokens(self):
         """Verify max output tokens constant is set."""
-        assert credit_smoke.MAX_OUTPUT_TOKENS == 200
+        assert credit_smoke.MAX_OUTPUT_TOKENS == 500

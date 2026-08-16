@@ -9,7 +9,9 @@ Claude models on Bedrock are delivered as AWS Marketplace SaaS products.
 Amazon Nova is first-party and bills as Amazon Bedrock service usage, so Nova is certain to draw from credits.
 Claude credit coverage varies by credit grant and must be tested empirically before committing the experiment design to any Claude tier.
 
-This runbook invokes Nova Lite once (its first-party credit coverage is near-certain, so one call is enough) and each of Claude Haiku 4.5 and Claude Sonnet 5 repeatedly, targeting roughly $2-3 of expected spend per Claude family so the resulting charge is legible in Cost Explorer instead of vanishing into UI rounding.
+This runbook invokes Nova Lite once (its first-party credit coverage is near-certain, so one call is enough) and each of Claude Haiku 4.5 and Claude Sonnet 5 repeatedly with larger-than-normal requests, deriving enough repeats per Claude family to produce a real, attributable charge without needing a large dollar total.
+The credit-coverage question this test answers is qualitative: which billing entity (AWS vs AWS Marketplace) a charge lands under, not how big the charge is.
+Cost Explorer's CSV export and API views show sub-dollar amounts at full precision, so a small total answers the question just as well as a large one.
 It then waits for the bill to settle and checks Cost Explorer to see which charges drew from credits.
 If Claude usage lands under AWS Marketplace and is not offset by credits, the effective model budget for Claude collapses to zero and the experiment design must move to Amazon Nova.
 
@@ -42,8 +44,8 @@ uv run python scripts/credit_smoke.py
 
 Expected output: a spend plan printed first (per-family call count and expected cost, before any request is sent), followed by actual input and output token counts and actual cost per model family as each family's calls complete, then a grand total.
 Nova Lite makes exactly one call.
-Each Claude family makes however many calls its per-call cost requires to reach roughly $2-3 of expected spend (see `TARGET_DOLLARS_PER_CLAUDE_FAMILY` in `scripts/credit_smoke.py`), which at current Bedrock rates is on the order of several hundred calls per Claude family and takes a while to run.
-The grand total should land in the range of roughly $5-6, not under $1: that is deliberate, so the resulting charge is legible in Cost Explorer instead of vanishing into UI rounding.
+Each Claude family makes however many ~8,000-input-token calls its per-call cost requires to reach roughly $0.30 of expected spend (see `TARGET_DOLLARS_PER_CLAUDE_FAMILY` in `scripts/credit_smoke.py`), which at current Bedrock rates derives to roughly 15-30 calls per Claude family.
+The grand total should land in the range of roughly $0.60-0.80: small on purpose, since the credit-coverage question is which billing entity a charge appears under, not how large the charge is.
 
 ### Step 2: Wait for billing to settle
 
@@ -53,7 +55,8 @@ Do not proceed until charges appear.
 ### Step 3: Verify credit coverage in Cost Explorer
 
 Open the AWS Cost Explorer console.
-Read exact amounts via Cost Explorer's CSV export or the Cost Explorer API rather than relying on the console UI alone: the UI rounds small charges, which can hide per-family detail even at this test's legible multi-dollar total.
+Read exact amounts via Cost Explorer's CSV export or the Cost Explorer API rather than relying on the console UI alone: the UI rounds sub-dollar charges, and this test's total is deliberately sub-dollar.
+Group by billing entity (AWS vs AWS Marketplace) and by service: that grouping, not the dollar amount, is the actual answer to the credit-coverage question, so get it from the CSV/API export even if the UI shows the total as $0.00.
 
 #### 3a. Check service breakdown
 

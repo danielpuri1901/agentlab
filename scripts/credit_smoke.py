@@ -1,15 +1,20 @@
 """
 Bedrock credit smoke test: verify which model families draw from promotional credits.
 
-Sends one fixed ~1500-word (~2000-token) prompt to each model family (Nova
-Lite, Haiku 4.5, Sonnet 5) with max 200 output tokens per call. Nova Lite is
-called once - its first-party credit coverage is near-certain, so one call is
-enough to confirm it. Each Claude family is called a repeat count derived
-from run_cost (see repeats_for_family) so its expected total spend lands
-near TARGET_DOLLARS_PER_CLAUDE_FAMILY: legible in Cost Explorer instead of
-vanishing into UI rounding. Prints the spend plan (per-family call count and
-expected cost) before sending anything, then per-family actual token usage
-and cost via run_cost from costs.py, then a grand total.
+Sends one fixed ~6200-word (~8000-token) prompt to each model family (Nova
+Lite, Haiku 4.5, Sonnet 5) with max 500 output tokens per call. The
+credit-coverage question this test answers is qualitative - which billing
+entity (AWS vs AWS Marketplace) a charge appears under - and Cost Explorer's
+CSV/API views show sub-dollar amounts at full precision, so calls are sized
+to answer that question cheaply rather than to hit a specific dollar target.
+Nova Lite is called once - its first-party credit coverage is near-certain,
+so one call is enough to confirm it. Each Claude family is called a repeat
+count derived from run_cost (see repeats_for_family) so its expected total
+spend lands near TARGET_DOLLARS_PER_CLAUDE_FAMILY, enough calls to be a
+believable signal without needing a large total. Prints the spend plan
+(per-family call count and expected cost) before sending anything, then
+per-family actual token usage and cost via run_cost from costs.py, then a
+grand total.
 
 This script is structured for offline testing: model configurations, prompts, and
 cost calculation are all deterministic and do not require AWS credentials. The live
@@ -58,24 +63,25 @@ NOVA_LITE_CALLS = 1
 credit coverage is near-certain; one call is enough to confirm it draws from
 credits at all, unlike the Claude families this script is actually testing."""
 
-TARGET_DOLLARS_PER_CLAUDE_FAMILY = 2.5
-"""Expected spend per Claude family. Chosen in the $2-3 range so the
-resulting charge is legible against Cost Explorer's UI rounding while still
-being a smoke test, not a real experiment run."""
+TARGET_DOLLARS_PER_CLAUDE_FAMILY = 0.30
+"""Expected spend per Claude family. The credit-coverage question is
+qualitative (which billing entity a charge lands under), and Cost Explorer's
+CSV/API views show sub-dollar amounts at full precision, so this only needs
+to be big enough for a handful of real Bedrock calls to produce a readable
+signal - not a specific dollar target. At current rates this derives to
+roughly 15-30 calls per Claude family (see repeats_for_family)."""
 
-MAX_REPEATS_PER_FAMILY = 1000
-"""Safety cap on the derived repeat count, well above what real Bedrock
-prices require to reach TARGET_DOLLARS_PER_CLAUDE_FAMILY (roughly 424-848
-calls at current Sonnet 5 / Haiku 4.5 rates). Guards against a pricing bug
-(e.g. a near-zero resolved price) turning a smoke test into an unbounded
-number of live API calls."""
+MAX_REPEATS_PER_FAMILY = 100
+"""Runaway guard on the derived repeat count, not a target: comfortably
+above the ~15-30 calls real Bedrock prices require to reach
+TARGET_DOLLARS_PER_CLAUDE_FAMILY, so it only bites if a pricing bug (e.g. a
+near-zero resolved price) would otherwise turn a smoke test into an
+unbounded number of live API calls."""
 
-ESTIMATED_INPUT_TOKENS = 1950
-"""Rough token estimate for PROMPT (~1500 words at ~1.3 tokens/word), used
-both as the pre-run cost estimate that sizes REPEATS_PER_FAMILY and as a
-fallback if a live response has no usable usage field."""
-
-# Fixed prompt: ~1500 words of Lorem ipsum text (approximately 2000 tokens)
+# One copy of the document body is ~1550 words (~2000 tokens); PROMPT below
+# repeats it 4x under a single instruction to land near 8,000 input tokens
+# per call, big enough that a handful of repeats per Claude family produces
+# a real, attributable charge.
 _LOREM = (
     "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor "
     "incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis "
@@ -85,15 +91,23 @@ _LOREM = (
     "culpa qui officia deserunt mollit anim id est laborum. "
 )
 
-PROMPT = "Summarize this comprehensive technical document:\n\n" + (
+_DOCUMENT_BODY = (
     _LOREM * 22
     + "Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium "
     "doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore "
     "veritatis et quasi architecto beatae vitae dicta sunt explicabo."
 )
 
+PROMPT = "Summarize this comprehensive technical document:\n\n" + (_DOCUMENT_BODY * 4)
+
+ESTIMATED_INPUT_TOKENS = round(len(PROMPT.split()) * 1.3)
+"""Rough token estimate for PROMPT (~1.3 tokens/word), derived from PROMPT
+itself rather than hardcoded so it can't drift out of sync. Used both as the
+pre-run cost estimate that sizes repeats_for_family and as a fallback if a
+live response has no usable usage field."""
+
 # Maximum output tokens
-MAX_OUTPUT_TOKENS = 200
+MAX_OUTPUT_TOKENS = 500
 
 
 def get_model_configs():
@@ -248,7 +262,10 @@ async def main():
     print(
         "Wait 24-48h for AWS Cost Explorer to settle, then read exact amounts "
         "via Cost Explorer's CSV export or the Cost Explorer API rather than "
-        "the console UI alone - UI rounding can hide small per-family charges."
+        "the console UI alone - UI rounding can hide sub-dollar charges. "
+        "Group by billing entity (AWS vs AWS Marketplace) and by service: "
+        "that grouping, not the dollar amount, is the actual answer to the "
+        "credit-coverage question this test exists to answer."
     )
 
 
