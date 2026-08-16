@@ -88,3 +88,18 @@ For each model family, record:
 If all three model families are credit-covered, the experiment design can proceed as-is.
 If Claude models (Haiku 4.5 or Sonnet 4.6) are not credit-covered or appear under AWS Marketplace without offset, notify the team.
 The model selection strategy in `docs/research/bedrock-model-pricing.md` section 5 will need to be reworked to rely on Amazon Nova (which is certain to be credit-covered).
+
+## Exact verification command (API, full precision)
+
+Run this 24-48h after the smoke test (adjust dates):
+
+```bash
+aws ce get-cost-and-usage --time-period Start=2026-08-16,End=2026-08-18 \
+  --granularity DAILY --metrics UnblendedCost \
+  --group-by Type=DIMENSION,Key=BILLING_ENTITY Type=DIMENSION,Key=SERVICE
+```
+
+A Claude charge under billing entity "AWS Marketplace" means it is excluded from promotional credits per the credit terms.
+A charge under billing entity "AWS" draws from credits.
+First attempted 2026-08-16 ~13:45 UTC: data not yet propagated (expected lag up to 24h).
+
