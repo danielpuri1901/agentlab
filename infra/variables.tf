@@ -39,3 +39,9 @@ variable "experiments_queue_name" {
   type        = string
   default     = "agentlab-experiments"
 }
+
+variable "image_tag" {
+  description = "Tag of the `agentlab` ECR image the ECS task definitions run. scripts/build_and_push_image.sh (Task 6) pushes and tags images with the git short SHA; override with -var image_tag=<sha> at apply time to roll out a new build."
+  type        = string
+  default     = "latest"
+}

@@ -47,3 +47,18 @@ output "ecr_repository_arn" {
   description = "ECR repository ARN, for scoping IAM policies in later tasks."
   value       = aws_ecr_repository.agentlab.arn
 }
+
+output "ecs_cluster_name" {
+  description = "ECS cluster name, for operator visibility (e.g. inspecting running tasks)."
+  value       = aws_ecs_cluster.agentlab.name
+}
+
+output "state_machine_arn" {
+  description = "Step Functions state machine ARN that the EventBridge Pipe starts on each SQS message."
+  value       = aws_sfn_state_machine.experiment.arn
+}
+
+output "pipe_arn" {
+  description = "EventBridge Pipe ARN wiring the experiments queue to the state machine."
+  value       = aws_pipes_pipe.experiments.arn
+}
