@@ -30,10 +30,13 @@ app = typer.Typer()
 BASELINE_STYLE = "truncate"
 CANDIDATE_STYLE = "structured"
 
-HYPOTHESIS = (
-    "Structured summarization retains more of the planted per-fact "
-    "information across the compaction boundary than truncation does."
-)
+def hypothesis_for(baseline_style: str, candidate_style: str) -> str:
+    """Derive the report's hypothesis line from the actual arms under test."""
+    return (
+        f"The '{candidate_style}' compaction style retains more of the planted "
+        f"per-fact information across the compaction boundary than the "
+        f"'{baseline_style}' style does."
+    )
 
 
 def check_log_status(log: EvalLog, arm_name: str) -> None:
@@ -270,7 +273,7 @@ def run_experiment(
         verdict_str=verdict_str,
         total_cost=cost.total,
         log_paths=[baseline_log.location, candidate_log.location],
-        hypothesis=HYPOTHESIS,
+        hypothesis=hypothesis_for(baseline_style, candidate_style),
         model=model,
         baseline_style=baseline_style,
         candidate_style=candidate_style,

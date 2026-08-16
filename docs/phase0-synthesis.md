@@ -167,6 +167,8 @@ The claim-to-experiment compiler moves to the someday list.
 Scout, Harbor, Langfuse, and OpenWiki move to a trigger list with a written adoption condition each (OpenWiki's trigger: the repo contains real code).
 Correction verified 2026-08-16 against docs.langchain.com: LangSmith now ships managed Sandboxes, and Harbor can run each trial on a LangSmith sandbox with results recorded as LangSmith experiments.
 When the sandbox trigger fires (first code-executing workload, around v0.3), evaluate Harbor + LangSmith sandboxes head-to-head against Inspect's Docker sandboxes and our own Fargate before choosing.
+Trigger added 2026-08-16: Bedrock prompt caching (prefix caching; statistically safe) gets implemented when a single experiment's model bill would exceed ~$5 - today's Nova runs cost cents, so it waits.
+Inspect's local response cache is BANNED for experiment arms: identical cached outputs across epochs would destroy repeat-variance measurement.
 The broker service leaves the v0.1 critical path; v0.2 uses a scoped Bedrock-only task role, and a broker returns only on measured need.
 
 ## 7. Production lessons encoded into the design

@@ -88,3 +88,10 @@ Re-registered hypothesis: a compaction prompt engineered to spend its budget on 
 Same corpus knobs, same gates (both arms in (0.1, 0.9) at screening), same MDE 0.10, same $5.00 cumulative cap ($1.27 spent).
 Screening on Nova Lite; sized run on Nova Lite; confirmation on Haiku 4.5 if PROMOTE.
 Finding 001-A (naive discards ~all identifiers cross-tier) stands as a recorded result of the retired arms.
+
+### Amendment 4 (2026-08-16, sized-run result and confirmation sizing)
+
+Sized run (51 tasks x 5 repeats, Nova Lite, $0.54): PROMOTE.
+codes_first 0.423 vs structured 0.155; delta +0.268, 95% CI [0.207, 0.329]; sd_task_delta 0.218.
+Confirmation-sizing ruling: copying Nova's n to Haiku would cost ~$10 and breach the cap; Haiku's measured task noise is far smaller (screening sd 0.020), so the confirmation runs 15 tasks x 3 repeats (~$1.5), decisive if the effect transfers.
+Known report blemish fixed after this run: the report's hypothesis line was a stale hard-coded constant; now derived from the actual arms.
