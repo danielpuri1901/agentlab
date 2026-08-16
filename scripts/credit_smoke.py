@@ -32,20 +32,23 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from agentlab.costs import run_cost
 
-# Model configurations. Claude entries use the "global." inference-profile ids:
-# newer Anthropic models on Bedrock (Sonnet 5, Haiku 4.5) typically require a
-# geo inference-profile id for on-demand invocation rather than the bare
-# model id. The global profile carries no pricing premium (see
-# docs/research/bedrock-model-pricing.md section 5.2) and both ids are
-# confirmed present in litellm's local price map. Before running against a
-# real account, verify these ids are actually provisioned there (see
-# docs/runbooks/credit-smoke-test.md prerequisites).
+# Model configurations, confirmed against a live AWS account via
+# `aws bedrock list-inference-profiles` (region eu-west-1; see
+# docs/runbooks/credit-smoke-test.md prerequisites for how to re-verify).
+# Claude entries use the "global." inference-profile ids: newer Anthropic
+# models on Bedrock (Sonnet 5, Haiku 4.5) require a geo inference-profile id
+# for on-demand invocation rather than the bare model id, and global carries
+# no pricing premium (see docs/research/bedrock-model-pricing.md section
+# 2.8). Nova Lite has no global inference profile, so it uses the "eu."
+# regional profile instead. All three ids are confirmed present in litellm's
+# local price map (verified via resolve_price - see
+# tests/test_credit_smoke.py).
 #
-# Bare-id fallback, if the global inference profile is unavailable in the
-# account: "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0" and
-# "bedrock/anthropic.claude-sonnet-5".
+# Bare-id fallback, if a profile above is ever unavailable in the account:
+# "bedrock/amazon.nova-lite-v1:0", "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+# and "bedrock/anthropic.claude-sonnet-5".
 MODELS = [
-    ("bedrock/amazon.nova-lite-v1:0", "Nova Lite"),
+    ("bedrock/eu.amazon.nova-lite-v1:0", "Nova Lite"),
     ("bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0", "Haiku 4.5"),
     ("bedrock/global.anthropic.claude-sonnet-5", "Sonnet 5"),
 ]

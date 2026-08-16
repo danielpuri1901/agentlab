@@ -31,11 +31,22 @@ class TestCreditSmokeOffline:
             assert price.input_per_mtok > 0, f"Missing input price for {model_id}"
             assert price.output_per_mtok > 0, f"Missing output price for {model_id}"
 
+    def test_model_configs_match_live_verified_ids(self):
+        """MODELS must use the exact ids confirmed against a live AWS account
+        via `aws bedrock list-inference-profiles` (region eu-west-1): Nova
+        Lite has no global inference profile, so it uses the eu regional
+        profile, while both Claude tiers use the global profile."""
+        assert credit_smoke.get_model_configs() == [
+            ("bedrock/eu.amazon.nova-lite-v1:0", "Nova Lite"),
+            ("bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0", "Haiku 4.5"),
+            ("bedrock/global.anthropic.claude-sonnet-5", "Sonnet 5"),
+        ]
+
     def test_expected_cost_calculation(self):
         """Verify cost calculation for typical token usage."""
         # Nova Lite: ~2000 input tokens, ~50 output tokens (rough estimate)
         nova_cost = credit_smoke.calculate_expected_cost(
-            "bedrock/amazon.nova-lite-v1:0", input_tokens=2000, output_tokens=50
+            "bedrock/eu.amazon.nova-lite-v1:0", input_tokens=2000, output_tokens=50
         )
         assert 0 < nova_cost < 0.1, f"Nova Lite cost out of range: ${nova_cost}"
 

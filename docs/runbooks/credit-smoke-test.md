@@ -27,9 +27,10 @@ See `docs/research/bedrock-model-pricing.md` section 2.9 for the full credit-eli
 - Region comes from your ambient AWS CLI/SDK configuration.
   This script sets no default and does not override `AWS_REGION`.
   The project standard is `eu-west-1`, used with the global inference-profile endpoint for Claude, which carries no regional pricing premium and routes worldwide (see `docs/research/bedrock-model-pricing.md` section 5.2).
-- Verify the Claude model ids this script uses are actually provisioned in your account before running: `aws bedrock list-inference-profiles --region eu-west-1 | grep -i claude` (substitute your project's standard region if different).
-  Look for `global.anthropic.claude-sonnet-5` and `global.anthropic.claude-haiku-4-5-20251001-v1:0`.
-  If either is missing, edit `scripts/credit_smoke.py`'s `MODELS` list to use a region-prefixed id instead (`eu.anthropic.*` or `us.anthropic.*`), or fall back to the bare ids listed in the comment above `MODELS` in that file.
+- Verify the model ids this script uses are actually provisioned in your account before running: `aws bedrock list-inference-profiles --region eu-west-1` (substitute your project's standard region if different).
+  Confirmed live against a real account on 2026-08-16: look for `global.anthropic.claude-sonnet-5`, `global.anthropic.claude-haiku-4-5-20251001-v1:0`, and `eu.amazon.nova-lite-v1:0` (Nova Lite has no global profile, so it uses the eu regional one instead).
+  Re-run this check before any future live run, since account provisioning can change.
+  If a Claude id is missing, edit `scripts/credit_smoke.py`'s `MODELS` list to use a different region-prefixed id (`eu.anthropic.*` or `us.anthropic.*`), or fall back to the bare ids listed in the comment above `MODELS` in that file.
 
 ### Step 1: Run the smoke test
 
