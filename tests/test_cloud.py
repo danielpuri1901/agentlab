@@ -4,7 +4,9 @@ network call.
 """
 
 import json
+import re
 from datetime import UTC, datetime
+from pathlib import Path
 
 import boto3
 import pytest
@@ -12,7 +14,7 @@ from moto import mock_aws
 from typer.testing import CliRunner
 
 from agentlab.cli import app
-from agentlab.cloud import generate_experiment_id
+from agentlab.cloud import build_message_body, generate_experiment_id
 from agentlab.worker import transition, upload_report
 
 runner = CliRunner()
@@ -214,6 +216,71 @@ def test_submit_rejects_bad_model(moto_fabric, monkeypatch):
 
     assert result.exit_code != 0
     assert table.scan()["Items"] == []
+
+
+def test_submit_rejects_matching_baseline_and_candidate_styles(moto_fabric, monkeypatch):
+    # Both arms would upload their EvalLog to the same deterministic S3 key
+    # (agentlab.worker._log_key is keyed on arm_style alone), so one arm's
+    # log silently overwrites the other's rather than failing loudly.
+    _s3, _sqs, queue_url, _dynamodb, table = moto_fabric
+    _submit_env(monkeypatch, queue_url)
+
+    result = runner.invoke(
+        app,
+        [
+            "cloud",
+            "submit",
+            "--model",
+            "mockllm/model",
+            "--tasks",
+            "2",
+            "--repeats",
+            "1",
+            "--baseline-style",
+            "structured",
+            "--candidate-style",
+            "structured",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "must differ" in result.output
+    # Nothing should have been written or sent.
+    assert table.scan()["Items"] == []
+
+
+def test_pipe_input_template_fields_match_build_message_body_keys():
+    """Contract test: infra/pipe.tf's input_template extracts fields out of
+    the SQS body with `<$.body.field>` substitutions that have no schema
+    validation of their own - a field renamed on only one side of this seam
+    (build_message_body vs pipe.tf) would silently produce a missing/null
+    value in the state machine input rather than fail loudly. This regexes
+    the field names straight out of pipe.tf's HCL and asserts they're
+    exactly the keys build_message_body() puts in the SQS message body.
+    """
+    pipe_tf = Path(__file__).resolve().parents[1] / "infra" / "pipe.tf"
+    text = pipe_tf.read_text()
+    # Isolate the input_template heredoc itself, not the whole file - a comment
+    # elsewhere in pipe.tf uses the same `<$.body.field>` syntax generically
+    # (with the literal placeholder name "field") to explain the mechanism.
+    heredoc = re.search(r"input_template = <<-EOT\n(.*?)\n\s*EOT", text, re.DOTALL)
+    assert heredoc, "could not find pipe.tf's input_template heredoc"
+    template_fields = set(re.findall(r"<\$\.body\.(\w+)>", heredoc.group(1)))
+
+    body = build_message_body(
+        experiment_id="exp-test",
+        model="mockllm/model",
+        tasks=2,
+        repeats=1,
+        n_facts=3,
+        filler_turns=8,
+        summary_budget=50,
+        max_connections=30,
+        baseline_style="truncate",
+        candidate_style="structured",
+    )
+
+    assert template_fields == set(body.keys())
 
 
 def test_status_renders_transitions_and_finalized_verdict(moto_fabric, monkeypatch):

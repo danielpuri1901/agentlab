@@ -129,6 +129,14 @@ resource "aws_iam_role_policy" "ecs_task" {
         Resource = "*"
       },
       {
+        # GetObject + PutObject only - src/agentlab/worker.py (the only code that runs
+        # under this role) calls exactly `s3_client.upload_file`, `.download_file`, and
+        # `.put_object` (upload_log/download_log/upload_report), which map to PutObject
+        # and GetObject (multipart upload actions used internally by upload_file also
+        # resolve to the s3:PutObject permission). No list_objects call exists anywhere
+        # in the worker's run path (only in tests, which run under the caller's own
+        # local credentials, not this role) - the former "ResultsList" s3:ListBucket
+        # statement here was unused and has been removed.
         Sid    = "ResultsReadWrite"
         Effect = "Allow"
         Action = [
@@ -138,24 +146,15 @@ resource "aws_iam_role_policy" "ecs_task" {
         Resource = "${aws_s3_bucket.results.arn}/experiments/*"
       },
       {
-        # ListBucket is a bucket-level action (needs the bucket ARN itself, not an
-        # object ARN) - scoped further with an s3:prefix condition so it only lists
-        # keys under experiments/, matching the object-level grant above.
-        Sid      = "ResultsList"
-        Effect   = "Allow"
-        Action   = "s3:ListBucket"
-        Resource = aws_s3_bucket.results.arn
-        Condition = {
-          StringLike = { "s3:prefix" = "experiments/*" }
-        }
-      },
-      {
+        # PutItem only - `transition()` (src/agentlab/worker.py, the only DynamoDB call
+        # this role's code makes) is a `table.put_item` conditional write. GetItem/Query
+        # are never called under this role: `cloud.fetch_transitions`'s `table.query`
+        # backs `agentlab cloud status`, which runs locally/on the caller's own
+        # credentials, not inside the ECS task these permissions gate.
         Sid    = "StateTable"
         Effect = "Allow"
         Action = [
-          "dynamodb:GetItem",
           "dynamodb:PutItem",
-          "dynamodb:Query",
         ]
         Resource = aws_dynamodb_table.state.arn
       },
@@ -297,6 +296,26 @@ resource "aws_iam_role_policy" "pipe" {
         Effect   = "Allow"
         Action   = ["states:StartExecution"]
         Resource = aws_sfn_state_machine.experiment.arn
+      },
+      {
+        # For the pipe.tf log_configuration's CloudWatch Logs destination. AWS's own
+        # docs disagree on whether this is actually required: the Pipes-specific
+        # permissions page (eb-pipes-permissions.html) lists logs:CreateLogGroup/
+        # CreateLogStream/PutLogEvents only under MQ/MSK/self-managed-Kafka sources (a
+        # different, connectivity-logging concern, not this SQS-sourced pipe), while a
+        # separate EventBridge troubleshooting doc
+        # (repost.aws/knowledge-center/eventbridge-pipes-troubleshoot) states plainly:
+        # "Your AWS Identity and Access Management (IAM) execution role must have the
+        # required permissions to write to Amazon CloudWatch Logs" for a configured log
+        # destination. Granted narrowly (no CreateLogGroup - Terraform creates the group
+        # in pipe.tf) rather than left out and risking silently-dropped pipe logs.
+        Sid    = "PipeLogs"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+        ]
+        Resource = "${aws_cloudwatch_log_group.pipe.arn}:*"
       },
     ]
   })

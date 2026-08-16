@@ -16,11 +16,30 @@
 # ECS integration's own casing, distinct from the unrelated EventBridge Rule
 # EcsParameters schema, which happens to use "AwsVpcConfiguration" with two humps).
 #
-# State machine input = the SQS message body (see pipe.tf's input_template):
-# {experiment_id, model, tasks, repeats, n_facts, filler_turns, summary_budget,
-# max_connections, baseline_style, candidate_style}. Every Task state's Output
-# re-emits `$states.input` unchanged, so this object is available as `$states.input`
-# in every state in the chain, not just ArmA.
+# The RAW execution input Pipes hands the state machine is NOT the flat message body -
+# it is a ONE-ELEMENT JSON ARRAY wrapping it. Per
+# https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-pipes-input-transformation.html
+# ("For Lambda or Step Functions enrichments or targets, batches are delivered to the
+# target as JSON arrays, even if the batch size is 1. However, input transformers will
+# still be applied to individual records in the JSON Array, not the array as a whole."),
+# fetched 2026-08-16: pipe.tf's input_template is applied to the single SQS record FIRST,
+# producing {experiment_id, model, tasks, repeats, n_facts, filler_turns, summary_budget,
+# max_connections, baseline_style, candidate_style} - and only THEN does Pipes wrap that
+# object in a length-1 array (batch_size = 1 in pipe.tf) because Step Functions has no
+# batch API of its own. So `$states.input` at StartAt is `[{...}]`, not `{...}`.
+#
+# The NormalizeInput state below (Output = "{% $states.input[0] %}") unwraps this before
+# ArmA. JSONata's "Singleton array and value equivalence" rule
+# (https://docs.jsonata.org/predicate: "any value (which is not itself an array) and an
+# array containing just that value are deemed to be equivalent" - e.g. the worked example
+# `Phone[0].number` matches a single (non-array) value) means `[0]` correctly extracts the
+# object whether `$states.input` is the documented one-element array or, if Pipes'
+# behavior here ever changed, a bare object - hence "robust to both shapes" rather than a
+# bet on the current array-wrapping behavior specifically.
+#
+# From NormalizeInput onward, `$states.input` IS that flat object (a Pass state's Output
+# becomes the next state's input), and every Task state's Output re-emits `$states.input`
+# unchanged, so it stays available as `$states.input` in every state in the chain.
 locals {
   # RESULTS_BUCKET/STATE_TABLE/AWS_REGION are static per-deploy values, not part of the
   # experiment spec, so they come straight from Terraform resources/vars rather than
@@ -124,6 +143,16 @@ locals {
   # replaces the state's input for whatever state it transitions to, so ExperimentFailed
   # reads the original experiment_id via `$states.context.Execution.Input` (always the
   # unmodified top-level input, per any-state) rather than `$states.input`.
+  #
+  # `Execution.Input` is fixed for the life of the execution to the RAW input Pipes
+  # delivered - the one-element array described at the top of this file - and is
+  # unaffected by NormalizeInput's own Output reassignment (a state's Output only ever
+  # changes `$states.input` for whatever comes next, never `Execution.Input`). Reasoned
+  # through: `Execution.Input.experiment_id` would technically still resolve here too, via
+  # JSONata's implicit map-over-array field access on the one-element array (the same
+  # "sequence flattening" that made the pre-fix code work at all) - but that relies on an
+  # implicit quirk a future reader has to already know about. Indexing `[0]` explicitly
+  # below matches NormalizeInput's own defensive pattern instead and doesn't depend on it.
   failure_catch = [
     {
       ErrorEquals = ["States.ALL"]
@@ -135,8 +164,17 @@ locals {
   definition = {
     Comment       = "AgentLab paired experiment: run the baseline and candidate arms on Fargate, then finalize the verdict."
     QueryLanguage = "JSONata"
-    StartAt       = "ArmA"
+    StartAt       = "NormalizeInput"
     States = {
+      # Unwraps the Pipe's one-element array delivery (see this file's top comment) into
+      # the flat experiment-spec object every downstream state's JSONata expects. `[0]` is
+      # robust to both the documented array shape and a bare object, per JSONata's
+      # singleton array/value equivalence.
+      NormalizeInput = {
+        Type   = "Pass"
+        Output = "{% $states.input[0] %}"
+        Next   = "ArmA"
+      }
       ArmA = {
         Type     = "Task"
         Resource = "arn:aws:states:::ecs:runTask.sync"
@@ -208,7 +246,7 @@ locals {
       ExperimentFailed = {
         Type  = "Fail"
         Error = "AgentLabExperimentFailed"
-        Cause = "{% 'Experiment ' & $states.context.Execution.Input.experiment_id & ' failed: ' & ($exists($error.Error) ? $error.Error : 'Unknown') & ' - ' & ($exists($error.Cause) ? $error.Cause : 'No details') %}"
+        Cause = "{% 'Experiment ' & $states.context.Execution.Input[0].experiment_id & ' failed: ' & ($exists($error.Error) ? $error.Error : 'Unknown') & ' - ' & ($exists($error.Cause) ? $error.Cause : 'No details') %}"
       }
     }
   }
@@ -222,4 +260,5 @@ resource "aws_sfn_state_machine" "experiment" {
   role_arn   = aws_iam_role.sfn.arn
   type       = "STANDARD"
   definition = jsonencode(local.definition)
+  depends_on = [aws_iam_role_policy.sfn]
 }

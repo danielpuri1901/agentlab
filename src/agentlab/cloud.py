@@ -196,6 +196,14 @@ def submit_command(
     _validate_model(model)
     _validate_style(baseline_style, "--baseline-style")
     _validate_style(candidate_style, "--candidate-style")
+    if baseline_style == candidate_style:
+        typer.echo(
+            f"error: --baseline-style and --candidate-style must differ (both are "
+            f"'{baseline_style}') - both arms would write EvalLogs to the same S3 log "
+            "key (see agentlab.worker._log_key) and overwrite each other",
+            err=True,
+        )
+        raise typer.Exit(1)
 
     experiment_id = generate_experiment_id()
     table = boto3.resource("dynamodb").Table(state_table)

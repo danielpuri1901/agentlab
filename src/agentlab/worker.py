@@ -77,6 +77,14 @@ def transition(
     rather than raised, since "already recorded" is success, not an error.
     """
     ts = ts or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    # `sk` deliberately does NOT include `arm` - only (experiment_id, ts, event) make it
+    # unique. That's safe today because stepfunctions.tf runs ArmA and ArmB sequentially
+    # (ArmA -> ArmB -> Finalize), never concurrently, so no two arms can produce the same
+    # ts for the same event name. If the arms ever ran in parallel, ArmA and ArmB writing
+    # the same event (e.g. both ARM_STARTED) within the same microsecond would collide on
+    # this sk: the second write hits ConditionalCheckFailedException and is swallowed
+    # below as "already recorded", silently dropping that arm's transition item instead
+    # of writing it under a distinct key.
     sk = f"event#{ts}#{event}"
     item = {
         "experiment_id": experiment_id,
