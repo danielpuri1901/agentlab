@@ -39,7 +39,7 @@ class TestCreditSmokeOffline:
         assert credit_smoke.get_model_configs() == [
             ("bedrock/eu.amazon.nova-lite-v1:0", "Nova Lite"),
             ("bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0", "Haiku 4.5"),
-            ("bedrock/global.anthropic.claude-sonnet-5", "Sonnet 5"),
+            ("bedrock/global.anthropic.claude-sonnet-4-6", "Sonnet 4.6"),
         ]
 
     def test_expected_cost_calculation(self):
@@ -58,11 +58,11 @@ class TestCreditSmokeOffline:
         )
         assert 0 < haiku_cost < 0.2, f"Haiku 4.5 cost out of range: ${haiku_cost}"
 
-        # Sonnet 5: ~2000 input tokens, ~50 output tokens
+        # Sonnet 4.6: ~2000 input tokens, ~50 output tokens
         sonnet_cost = credit_smoke.calculate_expected_cost(
-            "bedrock/global.anthropic.claude-sonnet-5", input_tokens=2000, output_tokens=50
+            "bedrock/global.anthropic.claude-sonnet-4-6", input_tokens=2000, output_tokens=50
         )
-        assert 0 < sonnet_cost < 0.2, f"Sonnet 5 cost out of range: ${sonnet_cost}"
+        assert 0 < sonnet_cost < 0.2, f"Sonnet 4.6 cost out of range: ${sonnet_cost}"
 
         # Verify Haiku is cheaper than Sonnet (by price rates)
         assert haiku_cost < sonnet_cost, "Expected Haiku to be cheaper than Sonnet"

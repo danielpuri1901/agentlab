@@ -2,7 +2,7 @@
 Bedrock credit smoke test: verify which model families draw from promotional credits.
 
 Sends one fixed ~6200-word (~8000-token) prompt to each model family (Nova
-Lite, Haiku 4.5, Sonnet 5) with max 500 output tokens per call. The
+Lite, Haiku 4.5, Sonnet 4.6) with max 500 output tokens per call. The
 credit-coverage question this test answers is qualitative - which billing
 entity (AWS vs AWS Marketplace) a charge appears under - and Cost Explorer's
 CSV/API views show sub-dollar amounts at full precision, so calls are sized
@@ -55,7 +55,10 @@ from agentlab.costs import run_cost
 MODELS = [
     ("bedrock/eu.amazon.nova-lite-v1:0", "Nova Lite"),
     ("bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0", "Haiku 4.5"),
-    ("bedrock/global.anthropic.claude-sonnet-5", "Sonnet 5"),
+    # Claude 5 family (e.g. global.anthropic.claude-sonnet-5) returned
+    # AccessDeniedException "not available for this account" on 2026-08-16;
+    # it is sales-gated. Sonnet 4.6 is the available frontier tier ($3/$15).
+    ("bedrock/global.anthropic.claude-sonnet-4-6", "Sonnet 4.6"),
 ]
 
 NOVA_LITE_CALLS = 1
@@ -193,6 +196,13 @@ async def invoke_model_via_inspect_ai(model_id, prompt, max_tokens):
         return extract_usage(response)
     except Exception as e:
         error_msg = str(e)
+        if "not available for this account" in error_msg or "AccessDenied" in error_msg:
+            raise RuntimeError(
+                f"Model access denied for {model_id}: this account cannot invoke "
+                f"this model (Claude 5 family is sales-gated as of 2026-08-16). "
+                f"Pick an available tier (see aws bedrock list-inference-profiles) "
+                f"or contact AWS Sales.\n\nOriginal error: {error_msg}"
+            )
         if "credential" in error_msg.lower() or "auth" in error_msg.lower():
             raise RuntimeError(
                 f"AWS credentials not configured or Bedrock model access not "
