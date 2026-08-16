@@ -14,13 +14,13 @@
 # NOT run as part of Task 3 - this script makes live AWS/ECR calls and is
 # first exercised in Task 6.
 #
-# After a successful push, writes infra/terraform.tfvars pinning image_tag to the tag
+# After a successful push, writes infra/image_tag.auto.tfvars pinning image_tag to the tag
 # just pushed. infra/variables.tf's image_tag defaults to "latest", but this script never
 # pushes a mutable :latest tag (only git-short-SHA tags, for reproducibility - a given
 # commit always maps to exactly one image), so a plain `terraform apply` with no override
 # would otherwise reference an image that doesn't exist, or silently redeploy whatever
 # stale image last happened to be tagged :latest. infra/.gitignore ignores
-# terraform.tfvars - see infra/README.md for the full mechanism.
+# image_tag.auto.tfvars - see infra/README.md for the full mechanism.
 
 set -euo pipefail
 
@@ -48,6 +48,6 @@ docker buildx build \
 
 echo "Pushed ${IMAGE_URI}"
 
-TFVARS_FILE="${REPO_ROOT}/infra/terraform.tfvars"
+TFVARS_FILE="${REPO_ROOT}/infra/image_tag.auto.tfvars"
 printf 'image_tag = "%s"\n' "${IMAGE_TAG}" > "${TFVARS_FILE}"
 echo "Wrote ${TFVARS_FILE} (image_tag = ${IMAGE_TAG}) - plain 'terraform apply' now picks up this build."
