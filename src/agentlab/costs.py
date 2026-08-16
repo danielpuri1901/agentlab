@@ -1,11 +1,27 @@
+import os
+
+# litellm fetches its price map from GitHub over HTTPS at import time unless
+# this is set, which would violate the "no network calls" constraint on this
+# module. The bundled local copy of the map has identical values for the
+# keys this module resolves (verified against the remote copy). Must be set
+# before `import litellm`, since litellm reads it during its own __init__.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
 import litellm
 from pydantic import BaseModel
 
 CLAUDE_TOKENIZER_ADJUSTMENT = 1.30
-"""Claude 4.7+ models use a newer tokenizer that emits about 30% more tokens
-for the same text than earlier Claude generations, so litellm's per-token
-price (tokenizer-agnostic) understates real cost for those models.
-See docs/research/bedrock-model-pricing.md sections 2.3 and 3."""
+"""Pre-run, same-text FORECAST factor for the Claude 4.7+ tokenizer
+generation (Sonnet 5, Opus 5, Fable 5; NOT Haiku 4.5 or earlier), which
+emits about 30% more tokens than earlier Claude generations for identical
+input text. See docs/research/bedrock-model-pricing.md section 2.3.
+
+Not applied anywhere in this module: resolve_price, run_cost, and
+experiment_cost all use RAW litellm per-token prices against MEASURED
+token counts (e.g. from an API response), which are already denominated in
+the model's actual tokenizer and would be double-counted by this factor.
+Callers doing pre-run cost forecasting from same-text estimates on a
+Claude 4.7+ model should apply this factor themselves."""
 
 
 class ModelPrice(BaseModel):
@@ -38,9 +54,6 @@ def resolve_price(model: str) -> ModelPrice:
     entry = litellm.model_cost[key]
     input_per_mtok = entry["input_cost_per_token"] * 1e6
     output_per_mtok = entry["output_cost_per_token"] * 1e6
-    if "claude" in model.lower():
-        input_per_mtok *= CLAUDE_TOKENIZER_ADJUSTMENT
-        output_per_mtok *= CLAUDE_TOKENIZER_ADJUSTMENT
     return ModelPrice(
         input_per_mtok=input_per_mtok,
         output_per_mtok=output_per_mtok,

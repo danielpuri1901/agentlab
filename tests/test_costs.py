@@ -21,11 +21,13 @@ def test_nova_lite_resolves_with_positive_prices():
     assert p.input_per_mtok > 0 and p.output_per_mtok > 0
 
 
-def test_claude_gets_tokenizer_adjustment():
+def test_claude_resolves_to_raw_litellm_price_unadjusted():
     raw_in = resolve_price(CLAUDE).input_per_mtok
-    assert raw_in == pytest.approx(
-        _raw_litellm_input_per_mtok(CLAUDE) * CLAUDE_TOKENIZER_ADJUSTMENT
-    )
+    assert raw_in == pytest.approx(_raw_litellm_input_per_mtok(CLAUDE))
+
+
+def test_claude_tokenizer_adjustment_constant_is_exported_but_unapplied():
+    assert CLAUDE_TOKENIZER_ADJUSTMENT == 1.30
 
 
 def test_unknown_model_raises():
