@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
-agentlab = "agentlab:main"
+agentlab = "agentlab.cli:app"
 
 [build-system]
 requires = ["uv_build>=0.10.9,<0.11.0"]
@@ -32,3 +32,10 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.3",
 ]
+
+[tool.ruff.lint.flake8-bugbear]
+# Typer's own documented pattern is `param: T = typer.Option(...)` /
+# `typer.Argument(...)` as the default value; both are effectively immutable
+# factories, so exempt them from B008 (function-call-in-default-argument)
+# instead of scattering per-line noqa comments across cli.py.
+extend-immutable-calls = ["typer.Option", "typer.Argument"]

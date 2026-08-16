@@ -1,0 +1,50 @@
+# AgentLab experiment report
+
+## Verdict
+
+**{{ verdict_str }}**
+
+{% if hypothesis %}
+## Hypothesis
+
+{{ hypothesis }}
+{% endif %}
+
+{% if model or baseline_style or candidate_style or seeds is not none or repeats is not none %}
+## Configuration
+
+- Model: `{{ model or "unspecified" }}`
+- Baseline arm: `{{ baseline_style or "unspecified" }}`
+- Candidate arm: `{{ candidate_style or "unspecified" }}`
+- Repeats per task: {{ repeats if repeats is not none else "unspecified" }}
+- Tasks: {{ seeds | length if seeds is not none else "unspecified" }}
+- Seed list: {{ seeds if seeds is not none else "unspecified" }}
+{% endif %}
+
+{% if baseline_recall is not none or candidate_recall is not none %}
+## Per-arm recall
+
+- Baseline recall: {{ "%.4f"|format(baseline_recall) if baseline_recall is not none else "unmeasured" }}
+- Candidate recall: {{ "%.4f"|format(candidate_recall) if candidate_recall is not none else "unmeasured" }}
+{% endif %}
+
+## Paired result
+
+- Mean delta (candidate minus baseline): {{ "%.4f"|format(result.mean_delta) }}
+- 95% confidence interval: [{{ "%.4f"|format(result.ci_low) }}, {{ "%.4f"|format(result.ci_high) }}]
+- Tasks in this analysis: {{ result.n_tasks }}
+- Standard deviation of per-task delta: {{ "%.4f"|format(result.sd_task_delta) }}
+
+## Cost and tokens
+
+- Total cost: ${{ "%.2f"|format(total_cost) }}
+{% if total_tokens is not none %}
+- Total tokens: {{ total_tokens }}
+{% endif %}
+
+## Replay
+
+Inspect eval logs for this experiment:
+{% for path in log_paths %}
+- `{{ path }}`
+{% endfor %}
