@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentLab Project Map</title>
+<style>
+  :root { --bg: #ffffff; --fg: #1a1a1a; --muted: #666; --card: #f6f6f4; --accent: #0b6e4f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #16181d; --fg: #e8e8e6; --muted: #9a9a97; --card: #1f2229; --accent: #4cc38a; }
+  }
+  body { background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 2.5rem 1.5rem 5rem; }
+  main { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 1.9rem; margin: 0 0 .3rem; }
+  .sub { color: var(--muted); margin: 0 0 2.2rem; }
+  h2 { font-size: 1.25rem; margin: 3rem 0 .4rem; border-top: 1px solid color-mix(in srgb, var(--fg) 15%, transparent); padding-top: 1.6rem; }
+  p.note { color: var(--muted); margin: .2rem 0 1rem; font-size: .93rem; }
+  .card { background: var(--card); border-radius: 10px; padding: 1rem; overflow-x: auto; }
+  pre.mermaid { margin: 0; display: flex; justify-content: center; }
+  ul.stack { columns: 2; gap: 2rem; padding-left: 1.2rem; }
+  ul.stack li { margin-bottom: .35rem; }
+  .tag { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+<h1>AgentLab Project Map</h1>
+<p class="sub">Experimentation platform for autonomous agents + AWS learning project. Budget $1,000 all-in. Source of truth: docs/phase0-synthesis.md and docs/plans/2026-08-16-v01-local-verdict.md.</p>
+
+<h2>1. Roadmap: where we are and what comes next</h2>
+<p class="note">v0.1 produces a real verdict locally first; v0.2 reproduces the same verdict on AWS, which doubles as the platform's own reproducibility test.</p>
+<div class="card"><pre class="mermaid">
+flowchart LR
+  P0["Phase 0: research<br/>8 cited reports + synthesis<br/>DONE"] --> V01["v0.1 local verdict<br/>compaction experiment on Inspect<br/>NOW (plan written)"]
+  V01 --> M["Grounding measurements<br/>$5 credit smoke test<br/>~$5 variance pilot"]
+  M --> P2["v0.2 plan written from<br/>MEASURED numbers"]
+  P2 --> V02["v0.2 AWS fabric<br/>same experiment, same verdict,<br/>reproduced in the cloud"]
+  V02 --> V03["v0.3+ experiment queue<br/>reflection vs resampling, memory,<br/>subagents token-matched"]
+  V03 --> L["Later (triggered, not scheduled)<br/>perturbation registry, Scout, Harbor,<br/>Langfuse annotation, claim compiler"]
+  style P0 fill:#0b6e4f22,stroke:#0b6e4f
+  style V01 fill:#b3540022,stroke:#b35400,stroke-width:2px
+  style M fill:#b3540022,stroke:#b35400
+</pre></div>
+
+<h2>2. v0.1: the local verdict pipeline (being built now)</h2>
+<p class="note">Seven TDD tasks from the plan. Only adopted dependency: Inspect (UK AISI). Everything else is thin, owned code.</p>
+<div class="card"><pre class="mermaid">
+flowchart TB
+  CLI["agentlab CLI<br/>(cli.py: pilot | run)"] --> GEN["corpus.py<br/>seeded synthetic sessions<br/>planted facts + probe questions"]
+  GEN --> TASK["compaction_task.py (Inspect Task)<br/>baseline: truncate at boundary<br/>candidate: structured summary"]
+  TASK --> INSPECT["inspect_ai runner<br/>trials, retries, EvalLog"]
+  INSPECT --> BR["Bedrock global endpoint<br/>Nova Lite default"]
+  INSPECT --> LOGS["logs/ EvalLog files<br/>(replayable record)"]
+  LOGS --> SCORE["recall scorer<br/>fraction of planted facts<br/>recalled past the boundary"]
+  LOGS --> COST["costs.py<br/>tokens -> dollars<br/>(+30% Claude tokenizer adj.)"]
+  SCORE --> STATS["stats.py<br/>paired per-task deltas<br/>CI + power sizing"]
+  STATS --> VERDICT{"verdict"}
+  COST --> REPORT["report.md<br/>quality, CI, cost, tokens,<br/>log paths, seeds"]
+  VERDICT --> REPORT
+</pre></div>
+
+<h2>3. The verdict logic: AgentLab's actual core</h2>
+<p class="note">The one thing no shipping product does: a gate that refuses to call noise a result.</p>
+<div class="card"><pre class="mermaid">
+flowchart TB
+  T["Paired trials: baseline + candidate<br/>on identical tasks and seeds"] --> CI["95% CI on mean per-task delta"]
+  CI --> Q1{"CI lower bound > 0?"}
+  Q1 -- yes --> Q2{"Protected metrics within<br/>allowance? (e.g. cost)"}
+  Q2 -- yes --> PROMOTE["PROMOTE"]
+  Q2 -- no --> HOLD["HOLD<br/>better, but regressed a guardrail"]
+  Q1 -- no --> Q3{"CI upper bound < 0?"}
+  Q3 -- yes --> REJECT["REJECT"]
+  Q3 -- no --> INC["INCONCLUSIVE<br/>the honest third answer"]
+  style PROMOTE fill:#0b6e4f22,stroke:#0b6e4f
+  style REJECT fill:#a3232322,stroke:#a32323
+  style INC fill:#b3540022,stroke:#b35400
+  style HOLD fill:#6b5b9522,stroke:#6b5b95
+</pre></div>
+
+<h2>4. v0.2: the AWS fabric (planned, numbers pending the pilot)</h2>
+<p class="note">Same experiment spec, second execution backend. This is the deliberately hand-built distributed-systems curriculum: queue, orchestration, isolation, state.</p>
+<div class="card"><pre class="mermaid">
+flowchart LR
+  CLI2["agentlab CLI"] --> SQS["SQS work queue<br/>one message per trial"]
+  SQS --> SFN["Step Functions Standard<br/>ECS .sync per run<br/>retries, timeouts"]
+  SFN --> FG["Fargate task (ARM, eu-west-1)<br/>public subnet, no NAT<br/>Bedrock-scoped task role only"]
+  FG --> BR2["Bedrock global endpoint"]
+  FG --> S3["S3: EvalLogs + artifacts<br/>gateway endpoint, free"]
+  FG --> DDB["DynamoDB: run state machine<br/>idempotent transitions"]
+  FG --> CW["CloudWatch: logs + alarms<br/>retention set, no per-experiment metrics"]
+  S3 --> STATS2["same stats.py"]
+  STATS2 --> V2{"same verdict<br/>must reproduce v0.1"}
+  style FG stroke-width:2px
+</pre></div>
+
+<h2>5. Adopt vs build: where effort goes</h2>
+<p class="note">Ranked by the two real goals: honest answers and AWS learning. Novelty is not an organizing principle.</p>
+<div class="card"><pre class="mermaid">
+flowchart TB
+  subgraph ADOPT["Adopted libraries (v0.1)"]
+    I["Inspect + inspect_evals:<br/>trials, scoring, logs, NIAH corpus"]
+    SS["scipy + statsmodels:<br/>paired CI, power sizing"]
+    UT["typer + jinja2 + faker + pandas:<br/>CLI, report, filler text, log analysis"]
+    LL["litellm price map:<br/>maintained model prices"]
+  end
+  subgraph TRIG["Trigger list (adopt when the written condition fires)"]
+    SC["Inspect Scout: when querying<br/>across many experiments hurts"]
+    HB["Harbor: when tasks need<br/>containerized environments"]
+    LF["Langfuse: when human<br/>annotation starts"]
+    OW["OpenWiki: when the repo<br/>contains real code"]
+  end
+  subgraph BUILD["Owned code (deliberately tiny)"]
+    ST["verdict rules:<br/>PROMOTE / HOLD / REJECT / INCONCLUSIVE<br/>(the identity, ~30 lines)"]
+    SOLV["compaction solvers:<br/>the two prompts under test"]
+    GL["glue: config + wiring"]
+    AWSF["v0.2 AWS fabric:<br/>the learning curriculum"]
+  end
+  subgraph SOMEDAY["Someday list"]
+    CC["claim-to-experiment compiler"]
+    PR["perturbation registry"]
+  end
+  style ST stroke-width:2px
+</pre></div>
+
+<h2>6. The stack, first build</h2>
+<ul class="stack">
+  <li><span class="tag">Language</span> Python 3.12</li>
+  <li><span class="tag">Env/packaging</span> uv</li>
+  <li><span class="tag">Eval framework</span> inspect_ai + inspect_evals</li>
+  <li><span class="tag">Schemas</span> pydantic v2</li>
+  <li><span class="tag">Stats</span> scipy (paired CI) + statsmodels (power)</li>
+  <li><span class="tag">CLI / report</span> typer + jinja2</li>
+  <li><span class="tag">Corpus / analysis</span> faker + pandas</li>
+  <li><span class="tag">Prices</span> litellm model price map</li>
+  <li><span class="tag">Quality</span> pytest + ruff</li>
+  <li><span class="tag">Models</span> Bedrock: Nova Lite default; Haiku/Sonnet confirmation tiers</li>
+  <li><span class="tag">v0.2 infra</span> SQS, Step Functions, Fargate (ARM), DynamoDB, S3, CloudWatch, Terraform</li>
+</ul>
+</main>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "neutral" });
+</script>
+</body>
+</html>

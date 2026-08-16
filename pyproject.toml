@@ -1,0 +1,34 @@
+[project]
+name = "agentlab"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { email = "danielpuri1901@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "faker>=40.36.0",
+    "inspect-ai>=0.3.258",
+    "inspect-evals>=0.17.0",
+    "jinja2>=3.1.6",
+    "litellm>=1.97.0",
+    "pandas>=3.0.5",
+    "pydantic>=2.13.4",
+    "scipy>=1.18.0",
+    "statsmodels>=0.14.6",
+    "typer>=0.27.1",
+]
+
+[project.scripts]
+agentlab = "agentlab:main"
+
+[build-system]
+requires = ["uv_build>=0.10.9,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.3",
+]
