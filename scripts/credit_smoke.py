@@ -110,6 +110,27 @@ live response has no usable usage field."""
 MAX_OUTPUT_TOKENS = 500
 
 
+def extract_usage(response):
+    """Extract (input_tokens, output_tokens, text) from an inspect_ai ModelOutput.
+
+    ModelOutput.usage is Optional and hasattr() is always True on the pydantic
+    model, so this checks for None explicitly. The generated text lives in
+    .completion (there is no .text attribute). Testable offline against a
+    constructed ModelOutput.
+    """
+    if response.usage is not None:
+        return (
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            response.completion,
+        )
+    return (
+        ESTIMATED_INPUT_TOKENS,
+        len(response.completion.split()),
+        response.completion,
+    )
+
+
 def get_model_configs():
     """Return the list of (model_id, friendly_name) tuples.
 
@@ -169,17 +190,7 @@ async def invoke_model_via_inspect_ai(model_id, prompt, max_tokens):
         config = GenerateConfig(max_tokens=max_tokens)
         response = await model.generate(prompt, config=config)
 
-        # Extract token counts from response
-        # inspect_ai's response object has usage info
-        if hasattr(response, "usage"):
-            input_tokens = response.usage.input_tokens
-            output_tokens = response.usage.output_tokens
-        else:
-            # Fallback: estimate from response text
-            output_tokens = len(response.text.split())
-            input_tokens = ESTIMATED_INPUT_TOKENS
-
-        return input_tokens, output_tokens, response.text
+        return extract_usage(response)
     except Exception as e:
         error_msg = str(e)
         if "credential" in error_msg.lower() or "auth" in error_msg.lower():

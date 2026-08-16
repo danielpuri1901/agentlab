@@ -148,3 +148,22 @@ class TestCreditSmokeOffline:
     def test_max_output_tokens(self):
         """Verify max output tokens constant is set."""
         assert credit_smoke.MAX_OUTPUT_TOKENS == 500
+
+
+def test_extract_usage_against_real_modeloutput():
+    from inspect_ai.model import ModelOutput, ModelUsage
+
+    out = ModelOutput.from_content(model="test", content="hello world response")
+    out.usage = ModelUsage(input_tokens=8000, output_tokens=450, total_tokens=8450)
+    assert credit_smoke.extract_usage(out) == (8000, 450, "hello world response")
+
+
+def test_extract_usage_falls_back_when_usage_missing():
+    from inspect_ai.model import ModelOutput
+
+    out = ModelOutput.from_content(model="test", content="three word reply")
+    out.usage = None
+    tokens_in, tokens_out, text = credit_smoke.extract_usage(out)
+    assert tokens_in == credit_smoke.ESTIMATED_INPUT_TOKENS
+    assert tokens_out == 3
+    assert text == "three word reply"
