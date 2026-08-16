@@ -8,95 +8,27 @@ for analysis and rendering.
 
 import asyncio
 import json
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
-from inspect_ai import eval_async
-from inspect_ai.log import EvalLog
 
-from agentlab.compaction_task import compaction_task
+from agentlab.eval_runner import _run_arms_in_one_loop, check_log_status, hypothesis_for
 from agentlab.report import render_report
 from agentlab.results import extract_results, mean_score, total_cost, total_tokens
 from agentlab.stats import paired_analysis, required_tasks, verdict
+from agentlab.worker import worker_app
 
-# eval_async has no display kwarg (sync eval only); silence Inspect's
-# progress UI process-wide instead.
-os.environ.setdefault("INSPECT_DISPLAY", "none")
+# check_log_status is re-exported here (unused directly in this module) so
+# `from agentlab.cli import check_log_status` keeps working for existing
+# callers/tests.
+__all__ = ["app", "check_log_status"]
 
 app = typer.Typer()
+app.add_typer(worker_app, name="worker")
 
 BASELINE_STYLE = "truncate"
 CANDIDATE_STYLE = "structured"
-
-def hypothesis_for(baseline_style: str, candidate_style: str) -> str:
-    """Derive the report's hypothesis line from the actual arms under test."""
-    return (
-        f"The '{candidate_style}' compaction style retains more of the planted "
-        f"per-fact information across the compaction boundary than the "
-        f"'{baseline_style}' style does."
-    )
-
-
-def check_log_status(log: EvalLog, arm_name: str) -> None:
-    """Abort cleanly if an Inspect eval run for `arm_name` did not succeed.
-
-    A live provider failure (throttling, auth, etc.) leaves `log.status` as
-    "error" or "cancelled" with no scores recorded. Letting extraction run
-    against that log crashes deep inside `extract_results` with a confusing
-    `KeyError` instead of a clear message naming what failed and where the
-    log lives.
-    """
-    if log.status != "success":
-        typer.echo(
-            f"error: eval run for arm '{arm_name}' did not succeed "
-            f"(status={log.status}); see log at {log.location}",
-            err=True,
-        )
-        raise typer.Exit(1)
-
-
-async def _run_arm(
-    style: str,
-    model: str,
-    seeds: list[int],
-    repeats: int,
-    log_dir: Path,
-    summary_budget: int,
-    n_facts: int,
-    filler_turns: int,
-    max_connections: int | None = None,
-) -> EvalLog:
-    task = compaction_task(
-        style=style,
-        model=model,
-        seeds=seeds,
-        summary_budget=summary_budget,
-        n_facts=n_facts,
-        filler_turns=filler_turns,
-    )
-    [log] = await eval_async(
-        task, epochs=repeats, log_dir=str(log_dir), max_connections=max_connections
-    )
-    check_log_status(log, arm_name=style)
-    return log
-
-
-async def _run_arms_in_one_loop(
-    model, seeds, repeats, log_dir, baseline_style, candidate_style,
-    summary_budget, n_facts, filler_turns, max_connections,
-):
-    # Both arms must share one event loop: provider internals (e.g. the
-    # aiobotocore credential-refresh lock) bind to the loop of the first
-    # eval and crash a second eval run on a fresh loop.
-    baseline_log = await _run_arm(
-        baseline_style, model, seeds, repeats, log_dir, summary_budget, n_facts, filler_turns, max_connections
-    )
-    candidate_log = await _run_arm(
-        candidate_style, model, seeds, repeats, log_dir, summary_budget, n_facts, filler_turns, max_connections
-    )
-    return baseline_log, candidate_log
 
 
 def _run_paired(
