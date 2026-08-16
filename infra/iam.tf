@@ -230,10 +230,18 @@ resource "aws_iam_role_policy" "sfn" {
       },
       {
         # ECS RunTask must pass both roles to the ECS agent for every launched task.
+        # The iam:PassedToService condition additionally restricts WHICH service this
+        # role may be passed to: without it, this role could be used to pass
+        # ecs_execution/ecs_task to any service that accepts a PassRole call (e.g.
+        # Lambda), not just the ECS RunTask calls this policy is meant to authorize -
+        # a standard least-privilege tightening for PassRole grants.
         Sid      = "PassEcsRoles"
         Effect   = "Allow"
         Action   = ["iam:PassRole"]
         Resource = [aws_iam_role.ecs_execution.arn, aws_iam_role.ecs_task.arn]
+        Condition = {
+          StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" }
+        }
       },
     ]
   })

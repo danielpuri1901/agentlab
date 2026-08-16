@@ -91,13 +91,16 @@ locals {
   # https://repost.aws/knowledge-center/ecs-fargate-runtask-capacity ("If you start
   # RunTask from Step Functions and the task fails because of limited capacity, then
   # Step Functions records an ECS.AmazonECSException"): that error is the ECS RunTask
-  # *API call* failing (capacity/throttling) before a task ever starts, so it is safe
-  # to retry more aggressively. States.TaskFailed instead means the task started and
-  # the container exited non-zero or failed to reach RUNNING - this is just as likely
-  # to be a genuine bug in the eval as a one-off infra blip, and a retry re-runs a
-  # real Bedrock-billed workload, so it gets exactly one retry rather than three: enough
-  # to absorb a transient blip without turning a deterministic failure into 2-3x the
-  # model spend.
+  # *API call* failing (capacity/throttling) before a task ever starts and before any
+  # Bedrock spend happens, so it stays at the more generous MaxAttempts=3.
+  # States.TaskFailed instead means the task started and the container exited non-zero
+  # or failed to reach RUNNING - this could be a genuine bug in the eval or a one-off
+  # infra blip (ENI attach timeout, image pull flake), and a retry can re-run
+  # Bedrock-billed work. Adjudicated to MaxAttempts=2 rather than 1: the asymmetry
+  # favors retrying once more, since the worst case of over-retrying a real bug is
+  # under $1 (a full paired run is ~$0.54 per the plan's measured baseline), while the
+  # worst case of under-retrying a transient blip is losing an entire ~45-minute
+  # experiment to manual re-submission.
   ecs_transient_retry = [
     {
       ErrorEquals     = ["ECS.AmazonECSException"]
@@ -109,7 +112,7 @@ locals {
     {
       ErrorEquals     = ["States.TaskFailed"]
       IntervalSeconds = 30
-      MaxAttempts     = 1
+      MaxAttempts     = 2
       BackoffRate     = 2.0
     },
   ]
