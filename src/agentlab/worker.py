@@ -40,8 +40,16 @@ def _require_env(name: str) -> str:
 
 
 def _optional_int_env(name: str) -> int | None:
+    # infra/stepfunctions.tf renders a null max_connections via JSONata's
+    # $string(null), which produces the literal ECS container-override env
+    # value "null" (not an empty/missing var) - int() must not be attempted
+    # on that string, or "None" (defensive - not produced by that template,
+    # but the same failure mode), so both are treated as absent alongside
+    # empty/missing.
     value = os.environ.get(name)
-    return int(value) if value else None
+    if not value or value.strip().lower() in ("null", "none"):
+        return None
+    return int(value)
 
 
 def _log_key(experiment_id: str, arm_style: str) -> str:

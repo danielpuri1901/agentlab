@@ -89,12 +89,22 @@ def build_message_body(
     n_facts: int,
     filler_turns: int,
     summary_budget: int,
-    max_connections: int | None,
+    max_connections: int,
     baseline_style: str,
     candidate_style: str,
 ) -> dict:
     """The SQS message body: a flat JSON object with exactly the fields
-    `infra/pipe.tf`'s input_template extracts, in the same order."""
+    `infra/pipe.tf`'s input_template extracts, in the same order.
+
+    `max_connections` must always be a concrete int, never `None`/null:
+    the pipe substitutes it unquoted into JSON, JSONata's `$string(null)`
+    (see `infra/stepfunctions.tf`) turns a null value into the ECS
+    container-override string "null", and that reached `int()` in
+    `agentlab.worker._optional_int_env` before this default existed -
+    an unrecoverable ValueError with no DynamoDB transition recorded.
+    `submit_command`'s Typer option defaults this to 30 for exactly that
+    reason; do not reintroduce a `None` default here.
+    """
     return {
         "experiment_id": experiment_id,
         "model": model,
@@ -120,7 +130,7 @@ def submit_experiment(
     n_facts: int,
     filler_turns: int,
     summary_budget: int,
-    max_connections: int | None,
+    max_connections: int,
     baseline_style: str,
     candidate_style: str,
 ) -> None:
@@ -158,7 +168,11 @@ def submit_command(
         150, help="max_tokens for the summarizer's GenerateConfig (naive/structured only)."
     ),
     max_connections: int = typer.Option(
-        None, help="Inspect max concurrent model connections (None = Inspect default)."
+        30,
+        help=(
+            "Inspect max concurrent model connections "
+            "(cloud default 30, the value proven in v0.1 live runs)."
+        ),
     ),
     baseline_style: str = typer.Option(
         BASELINE_STYLE, help="Compaction style for the baseline arm."
@@ -208,6 +222,10 @@ def submit_command(
 def fetch_transitions(table, experiment_id: str) -> list[dict]:
     """Query every state-transition item for one experiment, in `sk` order
     (which embeds the event timestamp, so this is chronological)."""
+    # TODO: single Query call, no LastEvaluatedKey pagination loop - fine at
+    # today's transition volume per experiment (a handful of events), but
+    # revisit if an experiment's item count ever approaches DynamoDB's 1MB
+    # per-Query page limit.
     response = table.query(KeyConditionExpression=Key("experiment_id").eq(experiment_id))
     return response["Items"]
 

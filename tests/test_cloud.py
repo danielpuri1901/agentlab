@@ -135,6 +135,39 @@ def test_submit_sends_message_with_exact_contract_fields_and_writes_created(
     assert created[0]["experiment_id"] == experiment_id
 
 
+def test_submit_max_connections_defaults_to_30_in_message_body(moto_fabric, monkeypatch):
+    # Regression test: max_connections must always land in the SQS body as a
+    # concrete int, never null - a null max_connections breaks the worker
+    # chain (JSONata $string(null) -> "null" string -> int("null") raises;
+    # see agentlab.worker._optional_int_env and its own regression test).
+    _s3, sqs, queue_url, _dynamodb, _table = moto_fabric
+    _submit_env(monkeypatch, queue_url)
+    monkeypatch.setattr(
+        "agentlab.cloud.now", lambda: datetime(2026, 8, 16, 15, 23, 15, tzinfo=UTC)
+    )
+    monkeypatch.setattr("agentlab.cloud.random_hex", lambda: "cd34")
+
+    result = runner.invoke(
+        app,
+        [
+            "cloud",
+            "submit",
+            "--model",
+            "mockllm/model",
+            "--tasks",
+            "2",
+            "--repeats",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+    messages = sqs.receive_message(QueueUrl=queue_url, MaxNumberOfMessages=10)
+    body = json.loads(messages["Messages"][0]["Body"])
+    assert body["max_connections"] == 30
+
+
 def test_submit_rejects_bad_style(moto_fabric, monkeypatch):
     _s3, _sqs, queue_url, _dynamodb, table = moto_fabric
     _submit_env(monkeypatch, queue_url)

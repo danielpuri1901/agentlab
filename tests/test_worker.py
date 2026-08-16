@@ -16,7 +16,7 @@ from agentlab.eval_runner import _run_arm
 from agentlab.results import extract_results
 from agentlab.stats import paired_analysis
 from agentlab.stats import verdict as compute_verdict
-from agentlab.worker import transition, upload_log
+from agentlab.worker import _optional_int_env, transition, upload_log
 
 runner = CliRunner()
 
@@ -200,6 +200,30 @@ def test_finalize_writes_report_and_matches_local_verdict(moto_fabric, monkeypat
     finalized = [item for item in items if item["event"] == "FINALIZED"]
     assert len(finalized) == 1
     assert finalized[0]["detail"] == expected_verdict
+
+
+def test_optional_int_env_treats_jsonata_null_string_as_absent(monkeypatch):
+    # Regression test: infra/stepfunctions.tf's JSONata $string(null) renders
+    # a null MAX_CONNECTIONS as the literal string "null" (not an empty or
+    # missing env var) in the ECS container override, which int() previously
+    # rejected with a ValueError before any DynamoDB transition was written.
+    monkeypatch.setenv("MAX_CONNECTIONS", "null")
+    assert _optional_int_env("MAX_CONNECTIONS") is None
+
+    monkeypatch.setenv("MAX_CONNECTIONS", "None")
+    assert _optional_int_env("MAX_CONNECTIONS") is None
+
+    monkeypatch.setenv("MAX_CONNECTIONS", "NULL")
+    assert _optional_int_env("MAX_CONNECTIONS") is None
+
+    monkeypatch.setenv("MAX_CONNECTIONS", "")
+    assert _optional_int_env("MAX_CONNECTIONS") is None
+
+    monkeypatch.delenv("MAX_CONNECTIONS", raising=False)
+    assert _optional_int_env("MAX_CONNECTIONS") is None
+
+    monkeypatch.setenv("MAX_CONNECTIONS", "30")
+    assert _optional_int_env("MAX_CONNECTIONS") == 30
 
 
 def test_transition_is_idempotent_on_retry(moto_fabric):
