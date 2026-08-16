@@ -1,0 +1,41 @@
+variable "aws_region" {
+  description = "AWS region for all resources."
+  type        = string
+  default     = "eu-west-1"
+}
+
+variable "project" {
+  description = "Value applied to the project tag on every resource via default_tags."
+  type        = string
+  default     = "agentlab"
+}
+
+variable "alert_email" {
+  description = "Email address that receives the monthly budget notification."
+  type        = string
+  default     = "danielpuri1901@gmail.com"
+}
+
+variable "monthly_budget_usd" {
+  description = "Monthly AWS cost budget limit in USD."
+  type        = string
+  default     = "50"
+}
+
+variable "state_table_name" {
+  description = "DynamoDB table name for experiment state transitions. Must match the STATE_TABLE contract src/agentlab/worker.py already reads and writes: PK experiment_id (S), SK sk (S)."
+  type        = string
+  default     = "agentlab-state"
+}
+
+variable "results_bucket_name" {
+  description = "S3 bucket for EvalLogs and reports. Globally unique, so suffixed with the account id."
+  type        = string
+  default     = "agentlab-results-891377302765"
+}
+
+variable "experiments_queue_name" {
+  description = "SQS queue name that receives experiment submissions from `agentlab cloud submit`."
+  type        = string
+  default     = "agentlab-experiments"
+}
