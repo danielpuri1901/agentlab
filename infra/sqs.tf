@@ -18,11 +18,11 @@
 # duration, while staying far under the 12-hour SQS maximum.
 #
 # Redrive: the same page recommends maxReceiveCount >= 5 ("to give messages more
-# chances to be processed before sending them to the dead-letter queue"). This
-# queue deliberately keeps maxReceiveCount=3 per the plan instead: our failure
-# modes here are hand-off errors (bad IAM, malformed message, throttling), not
-# variable-duration processing, so a bad experiment spec should reach the DLQ
-# for triage sooner rather than being retried five times first.
+# chances to be processed before sending them to the dead-letter queue"). The
+# plan originally specified maxReceiveCount=3; on review, the verified AWS
+# recommendation was judged to win over that plan default (the plan's 3 was
+# arbitrary, not measured against this specific guidance), so the plan was
+# amended and this queue uses maxReceiveCount=5.
 resource "aws_sqs_queue" "experiments_dlq" {
   name                      = "${var.experiments_queue_name}-dlq"
   message_retention_seconds = 1209600 # 14 days: the SQS maximum, giving the most time to notice and redrive failures
@@ -34,7 +34,7 @@ resource "aws_sqs_queue" "experiments" {
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.experiments_dlq.arn
-    maxReceiveCount     = 3
+    maxReceiveCount     = 5
   })
 }
 
