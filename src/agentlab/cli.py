@@ -63,6 +63,7 @@ async def _run_arm(
     summary_budget: int,
     n_facts: int,
     filler_turns: int,
+    max_connections: int | None = None,
 ) -> EvalLog:
     task = compaction_task(
         style=style,
@@ -72,23 +73,25 @@ async def _run_arm(
         n_facts=n_facts,
         filler_turns=filler_turns,
     )
-    [log] = await eval_async(task, epochs=repeats, log_dir=str(log_dir))
+    [log] = await eval_async(
+        task, epochs=repeats, log_dir=str(log_dir), max_connections=max_connections
+    )
     check_log_status(log, arm_name=style)
     return log
 
 
 async def _run_arms_in_one_loop(
     model, seeds, repeats, log_dir, baseline_style, candidate_style,
-    summary_budget, n_facts, filler_turns,
+    summary_budget, n_facts, filler_turns, max_connections,
 ):
     # Both arms must share one event loop: provider internals (e.g. the
     # aiobotocore credential-refresh lock) bind to the loop of the first
     # eval and crash a second eval run on a fresh loop.
     baseline_log = await _run_arm(
-        baseline_style, model, seeds, repeats, log_dir, summary_budget, n_facts, filler_turns
+        baseline_style, model, seeds, repeats, log_dir, summary_budget, n_facts, filler_turns, max_connections
     )
     candidate_log = await _run_arm(
-        candidate_style, model, seeds, repeats, log_dir, summary_budget, n_facts, filler_turns
+        candidate_style, model, seeds, repeats, log_dir, summary_budget, n_facts, filler_turns, max_connections
     )
     return baseline_log, candidate_log
 
@@ -103,11 +106,12 @@ def _run_paired(
     summary_budget: int,
     n_facts: int,
     filler_turns: int,
+    max_connections: int | None = None,
 ):
     baseline_log, candidate_log = asyncio.run(
         _run_arms_in_one_loop(
             model, seeds, repeats, log_dir, baseline_style, candidate_style,
-            summary_budget, n_facts, filler_turns,
+            summary_budget, n_facts, filler_turns, max_connections,
         )
     )
     baseline = extract_results(baseline_log.location)
@@ -150,6 +154,9 @@ def pilot(
     candidate_style: str = typer.Option(
         CANDIDATE_STYLE, help="Compaction style for the candidate arm."
     ),
+    max_connections: int = typer.Option(
+        None, help="Inspect max concurrent model connections (None = Inspect default)."
+    ),
 ) -> None:
     """Run a small paired baseline/candidate pilot to measure sd_task_delta
     and cost before sizing the full `run`."""
@@ -165,6 +172,7 @@ def pilot(
         summary_budget,
         n_facts,
         filler_turns,
+        max_connections,
     )
     # sd_task_delta == 0 means baseline and candidate tied on every task (no
     # measured variance, e.g. two arms scoring identically); required_tasks
@@ -250,6 +258,7 @@ def run_experiment(
         summary_budget,
         n_facts,
         filler_turns,
+        max_connections,
     )
     verdict_str = verdict(result, protected=[])
 
