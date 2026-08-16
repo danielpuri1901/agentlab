@@ -37,3 +37,13 @@ output "experiments_dlq_arn" {
   description = "Dead-letter queue ARN."
   value       = aws_sqs_queue.experiments_dlq.arn
 }
+
+output "ecr_repository_url" {
+  description = "ECR repository URL - the push/pull target for scripts/build_and_push_image.sh."
+  value       = aws_ecr_repository.agentlab.repository_url
+}
+
+output "ecr_repository_arn" {
+  description = "ECR repository ARN, for scoping IAM policies in later tasks."
+  value       = aws_ecr_repository.agentlab.arn
+}

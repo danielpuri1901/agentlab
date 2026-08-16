@@ -1,0 +1,31 @@
+# Local virtualenv - platform-specific, always rebuilt inside the image.
+.venv/
+
+# Local experiment output - never needed to build or test the worker image.
+results/
+
+# Documentation and planning artifacts - not part of the runtime or test surface.
+docs/
+.superpowers/
+
+# VCS metadata.
+.git/
+.gitignore
+
+# Local run logs.
+logs/
+
+# Terraform local state/provider cache - not part of the container build.
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+
+# Python/tooling caches that should never be baked into a layer.
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Editor/OS cruft.
+.DS_Store

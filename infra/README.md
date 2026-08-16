@@ -14,11 +14,12 @@ Nothing here has been applied yet.
 - `dynamodb.tf` - the `agentlab-state` table (PK `experiment_id`, SK `sk`, both String, on-demand billing), matching the shape `src/agentlab/worker.py` already reads and writes.
 - `s3.tf` - the `agentlab-results-891377302765` bucket: versioning explicitly off, all public access blocked, and a lifecycle rule that aborts abandoned multipart uploads after 7 days.
 - `sqs.tf` - the `agentlab-experiments` queue plus its dead-letter queue, with a redrive policy and the visibility-timeout reasoning cited inline.
+- `ecr.tf` - the `agentlab` ECR repository (scan on push) and a lifecycle policy keeping the last 10 images, tagged with the git short SHA by `scripts/build_and_push_image.sh`.
 - `.gitignore` - ignores `.terraform/` and Terraform state files; the `.terraform.lock.hcl` provider lock file is committed as normal.
 
 ## What does not exist yet
 
-No compute, no IAM roles beyond what the budget resource needs, no ECR, no Step Functions, no EventBridge Pipe.
+No compute, no IAM roles beyond what the budget resource needs, no Step Functions, no EventBridge Pipe.
 Those arrive in later tasks once this foundation is reviewed.
 
 ## How to validate
