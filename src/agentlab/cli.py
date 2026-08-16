@@ -241,6 +241,9 @@ def run_experiment(
     candidate_style: str = typer.Option(
         CANDIDATE_STYLE, help="Compaction style for the candidate arm."
     ),
+    max_connections: int = typer.Option(
+        None, help="Inspect max concurrent model connections (None = Inspect default)."
+    ),
 ) -> None:
     """Run baseline vs candidate paired on identical seeds and render a
     verdict report to results/experiment-<timestamp>/report.md."""
