@@ -4,6 +4,7 @@ Tests model list resolution, cost calculation, and script structure without
 requiring AWS credentials or Bedrock access.
 """
 
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -12,9 +13,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from agentlab.costs import resolve_price
-
-# Import the script's offline functions
-import importlib.util
 
 smoke_script_path = Path(__file__).parent.parent / "scripts" / "credit_smoke.py"
 spec = importlib.util.spec_from_file_location("credit_smoke", smoke_script_path)

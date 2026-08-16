@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Bedrock credit smoke test: verify which model families draw from promotional credits.
 
@@ -181,7 +180,7 @@ def main():
         print(f"Testing {friendly_name} ({model_id})...")
 
         try:
-            (input_tokens, output_tokens, response_text) = (
+            (input_tokens, output_tokens, _) = (
                 invoke_model_via_inspect_ai(model_id, PROMPT, MAX_OUTPUT_TOKENS)
             )
 
@@ -197,7 +196,7 @@ def main():
         except RuntimeError as e:
             print(f"ERROR: {e}")
             sys.exit(1)
-        except Exception as e:
+        except (ValueError, KeyError, AttributeError) as e:
             print(f"UNEXPECTED ERROR: {e}")
             sys.exit(1)
 
