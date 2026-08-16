@@ -71,3 +71,10 @@ Abort and surface if the running total would exceed it.
 - Fact-plant phrasing is formulaic ("note for the record, X resolved with CODE"), which may favor any summarizer that learns the pattern; acceptable for 001, flagged for a future perturbation family.
 - Recall is exact-substring; paraphrased retention scores zero in both arms (symmetric, but understates absolute retention).
 - Single model family at screening (Nova); the Haiku confirmation checks generalization one tier up only.
+
+### Amendment 2 (2026-08-16, model-tier diagnostic)
+
+Daniel hypothesized the naive floor was model-bound; tested with a Haiku 4.5 screening (10 tasks x 3 repeats, 12 facts / 120 turns / budget 150, $0.97).
+Result: naive recall 0.019 (floor still violated), structured recall 0.644 (vs 0.18 on Nova Lite), sd_task_delta 0.020.
+Conclusion: the naive floor is robust across tiers (finding 001-A: generic "summarize concisely" prompts discard 98-100% of exact identifiers regardless of model tier); model strength greatly improves the structured arm instead.
+Cumulative 001 spend: $1.27 of the $5.00 cap.
