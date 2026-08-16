@@ -67,7 +67,8 @@ From `research/evaluation-methods.md`.
 
 - Design: paired (baseline and candidate on identical tasks and seeds), task-clustered standard errors.
 - Detecting a 10-point effect on binary success needs ~60 tasks x 5 repeats x 2 configs = 600 trials ($300 to $600 on mid-tier models).
-- Caution: those counts derive from variance parameters the source report explicitly labels assumed and illustrative; if the paired correlation is 0.5 instead of the assumed 0.8, required task counts roughly double. A cheap local variance pilot (~20 tasks x 5 repeats on a cheap model, a few dollars) must replace these assumptions with measured values before any budget commitment.
+- MEASURED (live pilot, 2026-08-16, Nova Lite, 20 tasks x 5 repeats x 2 arms, $0.13 total): sd_task_delta = 0.043 on the recall metric, so required_tasks(MDE 0.1) = 4. The continuous paired metric is far less noisy than the report's illustrative assumptions feared.
+- Caveat from the same pilot: the truncate-vs-structured comparison is degenerate after the pre-boundary planting fix (baseline recall ~0 by construction, candidate ~0.97, mean_delta 0.968). Experiment one must compare a naive summary baseline against a structured summary candidate, and may need harder recall conditions to avoid ceiling effects.
 - With 20 to 50 paired trials we can detect 20 to 30 point effects, not 5-point ones.
 - Consequence: first experiments target large claimed effects or continuous metrics (tokens, steps, information recall), where small n genuinely suffices.
 - Repeats saturate past ~5 per task; distinct tasks are the binding constraint.
