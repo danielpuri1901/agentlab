@@ -95,3 +95,13 @@ Sized run (51 tasks x 5 repeats, Nova Lite, $0.54): PROMOTE.
 codes_first 0.423 vs structured 0.155; delta +0.268, 95% CI [0.207, 0.329]; sd_task_delta 0.218.
 Confirmation-sizing ruling: copying Nova's n to Haiku would cost ~$10 and breach the cap; Haiku's measured task noise is far smaller (screening sd 0.020), so the confirmation runs 15 tasks x 3 repeats (~$1.5), decisive if the effect transfers.
 Known report blemish fixed after this run: the report's hypothesis line was a stale hard-coded constant; now derived from the actual arms.
+
+## RESULT (2026-08-16): CONFIRMED PROMOTE
+
+Sized run, Nova Lite (51 tasks x 5 repeats): codes_first 0.423 vs structured 0.155; delta +0.268, CI [0.207, 0.329].
+Confirmation, Haiku 4.5 (15 tasks x 3 repeats, $1.35): codes_first 0.772 vs structured 0.632; delta +0.141, CI [0.020, 0.262].
+Verdict: PROMOTE on both tiers.
+Interpretation: spending the summary budget on identifiers first materially improves retention under compression; the effect shrinks as model strength grows (+27pp Nova, +14pp Haiku) but does not vanish.
+Honesty note: the Haiku CI lower bound (+2.0pp) sits below the 10pp MDE, so effect size on Haiku is uncertain below that; existence and direction are confirmed at both tiers.
+Findings banked: 001-A (generic summaries discard ~all exact identifiers, cross-tier) and 001-B (codes-first prompting beats general structured prompting, cross-tier).
+Total experiment spend: ~$3.9 of the $5.00 cap, including all failed-run partials.
