@@ -1,9 +1,9 @@
 """
 Bedrock credit smoke test: verify which model families draw from promotional credits.
 
-Sends one fixed ~2000-token prompt to each model family (Nova Lite, Haiku 4.5,
-Sonnet 5) with max 200 output tokens. Prints model id, tokens used, and expected
-cost via run_cost from costs.py.
+Sends one fixed ~1500-word (~2000-token) prompt to each model family
+(Nova Lite, Haiku 4.5, Sonnet 5) with max 200 output tokens. Prints model id,
+tokens used, and expected cost via run_cost from costs.py.
 
 This script is structured for offline testing: model configurations, prompts, and
 cost calculation are all deterministic and do not require AWS credentials. The live
@@ -16,6 +16,7 @@ smoke test script minimal and avoids introducing boto3 as a new dependency just
 for credential handling.
 """
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -31,75 +32,21 @@ MODELS = [
     ("bedrock/anthropic.claude-sonnet-5", "Sonnet 5"),
 ]
 
-# Fixed prompt: Lorem ipsum text (~1500+ words = ~2000 tokens after tokenization)
-PROMPT = (
-    "Summarize this long document:\n\n"
-    "The quick brown fox jumps over the lazy dog. Lorem ipsum dolor sit amet, "
-    "consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et "
-    "dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation "
-    "ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure "
-    "dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla "
-    "pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui "
-    "officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis "
-    "iste natus error sit voluptatem accusantium doloremque laudantium, totam rem "
-    "aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae "
-    "vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas sit "
-    "aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui "
-    "ratione voluptatem sequi nesciunt. Neque porro quisquam est, qui dolorem ipsum "
-    "quia dolor sit amet, consectetur, adipisci velit, sed quia non numquam eius "
-    "modi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem. "
-    "Ut enim ad minima veniam, quis nostrum exercitationem ullam corporis suscipit "
-    "laboriosam, nisi ut aliquid ex ea commodi consequatur. Quis autem vel eum iure "
-    "reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur, "
-    "vel illum qui dolorem eum fugiat quo voluptas nulla pariatur. At vero eos et "
-    "accusamus et iusto odio dignissimos ducimus qui blanditiis praesentium "
-    "voluptatum deleniti atque corrupti quos dolores et quas molestias excepturi "
-    "sint occaecati cupiditate non provident, similique sunt in culpa qui officia "
-    "deserunt mollitia animi, id est laborum et dolorum fuga. Et harum quidem rerum "
-    "facilis est et expedita distinctio. Nam libero tempore, cum soluta nobis est "
-    "eligendi optio cumque nihil impedit quo minus id quod maxime placeat facere "
-    "possimus, omnis voluptas assumenda est, omnis dolor repellendus. Temporibus "
-    "autem quibusdam et aut officiis debitis aut rerum necessitatibus saepe eveniet "
-    "ut et voluptates repudiandae sint et molestiae non recusandae itaque earum "
-    "rerum hic tenetur a sapiente delectus, ut aut reiciendis voluptatibus maiores "
-    "alias consequatur aut perferendis doloribus asperiores repellat. Sed ut "
-    "perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque "
-    "laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et "
-    "quasi architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem "
-    "quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni "
-    "dolores eos qui ratione voluptatem sequi nesciunt. Neque porro quisquam est, "
-    "qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit, sed quia "
-    "non numquam eius modi tempora incidunt ut labore et dolore magnam aliquam "
-    "quaerat voluptatem. Ut enim ad minima veniam, quis nostrum exercitationem "
-    "ullam corporis suscipit laboriosam, nisi ut aliquid ex ea commodi consequatur. "
-    "Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam nihil "
-    "molestiae consequatur, vel illum qui dolorem eum fugiat quo voluptas nulla "
-    "pariatur. At vero eos et accusamus et iusto odio dignissimos ducimus qui "
-    "blanditiis praesentium voluptatum deleniti atque corrupti quos dolores et quas "
-    "molestias excepturi sint occaecati cupiditate non provident, similique sunt in "
-    "culpa qui officia deserunt mollitia animi, id est laborum et dolorum fuga. Et "
-    "harum quidem rerum facilis est et expedita distinctio. Nam libero tempore, cum "
-    "soluta nobis est eligendi optio cumque nihil impedit quo minus id quod maxime "
-    "placeat facere possimus, omnis voluptas assumenda est, omnis dolor repellendus. "
-    "Temporibus autem quibusdam et aut officiis debitis aut rerum necessitatibus "
-    "saepe eveniet ut et voluptates repudiandae sint et molestiae non recusandae "
-    "itaque earum rerum hic tenetur a sapiente delectus, ut aut reiciendis "
-    "voluptatibus maiores alias consequatur aut perferendis doloribus asperiores "
-    "repellat. Sed ut perspiciatis unde omnis iste natus error sit voluptatem "
-    "accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo "
-    "inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo "
-    "enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia "
-    "consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt. Neque "
-    "porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci "
-    "velit. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod "
-    "tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, "
-    "quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo "
-    "consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse "
-    "cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non "
-    "proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut "
-    "perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque "
-    "laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et "
-    "quasi architecto beatae vitae dicta sunt explicabo."
+# Fixed prompt: ~1500 words of Lorem ipsum text (approximately 2000 tokens)
+_LOREM = (
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor "
+    "incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis "
+    "nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. "
+    "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu "
+    "fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in "
+    "culpa qui officia deserunt mollit anim id est laborum. "
+)
+
+PROMPT = "Summarize this comprehensive technical document:\n\n" + (
+    _LOREM * 22
+    + "Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium "
+    "doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore "
+    "veritatis et quasi architecto beatae vitae dicta sunt explicabo."
 )
 
 # Maximum output tokens
@@ -122,7 +69,7 @@ def calculate_expected_cost(model_id, input_tokens, output_tokens):
     return run_cost(model_id, input_tokens, output_tokens)
 
 
-def invoke_model_via_inspect_ai(model_id, prompt, max_tokens):
+async def invoke_model_via_inspect_ai(model_id, prompt, max_tokens):
     """Invoke a model via inspect_ai's model API.
 
     Fails gracefully with a clear message if AWS credentials are missing.
@@ -130,7 +77,7 @@ def invoke_model_via_inspect_ai(model_id, prompt, max_tokens):
     Returns: (input_tokens, output_tokens, response_text)
     """
     try:
-        from inspect_ai.model import get_model
+        from inspect_ai.model import GenerateConfig, get_model
     except ImportError:
         raise RuntimeError(
             "inspect_ai not installed. Install with: uv add inspect_ai"
@@ -138,7 +85,8 @@ def invoke_model_via_inspect_ai(model_id, prompt, max_tokens):
 
     try:
         model = get_model(model_id)
-        response = model.generate(prompt, max_tokens=max_tokens)
+        config = GenerateConfig(max_tokens=max_tokens)
+        response = await model.generate(prompt, config=config)
 
         # Extract token counts from response
         # inspect_ai's response object has usage info
@@ -148,8 +96,8 @@ def invoke_model_via_inspect_ai(model_id, prompt, max_tokens):
         else:
             # Fallback: estimate from response text
             output_tokens = len(response.text.split())
-            # Rough estimate: prompt is ~2000 tokens
-            input_tokens = 2000
+            # Prompt is approximately 1500 words, ~1950 tokens
+            input_tokens = 1950
 
         return input_tokens, output_tokens, response.text
     except Exception as e:
@@ -168,7 +116,7 @@ def invoke_model_via_inspect_ai(model_id, prompt, max_tokens):
         raise
 
 
-def main():
+async def main():
     """Run the credit smoke test."""
     print("Bedrock Credit Smoke Test")
     print("=" * 60)
@@ -180,7 +128,7 @@ def main():
         print(f"Testing {friendly_name} ({model_id})...")
 
         try:
-            (input_tokens, output_tokens, _) = (
+            (input_tokens, output_tokens, _) = await (
                 invoke_model_via_inspect_ai(model_id, PROMPT, MAX_OUTPUT_TOKENS)
             )
 
@@ -209,4 +157,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

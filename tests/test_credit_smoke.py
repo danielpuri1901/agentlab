@@ -81,21 +81,20 @@ class TestCreditSmokeOffline:
         )
 
     def test_prompt_length(self):
-        """Verify the prompt is a substantial length.
+        """Verify the prompt is ~2000 tokens as specified in the brief.
 
-        The task specifies ~2000 tokens, but the exact size is less important
-        than ensuring the prompt is long enough to be representative.
-        Requirement: at least 900 tokens for cost testing.
+        The brief specifies: one fixed ~2,000-token request, which translates to
+        approximately 1500 words given English tokenization (~1.3 tokens per word).
         """
         prompt = credit_smoke.PROMPT
         # Rough tokenization: ~1.3 tokens per word on average for English
         word_count = len(prompt.split())
         rough_token_count = word_count * 1.3
 
-        # Accept prompts >= 900 tokens as reasonable for smoke testing
-        assert rough_token_count >= 900, (
+        # Enforce spec: 1600-2600 tokens (accounting for tokenizer variance)
+        assert 1600 <= rough_token_count <= 2600, (
             f"Prompt word count {word_count} (~{rough_token_count:.0f} tokens) "
-            f"below minimum of 900 tokens"
+            f"outside spec range [1600, 2600]"
         )
 
     def test_max_output_tokens(self):
