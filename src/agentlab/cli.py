@@ -13,6 +13,7 @@ from pathlib import Path
 
 import typer
 
+from agentlab.cloud import cloud_app
 from agentlab.eval_runner import _run_arms_in_one_loop, check_log_status, hypothesis_for
 from agentlab.report import render_report
 from agentlab.results import extract_results, mean_score, total_cost, total_tokens
@@ -26,6 +27,7 @@ __all__ = ["app", "check_log_status"]
 
 app = typer.Typer()
 app.add_typer(worker_app, name="worker")
+app.add_typer(cloud_app, name="cloud")
 
 BASELINE_STYLE = "truncate"
 CANDIDATE_STYLE = "structured"
