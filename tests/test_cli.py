@@ -47,6 +47,100 @@ def test_run_command_writes_report_with_verdict_offline(tmp_path):
     assert "excludes usage from models with no known price" in report_text
 
 
+def test_run_command_accepts_experiment_001_flags_offline(tmp_path):
+    # New knobs from experiment 001: naive/structured arm selection, corpus
+    # size, and summary budget, all pass through the CLI offline via mockllm.
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            "2",
+            "--repeats",
+            "1",
+            "--model",
+            "mockllm/model",
+            "--results-dir",
+            str(tmp_path),
+            "--n-facts",
+            "3",
+            "--filler-turns",
+            "8",
+            "--summary-budget",
+            "50",
+            "--baseline-style",
+            "naive",
+            "--candidate-style",
+            "structured",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+    experiment_dirs = list(tmp_path.glob("experiment-*"))
+    assert len(experiment_dirs) == 1
+    report_text = (experiment_dirs[0] / "report.md").read_text()
+    assert "Baseline arm: `naive`" in report_text
+    assert "Candidate arm: `structured`" in report_text
+
+
+def test_run_command_defaults_preserve_current_arms(tmp_path):
+    # No new flags passed: baseline/candidate arms must stay truncate/structured.
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            "2",
+            "--repeats",
+            "1",
+            "--model",
+            "mockllm/model",
+            "--results-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    experiment_dirs = list(tmp_path.glob("experiment-*"))
+    report_text = (experiment_dirs[0] / "report.md").read_text()
+    assert "Baseline arm: `truncate`" in report_text
+    assert "Candidate arm: `structured`" in report_text
+
+
+def test_pilot_command_accepts_experiment_001_flags_offline(tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "pilot",
+            "--tasks",
+            "2",
+            "--repeats",
+            "2",
+            "--model",
+            "mockllm/model",
+            "--results-dir",
+            str(tmp_path),
+            "--n-facts",
+            "3",
+            "--filler-turns",
+            "8",
+            "--summary-budget",
+            "50",
+            "--baseline-style",
+            "naive",
+            "--candidate-style",
+            "structured",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+    data = json.loads((tmp_path / "pilot.json").read_text())
+    assert data["baseline_style"] == "naive"
+    assert data["candidate_style"] == "structured"
+
+
 def test_pilot_command_writes_pilot_json_offline(tmp_path):
     result = runner.invoke(
         app,

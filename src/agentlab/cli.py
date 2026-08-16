@@ -49,17 +49,45 @@ def check_log_status(log: EvalLog, arm_name: str) -> None:
 
 
 def _run_arm(
-    style: str, model: str, seeds: list[int], repeats: int, log_dir: Path
+    style: str,
+    model: str,
+    seeds: list[int],
+    repeats: int,
+    log_dir: Path,
+    summary_budget: int,
+    n_facts: int,
+    filler_turns: int,
 ) -> EvalLog:
-    task = compaction_task(style=style, model=model, seeds=seeds)
+    task = compaction_task(
+        style=style,
+        model=model,
+        seeds=seeds,
+        summary_budget=summary_budget,
+        n_facts=n_facts,
+        filler_turns=filler_turns,
+    )
     [log] = eval(task, epochs=repeats, log_dir=str(log_dir), display="none")
     check_log_status(log, arm_name=style)
     return log
 
 
-def _run_paired(model: str, seeds: list[int], repeats: int, log_dir: Path):
-    baseline_log = _run_arm(BASELINE_STYLE, model, seeds, repeats, log_dir)
-    candidate_log = _run_arm(CANDIDATE_STYLE, model, seeds, repeats, log_dir)
+def _run_paired(
+    model: str,
+    seeds: list[int],
+    repeats: int,
+    log_dir: Path,
+    baseline_style: str,
+    candidate_style: str,
+    summary_budget: int,
+    n_facts: int,
+    filler_turns: int,
+):
+    baseline_log = _run_arm(
+        baseline_style, model, seeds, repeats, log_dir, summary_budget, n_facts, filler_turns
+    )
+    candidate_log = _run_arm(
+        candidate_style, model, seeds, repeats, log_dir, summary_budget, n_facts, filler_turns
+    )
     baseline = extract_results(baseline_log.location)
     candidate = extract_results(candidate_log.location)
     result = paired_analysis(baseline.scores, candidate.scores)
@@ -89,13 +117,32 @@ def pilot(
     results_dir: Path = typer.Option(
         Path("results"), help="Directory pilot.json is written under."
     ),
+    n_facts: int = typer.Option(12, help="Planted facts per session."),
+    filler_turns: int = typer.Option(40, help="Filler turns per session."),
+    summary_budget: int = typer.Option(
+        150, help="max_tokens for the summarizer's GenerateConfig (naive/structured only)."
+    ),
+    baseline_style: str = typer.Option(
+        BASELINE_STYLE, help="Compaction style for the baseline arm."
+    ),
+    candidate_style: str = typer.Option(
+        CANDIDATE_STYLE, help="Compaction style for the candidate arm."
+    ),
 ) -> None:
     """Run a small paired baseline/candidate pilot to measure sd_task_delta
     and cost before sizing the full `run`."""
     seeds = list(range(tasks))
     log_dir = results_dir / "pilot-logs"
     baseline_log, candidate_log, baseline, candidate, result, cost = _run_paired(
-        model, seeds, repeats, log_dir
+        model,
+        seeds,
+        repeats,
+        log_dir,
+        baseline_style,
+        candidate_style,
+        summary_budget,
+        n_facts,
+        filler_turns,
     )
     # sd_task_delta == 0 means baseline and candidate tied on every task (no
     # measured variance, e.g. two arms scoring identically); required_tasks
@@ -113,10 +160,13 @@ def pilot(
         json.dumps(
             {
                 "model": model,
-                "baseline_style": BASELINE_STYLE,
-                "candidate_style": CANDIDATE_STYLE,
+                "baseline_style": baseline_style,
+                "candidate_style": candidate_style,
                 "seeds": seeds,
                 "repeats": repeats,
+                "n_facts": n_facts,
+                "filler_turns": filler_turns,
+                "summary_budget": summary_budget,
                 "mean_delta": result.mean_delta,
                 "ci_low": result.ci_low,
                 "ci_high": result.ci_high,
@@ -150,6 +200,17 @@ def run_experiment(
     results_dir: Path = typer.Option(
         Path("results"), help="Directory experiment-<ts>/ is written under."
     ),
+    n_facts: int = typer.Option(12, help="Planted facts per session."),
+    filler_turns: int = typer.Option(40, help="Filler turns per session."),
+    summary_budget: int = typer.Option(
+        150, help="max_tokens for the summarizer's GenerateConfig (naive/structured only)."
+    ),
+    baseline_style: str = typer.Option(
+        BASELINE_STYLE, help="Compaction style for the baseline arm."
+    ),
+    candidate_style: str = typer.Option(
+        CANDIDATE_STYLE, help="Compaction style for the candidate arm."
+    ),
 ) -> None:
     """Run baseline vs candidate paired on identical seeds and render a
     verdict report to results/experiment-<timestamp>/report.md."""
@@ -158,7 +219,15 @@ def run_experiment(
     experiment_dir = results_dir / f"experiment-{timestamp}"
 
     baseline_log, candidate_log, baseline, candidate, result, cost = _run_paired(
-        model, seeds, repeats, experiment_dir / "logs"
+        model,
+        seeds,
+        repeats,
+        experiment_dir / "logs",
+        baseline_style,
+        candidate_style,
+        summary_budget,
+        n_facts,
+        filler_turns,
     )
     verdict_str = verdict(result, protected=[])
 
@@ -169,8 +238,8 @@ def run_experiment(
         log_paths=[baseline_log.location, candidate_log.location],
         hypothesis=HYPOTHESIS,
         model=model,
-        baseline_style=BASELINE_STYLE,
-        candidate_style=CANDIDATE_STYLE,
+        baseline_style=baseline_style,
+        candidate_style=candidate_style,
         seeds=seeds,
         repeats=repeats,
         baseline_recall=mean_score(baseline.scores),

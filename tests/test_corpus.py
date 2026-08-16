@@ -1,3 +1,5 @@
+import pytest
+
 from agentlab.corpus import generate_session
 
 
@@ -22,6 +24,14 @@ def test_probe_answerable():
     s = generate_session(seed=3)
     for f in s.facts:
         assert f.key in f.probe_question
+
+
+def test_generate_session_raises_when_more_facts_than_plantable_turns():
+    # plant_fraction=0.6, filler_turns=10 -> plantable_turns=int(0.6*10)=6, which
+    # cannot hold 20 facts; random.sample(range(6), 20) would otherwise crash
+    # deep inside with an opaque ValueError from the stdlib.
+    with pytest.raises(ValueError, match="n_facts"):
+        generate_session(seed=1, n_facts=20, filler_turns=10)
 
 
 def test_facts_planted_strictly_before_boundary():

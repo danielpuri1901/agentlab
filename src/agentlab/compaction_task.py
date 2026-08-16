@@ -3,7 +3,7 @@ solvers, scored by exact recall of planted facts after compaction."""
 
 from inspect_ai import Task, task
 from inspect_ai.dataset import Sample
-from inspect_ai.model import get_model
+from inspect_ai.model import GenerateConfig, get_model
 from inspect_ai.scorer import Score, Scorer, Target, mean, scorer
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 
@@ -18,18 +18,33 @@ before this boundary."""
 DEFAULT_SEEDS = list(range(10))
 """Seeds used to build compaction_task's dataset when no seeds are supplied."""
 
+NAIVE_SUMMARY_INSTRUCTIONS = "Summarize the conversation so far concisely.\n\n"
+
 STRUCTURED_SUMMARY_INSTRUCTIONS = (
     "Summarize the conversation turns below into a structured summary that "
     "preserves every exact identifier and code exactly as written (for "
     "example CODE-12345). Do not paraphrase, drop, or approximate any code.\n\n"
 )
 
+_SUMMARY_INSTRUCTIONS_BY_STYLE = {
+    "naive": NAIVE_SUMMARY_INSTRUCTIONS,
+    "structured": STRUCTURED_SUMMARY_INSTRUCTIONS,
+}
+"""The only difference between the "naive" and "structured" summary styles:
+the instruction text prepended to the pre-boundary turns before they go to
+the summarizer. compact_transcript and compaction_solver route both styles
+through this single lookup so nothing else (boundary, which turns feed the
+summarizer, how the summary and post-boundary turns combine, the probe
+flow) can drift between them."""
 
-def compaction_dataset(seeds: list[int]) -> list[Sample]:
+
+def compaction_dataset(
+    seeds: list[int], n_facts: int = 12, filler_turns: int = 40
+) -> list[Sample]:
     """Build one Sample per seed, carrying its session's facts and transcript in metadata."""
     samples = []
     for seed in seeds:
-        session = generate_session(seed=seed)
+        session = generate_session(seed=seed, n_facts=n_facts, filler_turns=filler_turns)
         boundary = int(BOUNDARY_FRACTION * len(session.transcript))
         samples.append(
             Sample(
@@ -47,28 +62,36 @@ def compaction_dataset(seeds: list[int]) -> list[Sample]:
 
 
 def compact_transcript(turns: list[str], style: str) -> str:
-    """Build the compacted context for "truncate", or the summarizer prompt for "structured".
+    """Build the compacted context for "truncate", or the summarizer prompt for
+    "naive"/"structured".
 
     "truncate" (baseline): keep only the post-boundary turns verbatim.
-    "structured" (candidate): return a prompt asking the model to summarize the
-    pre-boundary turns while preserving exact identifiers and codes; the caller
-    is responsible for running that prompt through a model to get the actual
-    summary.
+    "naive"/"structured": return a prompt asking the model to summarize the
+    pre-boundary turns; the caller is responsible for running that prompt
+    through a model to get the actual summary. The two styles differ only in
+    the instruction text prepended (see _SUMMARY_INSTRUCTIONS_BY_STYLE):
+    "naive" is a plain summarize request, "structured" asks to preserve
+    exact identifiers and codes.
     """
     boundary = int(BOUNDARY_FRACTION * len(turns))
     pre_boundary = turns[:boundary]
     post_boundary = turns[boundary:]
     if style == "truncate":
         return "\n".join(post_boundary)
-    if style == "structured":
-        return STRUCTURED_SUMMARY_INSTRUCTIONS + "\n".join(pre_boundary)
+    if style in _SUMMARY_INSTRUCTIONS_BY_STYLE:
+        return _SUMMARY_INSTRUCTIONS_BY_STYLE[style] + "\n".join(pre_boundary)
     raise ValueError(f"unknown compaction style: {style!r}")
 
 
 @solver
-def compaction_solver(style: str) -> Solver:
+def compaction_solver(style: str, summary_budget: int = 150) -> Solver:
     """Compact the transcript per style, then answer each probe question using
-    only the compacted context."""
+    only the compacted context.
+
+    `summary_budget` caps `max_tokens` on the summarization model call only
+    (for "naive" and "structured"); it does not apply to the per-probe
+    answering calls below.
+    """
 
     async def solve(state: TaskState, generate: Generate) -> TaskState:
         turns = state.metadata["transcript"]
@@ -77,9 +100,11 @@ def compaction_solver(style: str) -> Solver:
 
         if style == "truncate":
             compacted_context = compact_transcript(turns, style="truncate")
-        elif style == "structured":
-            summarizer_prompt = compact_transcript(turns, style="structured")
-            summary_output = await model.generate(summarizer_prompt)
+        elif style in _SUMMARY_INSTRUCTIONS_BY_STYLE:
+            summarizer_prompt = compact_transcript(turns, style=style)
+            summary_output = await model.generate(
+                summarizer_prompt, config=GenerateConfig(max_tokens=summary_budget)
+            )
             compacted_context = "\n".join([summary_output.completion, *post_boundary])
         else:
             raise ValueError(f"unknown compaction style: {style!r}")
@@ -126,11 +151,23 @@ def recall_scorer() -> Scorer:
 
 
 @task
-def compaction_task(style: str, model: str, seeds: list[int] | None = None) -> Task:
-    """Build the compaction Inspect Task for the given style ("truncate" or "structured")."""
+def compaction_task(
+    style: str,
+    model: str,
+    seeds: list[int] | None = None,
+    summary_budget: int = 150,
+    n_facts: int = 12,
+    filler_turns: int = 40,
+) -> Task:
+    """Build the compaction Inspect Task for the given style ("truncate",
+    "naive", or "structured")."""
     return Task(
-        dataset=compaction_dataset(seeds if seeds is not None else DEFAULT_SEEDS),
-        solver=compaction_solver(style=style),
+        dataset=compaction_dataset(
+            seeds if seeds is not None else DEFAULT_SEEDS,
+            n_facts=n_facts,
+            filler_turns=filler_turns,
+        ),
+        solver=compaction_solver(style=style, summary_budget=summary_budget),
         scorer=recall_scorer(),
         model=model,
     )

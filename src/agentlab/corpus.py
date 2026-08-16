@@ -34,7 +34,18 @@ def generate_session(
     Facts are planted only in the first `plant_fraction` of `filler_turns`
     turns, so every fact lands strictly before the compaction boundary (see
     DEFAULT_PLANT_FRACTION).
+
+    Raises ValueError if there are fewer plantable turns than facts to plant
+    (int(plant_fraction * filler_turns) < n_facts); otherwise
+    random.sample below would crash with an opaque ValueError of its own.
     """
+    plantable_turns = int(plant_fraction * filler_turns)
+    if plantable_turns < n_facts:
+        raise ValueError(
+            f"n_facts={n_facts} exceeds plantable_turns={plantable_turns} "
+            f"(int(plant_fraction={plant_fraction} * filler_turns={filler_turns})); "
+            "increase filler_turns or plant_fraction, or decrease n_facts"
+        )
     rng = random.Random(seed)
     fake = Faker()
     fake.seed_instance(seed)
@@ -51,7 +62,6 @@ def generate_session(
         )
     roles = ["user", "assistant"]
     turns = [f"{roles[i % 2]}: {fake.sentence(nb_words=12)}" for i in range(filler_turns)]
-    plantable_turns = int(plant_fraction * filler_turns)
     positions = sorted(rng.sample(range(plantable_turns), n_facts))
     for pos, fact in zip(positions, facts):
         turns[pos] = f"assistant: note for the record, {fact.key} resolved with {fact.value}."
