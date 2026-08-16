@@ -78,3 +78,13 @@ Daniel hypothesized the naive floor was model-bound; tested with a Haiku 4.5 scr
 Result: naive recall 0.019 (floor still violated), structured recall 0.644 (vs 0.18 on Nova Lite), sd_task_delta 0.020.
 Conclusion: the naive floor is robust across tiers (finding 001-A: generic "summarize concisely" prompts discard 98-100% of exact identifiers regardless of model tier); model strength greatly improves the structured arm instead.
 Cumulative 001 spend: $1.27 of the $5.00 cap.
+
+### Amendment 3 (2026-08-16, the pivot - re-registered arms)
+
+Two screenings plus the tier diagnostic show the naive arm cannot pass the floor gate at any affordable tier, so the naive-vs-structured hypothesis is retired in favor of the gradation question.
+Re-registered hypothesis: a compaction prompt engineered to spend its budget on identifiers FIRST (codes_first) retains more planted facts than the current general structured prompt, under the same budget.
+- Baseline (`structured`): the existing identifier-preserving prompt (Nova 0.18, Haiku 0.64 at 12 facts / 120 turns / budget 150).
+- Candidate (`codes_first`): list every exact identifier and code verbatim first, one per line; summarize the rest only if budget remains; never paraphrase codes.
+Same corpus knobs, same gates (both arms in (0.1, 0.9) at screening), same MDE 0.10, same $5.00 cumulative cap ($1.27 spent).
+Screening on Nova Lite; sized run on Nova Lite; confirmation on Haiku 4.5 if PROMOTE.
+Finding 001-A (naive discards ~all identifiers cross-tier) stands as a recorded result of the retired arms.

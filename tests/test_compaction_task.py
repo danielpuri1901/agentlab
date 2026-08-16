@@ -207,3 +207,21 @@ def test_summary_budget_defaults_to_150():
 
     sig = inspect.signature(compaction_solver)
     assert sig.parameters["summary_budget"].default == 150
+
+
+def test_codes_first_style_uses_shared_summary_path():
+    turns = [f"turn {i}" for i in range(10)]
+    prompt = compact_transcript(turns, style="codes_first")
+    structured = compact_transcript(turns, style="structured")
+    # Same shared machinery: both carry the pre-boundary turns; only the
+    # instruction prefix differs (the no-confound guarantee extends to the
+    # new arm).
+    assert "turn 0" in prompt
+    from agentlab.compaction_task import _SUMMARY_INSTRUCTIONS_BY_STYLE
+
+    for style, text in (("codes_first", prompt), ("structured", structured)):
+        instr = _SUMMARY_INSTRUCTIONS_BY_STYLE[style]
+        assert text.startswith(instr)
+    assert prompt.removeprefix(
+        _SUMMARY_INSTRUCTIONS_BY_STYLE["codes_first"]
+    ) == structured.removeprefix(_SUMMARY_INSTRUCTIONS_BY_STYLE["structured"])

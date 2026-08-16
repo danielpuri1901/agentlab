@@ -29,6 +29,13 @@ STRUCTURED_SUMMARY_INSTRUCTIONS = (
 _SUMMARY_INSTRUCTIONS_BY_STYLE = {
     "naive": NAIVE_SUMMARY_INSTRUCTIONS,
     "structured": STRUCTURED_SUMMARY_INSTRUCTIONS,
+    "codes_first": (
+        "You are compacting a conversation under a strict length budget. "
+        "FIRST, list every exact identifier and its code verbatim, one per line, "
+        "in the form '<identifier> resolved with <CODE>'. "
+        "THEN, only if budget remains, add one sentence summarizing the rest. "
+        "Never paraphrase, shorten, or omit any code."
+    ),
 }
 """The only difference between the "naive" and "structured" summary styles:
 the instruction text prepended to the pre-boundary turns before they go to
