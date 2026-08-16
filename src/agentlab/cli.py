@@ -30,11 +30,30 @@ HYPOTHESIS = (
 )
 
 
+def check_log_status(log: EvalLog, arm_name: str) -> None:
+    """Abort cleanly if an Inspect eval run for `arm_name` did not succeed.
+
+    A live provider failure (throttling, auth, etc.) leaves `log.status` as
+    "error" or "cancelled" with no scores recorded. Letting extraction run
+    against that log crashes deep inside `extract_results` with a confusing
+    `KeyError` instead of a clear message naming what failed and where the
+    log lives.
+    """
+    if log.status != "success":
+        typer.echo(
+            f"error: eval run for arm '{arm_name}' did not succeed "
+            f"(status={log.status}); see log at {log.location}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+
 def _run_arm(
     style: str, model: str, seeds: list[int], repeats: int, log_dir: Path
 ) -> EvalLog:
     task = compaction_task(style=style, model=model, seeds=seeds)
     [log] = eval(task, epochs=repeats, log_dir=str(log_dir), display="none")
+    check_log_status(log, arm_name=style)
     return log
 
 

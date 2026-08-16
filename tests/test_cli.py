@@ -1,8 +1,11 @@
 import json
+from types import SimpleNamespace
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
-from agentlab.cli import app
+from agentlab.cli import app, check_log_status
 
 runner = CliRunner()
 
@@ -72,3 +75,24 @@ def test_pilot_command_writes_pilot_json_offline(tmp_path):
     assert "sd_task_delta" in data
     assert "required_tasks" in data
     assert data["log_paths"]
+
+
+def test_check_log_status_raises_and_names_arm_status_and_location(capsys):
+    # A live provider failure leaves an EvalLog with status != "success" and
+    # no scores; check_log_status must abort cleanly here rather than let a
+    # confusing KeyError surface later inside extract_results.
+    errored_log = SimpleNamespace(status="error", location="/tmp/fake/logs/truncate.eval")
+
+    with pytest.raises(typer.Exit):
+        check_log_status(errored_log, arm_name="truncate")
+
+    captured = capsys.readouterr()
+    assert "truncate" in captured.err
+    assert "error" in captured.err
+    assert "/tmp/fake/logs/truncate.eval" in captured.err
+
+
+def test_check_log_status_passes_on_success():
+    successful_log = SimpleNamespace(status="success", location="/tmp/fake/logs/structured.eval")
+
+    check_log_status(successful_log, arm_name="structured")  # must not raise

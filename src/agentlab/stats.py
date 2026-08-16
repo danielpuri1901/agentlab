@@ -14,7 +14,9 @@ class PairedResult:
     sd_task_delta: float
 
 
-def paired_analysis(baseline, candidate, alpha: float = 0.05) -> PairedResult:
+def paired_analysis(
+    baseline: dict[str, list[float]], candidate: dict[str, list[float]], alpha: float = 0.05
+) -> PairedResult:
     tasks = sorted(set(baseline) & set(candidate))
     if len(tasks) < 2:
         raise ValueError("need at least 2 shared tasks")
@@ -35,7 +37,7 @@ def required_tasks(sd_task_delta: float, mde: float, alpha: float = 0.05, power:
     return math.ceil(n)
 
 
-def verdict(primary: PairedResult, protected) -> str:
+def verdict(primary: PairedResult, protected: list[tuple[PairedResult, float]]) -> str:
     if primary.ci_low > 0:
         for res, allowed_delta in protected:
             if res.ci_high > allowed_delta:  # protected metric regressed beyond allowance

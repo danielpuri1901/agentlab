@@ -41,7 +41,7 @@ class TestCreditSmokeOffline:
 
         # Haiku 4.5: ~2000 input tokens, ~50 output tokens
         haiku_cost = credit_smoke.calculate_expected_cost(
-            "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
             input_tokens=2000,
             output_tokens=50,
         )
@@ -49,35 +49,59 @@ class TestCreditSmokeOffline:
 
         # Sonnet 5: ~2000 input tokens, ~50 output tokens
         sonnet_cost = credit_smoke.calculate_expected_cost(
-            "bedrock/anthropic.claude-sonnet-5", input_tokens=2000, output_tokens=50
+            "bedrock/global.anthropic.claude-sonnet-5", input_tokens=2000, output_tokens=50
         )
         assert 0 < sonnet_cost < 0.2, f"Sonnet 5 cost out of range: ${sonnet_cost}"
 
         # Verify Haiku is cheaper than Sonnet (by price rates)
         assert haiku_cost < sonnet_cost, "Expected Haiku to be cheaper than Sonnet"
 
-    def test_total_expected_cost_under_one_dollar(self):
-        """Verify total cost across all models stays under $1 for the smoke test."""
-        # With typical token estimates: 2000 input, 50-100 output per model
-        total_cost = 0.0
-        for model_id, _ in credit_smoke.get_model_configs():
-            # Estimate: 2000 input, 100 output tokens per model
-            cost = credit_smoke.calculate_expected_cost(
-                model_id, input_tokens=2000, output_tokens=100
-            )
-            total_cost += cost
+    def test_nova_lite_gets_exactly_one_call(self):
+        """Nova Lite's credit coverage is near-certain, so it stays at one call."""
+        nova_id = next(
+            model_id
+            for model_id, friendly_name in credit_smoke.get_model_configs()
+            if friendly_name == "Nova Lite"
+        )
+        cost_per_call = credit_smoke.calculate_expected_cost(
+            nova_id, credit_smoke.ESTIMATED_INPUT_TOKENS, credit_smoke.MAX_OUTPUT_TOKENS
+        )
+        repeats = credit_smoke.repeats_for_family(nova_id, cost_per_call)
+        assert repeats == credit_smoke.NOVA_LITE_CALLS == 1
 
-        # The smoke test's max output is 200 tokens, so worst case:
-        # 3 models * 2000 input + 3 models * 200 output
-        worst_case_total = 0.0
-        for model_id, _ in credit_smoke.get_model_configs():
-            cost = credit_smoke.calculate_expected_cost(
-                model_id, input_tokens=2000, output_tokens=200
+    def test_claude_family_repeats_reach_target_spend(self):
+        """Each Claude family's derived repeat count must land its expected
+        total at or just above TARGET_DOLLARS_PER_CLAUDE_FAMILY, so the
+        resulting Bedrock charge is legible in Cost Explorer instead of
+        vanishing into UI rounding (the bug this replaces)."""
+        for model_id, friendly_name in credit_smoke.get_model_configs():
+            if friendly_name == "Nova Lite":
+                continue
+            cost_per_call = credit_smoke.calculate_expected_cost(
+                model_id, credit_smoke.ESTIMATED_INPUT_TOKENS, credit_smoke.MAX_OUTPUT_TOKENS
             )
-            worst_case_total += cost
+            repeats = credit_smoke.repeats_for_family(model_id, cost_per_call)
+            expected_total = repeats * cost_per_call
+            target = credit_smoke.TARGET_DOLLARS_PER_CLAUDE_FAMILY
+            assert target <= expected_total < target + cost_per_call, (
+                f"{friendly_name} expected total ${expected_total:.4f} not "
+                f"within one call's cost of target ${target}"
+            )
+            assert repeats <= credit_smoke.MAX_REPEATS_PER_FAMILY
 
-        assert worst_case_total < 1.0, (
-            f"Worst-case total cost ${worst_case_total:.4f} exceeds $1.00 target"
+    def test_grand_expected_total_is_legible(self):
+        """Total expected spend across all families must land in a legible
+        multi-dollar range, not the sub-$0.01 total the original design produced."""
+        grand_total = 0.0
+        for model_id, friendly_name in credit_smoke.get_model_configs():
+            cost_per_call = credit_smoke.calculate_expected_cost(
+                model_id, credit_smoke.ESTIMATED_INPUT_TOKENS, credit_smoke.MAX_OUTPUT_TOKENS
+            )
+            repeats = credit_smoke.repeats_for_family(model_id, cost_per_call)
+            grand_total += repeats * cost_per_call
+
+        assert grand_total >= 2 * credit_smoke.TARGET_DOLLARS_PER_CLAUDE_FAMILY, (
+            f"grand expected total ${grand_total:.2f} is not legible"
         )
 
     def test_prompt_length(self):

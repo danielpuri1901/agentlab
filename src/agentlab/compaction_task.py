@@ -7,10 +7,13 @@ from inspect_ai.model import get_model
 from inspect_ai.scorer import Score, Scorer, Target, mean, scorer
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 
-from agentlab.corpus import generate_session
+from agentlab.corpus import DEFAULT_PLANT_FRACTION, generate_session
 
-BOUNDARY_FRACTION = 0.6
-"""Fraction of a session's transcript turns that fall before the compaction boundary."""
+BOUNDARY_FRACTION = DEFAULT_PLANT_FRACTION
+"""Fraction of a session's transcript turns that fall before the compaction
+boundary. Equal to corpus.DEFAULT_PLANT_FRACTION by construction (imported,
+not redefined) so every fact corpus.generate_session plants lands strictly
+before this boundary."""
 
 DEFAULT_SEEDS = list(range(10))
 """Seeds used to build compaction_task's dataset when no seeds are supplied."""

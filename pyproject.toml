@@ -1,7 +1,7 @@
 [project]
 name = "agentlab"
 version = "0.1.0"
-description = "Add your description here"
+description = "Statistically honest experimentation pipeline for AI agent techniques"
 readme = "README.md"
 authors = [
     { email = "danielpuri1901@gmail.com" }
