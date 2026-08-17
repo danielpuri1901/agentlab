@@ -42,6 +42,14 @@ xychart-beta
 
 **deepseek_style.** DeepSeek Harness's shipped prompt (verbatim-sourced, commit 99f6f02): act as a compaction engine, write a structured checkpoint in terse bullets, preserve exact identifiers and values. Retention: ~45%.
 
-## Open item
+## Haiku confirmation (round 1 closer)
 
-Champion-vs-runner-up (codes_first vs deepseek_style) confirmation on Haiku 4.5: running.
+On Haiku 4.5 the Nova tie breaks: codes_first 0.913 vs deepseek_style 0.800, delta -0.113, CI [-0.142, -0.084], verdict REJECT for the challenger (exp-20260817T195450Z-cedf, 15 tasks x 3 repeats).
+The champion keeps the crown decisively.
+
+## Refined finding
+
+The three-tier cliff holds on the weak model, and the top-tier tie is capability-bound: on Nova Lite all serious prompts saturate what the model can do (~0.44) and are indistinguishable; on Haiku the extra headroom reveals a real within-tier order, and codes-first-formatting beats DeepSeek's checkpoint-bullets by 11 points.
+Plain version: on a weak model, only intent matters; on a strong model, format starts to matter too, and listing the codes first wins.
+
+ROUND 1 CLOSED 2026-08-17. Total round spend ~$2.80 of the $8.00 cap.
