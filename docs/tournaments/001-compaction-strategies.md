@@ -1,6 +1,6 @@
 # Tournament 001: compaction strategies
 
-Status: DRAFT, awaiting Daniel's ratification.
+Status: RATIFIED by Daniel 2026-08-17. Round 1 in progress.
 A tournament is a recurring, registered head-to-head measurement, not a one-shot experiment.
 It re-runs when a new entrant appears (a new harness ships, a new strategy is published) and maintains a living leaderboard.
 Motto this serves: outsource the thinking, never the understanding.
@@ -35,7 +35,7 @@ Adaptations are best-effort reconstructions from public sources, and the leaderb
 
 1. `results/tournaments/001/leaderboard.md` - the living table: entrant, recall, delta vs champion, CI, cost, date, source citation.
 2. One ASD-STE-100 explainer paragraph per entrant: what the strategy does and why it wins or loses, written for the street-test standard.
-3. A visual explainer (Daniel is a visual learner): at minimum a mermaid diagram of each strategy's mechanism and a leaderboard chart; the reporting agent chooses the best representation, up to an interactive artifact when the finding deserves it.
+3. A visual explainer (Daniel is a visual learner): at minimum a mermaid diagram of each strategy's mechanism and a leaderboard chart; the reporting agent chooses the best representation, up to an interactive artifact or a Manim-rendered video (the 3Blue1Brown engine, manim community edition) when the finding deserves it.
 4. Every pairing's full report and logs, replayable, as with all experiments.
 
 ## Proposal discipline (anti-collapse, from measured evidence)
