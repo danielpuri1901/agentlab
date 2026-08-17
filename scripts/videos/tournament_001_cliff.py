@@ -1,7 +1,8 @@
-"""Manim scene v2: teach compaction from zero, then the tournament result.
+"""Manim scene v3: compaction as a house move - one metaphor, start to finish.
 
-v1 feedback: concept was not taught before results; some elements off-screen.
-v2: mechanism-first acts, conservative layout (everything width-guarded).
+Metaphor map: house = the chat; one suitcase = the token budget;
+passports = the exact codes; packing list = the compaction prompt;
+moving company = the harness; the mover = the model.
 
 Render:
     uvx --python 3.12 manim render -qm scripts/videos/tournament_001_cliff.py CliffScene
@@ -23,7 +24,6 @@ from manim import (
     GrowFromEdge,
     Rectangle,
     Scene,
-    SurroundingRectangle,
     Text,
     Transform,
     VGroup,
@@ -31,7 +31,7 @@ from manim import (
 )
 
 GOLD = YELLOW
-MAXW = 12.5  # safe content width
+MAXW = 12.5
 
 
 def fit(m, w=MAXW):
@@ -41,88 +41,103 @@ def fit(m, w=MAXW):
 
 
 def caption(s, size=28):
-    return fit(Text(s, font_size=size, line_spacing=1.1)).to_edge(DOWN, buff=0.5)
+    return fit(Text(s, font_size=size, line_spacing=1.1)).to_edge(DOWN, buff=0.45)
+
+
+def furniture(n=9):
+    items = VGroup(*[
+        Rectangle(width=0.9, height=0.55, fill_color=GREY_D, fill_opacity=1, stroke_width=1)
+        for _ in range(n)
+    ])
+    items.arrange_in_grid(rows=3, buff=0.25)
+    return items
+
+
+def passport():
+    p = Rectangle(width=0.42, height=0.3, fill_color=GOLD, fill_opacity=1, stroke_width=1)
+    label = Text("CODE", font_size=12).move_to(p)
+    return VGroup(p, label)
 
 
 class CliffScene(Scene):
-    def show_caption(self, text_obj, hold=2.4):
+    def show_caption(self, text_obj, hold=2.6):
         self.play(Write(text_obj))
         self.wait(hold)
         self.play(FadeOut(text_obj))
 
     def construct(self):
-        # ---------- Act 0: the problem ----------
-        t = fit(Text("Why agents forget: compaction, explained", font_size=38))
-        self.play(Write(t))
+        # ---------- Act 1: the move ----------
+        title = fit(Text("Compaction, explained with a house move", font_size=38))
+        self.play(Write(title))
         self.wait(1.4)
-        self.play(t.animate.to_edge(UP, buff=0.4).scale(0.65))
+        self.play(title.animate.to_edge(UP, buff=0.35).scale(0.6))
 
-        window = Rectangle(width=5.2, height=4.6, stroke_color=GREY_B).shift(LEFT * 3.2)
-        wlabel = fit(Text("the agent's memory window", font_size=22)).next_to(window, UP, buff=0.15)
-        lines = VGroup(*[
-            Rectangle(width=4.6, height=0.22, fill_color=GREY_D, fill_opacity=1, stroke_width=0)
-            for _ in range(14)
-        ]).arrange(DOWN, buff=0.075).move_to(window)
-        code_line = fit(Text("note: item-42 resolved with CODE-60494", font_size=18))
-        code_line.set_color(GOLD).move_to(lines[5])
-        full = fit(Text("FULL", font_size=30)).set_color(RED_C).next_to(window, RIGHT, buff=0.6)
-        self.play(FadeIn(window), FadeIn(wlabel))
-        for chunk in (lines[:5], VGroup(code_line), lines[6:]):
-            self.play(FadeIn(chunk), run_time=0.7)
-        self.play(FadeIn(full))
-        self.show_caption(caption("A chat grows until the window is full.\nSomething must be thrown away. But what?"))
-
-        # ---------- Act 1: what compaction is ----------
-        self.play(FadeOut(full))
-        summary_box = Rectangle(width=4.6, height=1.5, stroke_color=GREY_B).shift(RIGHT * 3.4 + UP * 1.4)
-        slabel = fit(Text("the summary that replaces it", font_size=20)).next_to(summary_box, UP, buff=0.12)
-        self.play(FadeIn(summary_box), FadeIn(slabel))
+        house = Rectangle(width=4.6, height=3.4, stroke_color=GREY_B).shift(LEFT * 3.4)
+        hlabel = fit(Text("your house = the whole chat", font_size=22)).next_to(house, UP, buff=0.15)
+        stuff = furniture().move_to(house)
+        pp = passport().move_to(stuff[4]).shift(UP * 0.02)
+        case = Rectangle(width=1.7, height=1.1, stroke_color=GOLD).shift(RIGHT * 3.6 + DOWN * 0.2)
+        clabel = fit(Text("one small suitcase = the budget", font_size=22)).next_to(case, UP, buff=0.15)
+        self.play(FadeIn(house), FadeIn(hlabel), FadeIn(stuff), FadeIn(pp))
+        self.play(FadeIn(case), FadeIn(clabel))
         self.show_caption(caption(
-            'Compaction: a model REWRITES the old chat as a short summary.\nThe instructions it gets decide what survives.'
+            "You must move TODAY, and only one suitcase comes with you.\nSomewhere in the house: your passport (a gold code you cannot replace)."
+        ), hold=3.0)
+
+        # ---------- Act 2: four packing lists ----------
+        # 2a: burn it down (truncate)
+        list1 = fit(Text('packing list 1: "take nothing"', font_size=24)).to_edge(UP, buff=1.05)
+        self.play(Write(list1))
+        self.play(FadeOut(stuff), FadeOut(pp), run_time=0.8)
+        probe = fit(Text('At the border: "passport, please?"', font_size=22)).next_to(case, DOWN, buff=0.5)
+        x1 = Cross(scale_factor=0.22).next_to(probe, DOWN, buff=0.15)
+        self.play(Write(probe), FadeIn(x1))
+        self.show_caption(caption("Deleting the old chat keeps nothing. Score: zero."), hold=2.2)
+        self.play(FadeOut(x1))
+
+        # 2b: pack whatever fits (naive)
+        stuff2 = furniture().move_to(house)
+        pp2 = passport().move_to(stuff2[4])
+        self.play(FadeIn(stuff2), FadeIn(pp2), run_time=0.6)
+        list2 = fit(Text('packing list 2: "pack whatever seems useful"', font_size=24)).to_edge(UP, buff=1.05)
+        self.play(Transform(list1, list2))
+        sofa = stuff2[0].copy()
+        self.play(sofa.animate.scale(0.55).move_to(case), run_time=0.9)
+        x2 = Cross(scale_factor=0.22).next_to(probe, DOWN, buff=0.15)
+        self.play(FadeIn(x2))
+        self.show_caption(caption(
+            "A plain summary is this mover: it packs the sofa\nand leaves the passport on the shelf. Score: ~0%."
         ), hold=2.8)
+        self.play(FadeOut(x2), FadeOut(sofa))
 
-        naive_sum = fit(Text('"We discussed several items.\nCodes were recorded."', font_size=20), 4.2)
-        naive_sum.move_to(summary_box)
-        ntag = fit(Text('instruction: "summarize concisely"', font_size=18)).next_to(summary_box, DOWN, buff=0.15)
-        self.play(Write(naive_sum), FadeIn(ntag))
-        probe = fit(Text('Q: what was the code for item-42?', font_size=20)).shift(RIGHT * 3.4 + DOWN * 1.2)
-        x = Cross(scale_factor=0.25).next_to(probe, DOWN, buff=0.2)
-        self.play(Write(probe), FadeIn(x))
+        # 2c: passports first (codes_first)
+        list3 = fit(Text('packing list 3: "PASSPORTS FIRST, then whatever fits"', font_size=24)).to_edge(UP, buff=1.05)
+        self.play(Transform(list1, list3))
+        pp_moved = pp2.copy()
+        self.play(pp_moved.animate.move_to(case), run_time=0.9)
+        check = fit(Text("passport shown - welcome through", font_size=20)).set_color(GREEN_C).next_to(probe, DOWN, buff=0.15)
+        self.play(FadeIn(check))
         self.show_caption(caption(
-            "A plain summary DESCRIBES the codes.\nIt does not COPY them. The answer is gone forever."
-        ), hold=2.8)
+            "Same mover, same suitcase. Only the LIST changed.\nThe passport made it. That is the whole secret of compaction."
+        ), hold=3.0)
+        self.play(*[FadeOut(m) for m in (house, hlabel, stuff2, pp2, pp_moved, case, clabel, probe, check, list1)])
 
-        good_sum = fit(Text('"item-42: CODE-60494\n(codes listed first, verbatim)"', font_size=20), 4.2)
-        good_sum.move_to(summary_box).set_color(GOLD)
-        gtag = fit(Text('instruction: "list every code first"', font_size=18)).next_to(summary_box, DOWN, buff=0.15)
-        check = fit(Text("answered", font_size=20)).set_color(GREEN_C).next_to(probe, DOWN, buff=0.2)
-        self.play(Transform(naive_sum, good_sum), Transform(ntag, gtag), Transform(x, check))
-        self.show_caption(caption(
-            "Change one sentence of instructions,\nand the same model saves the code."
-        ), hold=2.6)
-        self.play(*[FadeOut(m) for m in (window, wlabel, lines, code_line, summary_box, slabel, naive_sum, ntag, probe, x)])
+        # ---------- Act 3: moving companies compete ----------
+        intro = fit(Text(
+            "Every AI harness (Claude Code, DeepSeek...) is a MOVING COMPANY\nwith its own standard packing list. We made the lists compete.",
+            font_size=26, line_spacing=1.15,
+        ))
+        self.play(Write(intro))
+        self.wait(2.6)
+        self.play(FadeOut(intro))
 
-        # ---------- Act 2: what a harness is ----------
-        model_chip = Rectangle(width=2.2, height=1.0, fill_color=GREY_D, fill_opacity=1)
-        mlabel = fit(Text("the model", font_size=22)).move_to(model_chip)
-        wrap = SurroundingRectangle(model_chip, buff=0.7, color=GREY_B)
-        wname = fit(Text("a HARNESS (Claude Code, DeepSeek Harness, ...)", font_size=22)).next_to(wrap, UP, buff=0.2)
-        scroll = fit(Text("ships its own compaction instructions", font_size=20)).set_color(GOLD).next_to(wrap, DOWN, buff=0.2)
-        self.play(FadeIn(model_chip), FadeIn(mlabel))
-        self.play(FadeIn(wrap), Write(wname), Write(scroll))
-        self.show_caption(caption(
-            "A harness is the program wrapped around the model.\nEach harness writes its own shrink instructions.\nWe made those instructions COMPETE on the same test."
-        ), hold=3.2)
-        self.play(*[FadeOut(m) for m in (model_chip, mlabel, wrap, wname, scroll)])
-
-        # ---------- Act 3: the tournament ----------
         entrants = [
-            ("delete old half", 0.000, RED_C),
-            ("plain summary", 0.004, RED_C),
-            ("keep codes (vague)", 0.155, GREY_B),
-            ("Claude Code-style", 0.410, GREEN_C),
-            ("codes first (ours)", 0.435, GOLD),
-            ("DeepSeek's prompt", 0.448, GREEN_C),
+            ("take nothing", 0.000, RED_C),
+            ("whatever fits", 0.004, RED_C),
+            ("keep papers (vague)", 0.155, GREY_B),
+            ("Claude Code list", 0.410, GREEN_C),
+            ("passports first (ours)", 0.435, GOLD),
+            ("DeepSeek list", 0.448, GREEN_C),
         ]
         scale = 6.0
         bars = VGroup(*[
@@ -135,13 +150,13 @@ class CliffScene(Scene):
             lab = fit(Text(name, font_size=17), 1.9).next_to(b, DOWN, buff=0.12)
             val = Text(f"{r:.0%}", font_size=18).next_to(b, UP, buff=0.08)
             labels.add(VGroup(lab, val))
-        mtag = fit(Text("weak model (Nova): only the INSTRUCTIONS' intent matters", font_size=24)).to_edge(UP, buff=1.1)
+        mtag = fit(Text("with an intern mover (weak model): only the list's INTENT matters", font_size=23)).to_edge(UP, buff=1.0)
         self.play(FadeIn(mtag))
         for b, lab in zip(bars, labels):
-            self.play(GrowFromEdge(b, DOWN), FadeIn(lab), run_time=0.45)
+            self.play(GrowFromEdge(b, DOWN), FadeIn(lab), run_time=0.4)
         self.wait(2.0)
 
-        new_tag = fit(Text("strong model (Haiku): now the FORMAT matters too", font_size=24)).to_edge(UP, buff=1.1)
+        new_tag = fit(Text("with a PRO mover (strong model): the list's ORDER matters too", font_size=23)).to_edge(UP, buff=1.0)
         self.play(Transform(mtag, new_tag))
         anims = []
         for idx, new_r in ((4, 0.913), (5, 0.800)):
@@ -153,13 +168,17 @@ class CliffScene(Scene):
             anims += [Transform(old, taller),
                       Transform(labels[idx][1], Text(f"{new_r:.0%}", font_size=18).next_to(taller, UP, buff=0.08))]
         self.play(*anims, run_time=1.3)
-        self.show_caption(caption('"Codes first" wins by 11 points. Measured, not vibes.'), hold=2.6)
+        self.show_caption(caption('"Passports first" wins by 11 points. Measured, not vibes.'), hold=2.6)
+        self.play(*[FadeOut(m) for m in (bars, labels, mtag, title)])
 
-        # ---------- Close ----------
-        self.play(*[FadeOut(m) for m in (bars, labels, mtag, t)])
-        close = fit(Text(
-            "Compaction = rewriting memory under a budget.\nThe instructions decide what survives.\nAgentLab tournament 001 - total cost $2.80.",
-            font_size=30, line_spacing=1.2,
+        # ---------- Close: the map ----------
+        mapping = fit(Text(
+            "The map:\n"
+            "house = the chat        suitcase = the token budget\n"
+            "passport = an exact code        packing list = the compaction prompt\n"
+            "moving company = the harness        mover = the model\n\n"
+            "AgentLab tournament 001 - measured for $2.80",
+            font_size=26, line_spacing=1.25,
         ))
-        self.play(Write(close))
-        self.wait(3.0)
+        self.play(Write(mapping))
+        self.wait(4.0)
