@@ -225,3 +225,18 @@ def test_codes_first_style_uses_shared_summary_path():
     assert prompt.removeprefix(
         _SUMMARY_INSTRUCTIONS_BY_STYLE["codes_first"]
     ) == structured.removeprefix(_SUMMARY_INSTRUCTIONS_BY_STYLE["structured"])
+
+
+def test_tournament_entrant_styles_use_shared_summary_path():
+    from agentlab.compaction_task import _SUMMARY_INSTRUCTIONS_BY_STYLE
+
+    turns = [f"turn {i}" for i in range(10)]
+    reference = compact_transcript(turns, style="structured").removeprefix(
+        _SUMMARY_INSTRUCTIONS_BY_STYLE["structured"]
+    )
+    for style in ("claude_code_style", "deepseek_style"):
+        prompt = compact_transcript(turns, style=style)
+        instr = _SUMMARY_INSTRUCTIONS_BY_STYLE[style]
+        assert prompt.startswith(instr)
+        # Identical shared machinery: only the instruction prefix may differ.
+        assert prompt.removeprefix(instr) == reference

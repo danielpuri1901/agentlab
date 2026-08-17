@@ -36,6 +36,27 @@ _SUMMARY_INSTRUCTIONS_BY_STYLE = {
         "THEN, only if budget remains, add one sentence summarizing the rest. "
         "Never paraphrase, shorten, or omit any code."
     ),
+    # Tournament 001 entrants; derivations + citations in docs/tournaments/001-entrants/.
+    "claude_code_style": (
+        "You are compacting this conversation to fit a strict length budget, "
+        "using Claude Code's documented compaction priorities. Preserve, in "
+        "priority order: the task's objectives and intent; key decisions and "
+        "the current state of the work, including every exact identifier or "
+        "code exactly as written; any constraints on the work; then, only if "
+        "budget remains, other recent context. Never paraphrase, shorten, or "
+        "drop an exact identifier or code that belongs to a decision or the "
+        "current state, and drop a lower-priority category entirely before "
+        "shortening a higher one."
+    ),
+    "deepseek_style": (
+        "You are now acting as a compaction engine. Condense the conversation "
+        "above into a structured checkpoint that lets another model resume the "
+        "work with no loss of essential context. Write terse bullets, not "
+        "prose paragraphs. Preserve exact identifiers, codes, and numeric "
+        "values exactly as written; do not paraphrase, drop, or approximate "
+        "any of them. Capture the decisions and current state faithfully, "
+        "especially anything stated for the record."
+    ),
 }
 """The only difference between the "naive" and "structured" summary styles:
 the instruction text prepended to the pre-boundary turns before they go to
