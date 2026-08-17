@@ -1,6 +1,6 @@
 # v0.3: the daytime lab (scope draft, awaiting ratification)
 
-Status: DRAFT for Daniel's ratification; the full task-level plan gets written after scope sign-off.
+Status: RATIFIED by Daniel 2026-08-17. Full task-level plan to be written next session; build follows the standard reviewed loop.
 Motto served: outsource the thinking, never the understanding.
 
 ## What it is
