@@ -42,6 +42,13 @@ v0.3 deliberately ships the smallest loop that talks to him; each rung below is 
 - Outreach to humans, e.g. the expert-call agent (last rung: highest authority, approval-gated end to end).
 Not planned at any version: Hermes touchpoints (separate project) and email digests (Telegram replaced them).
 
+```mermaid
+flowchart LR
+    v02["v0.2 DONE\nthe fabric\nagents run experiments\nin the cloud"] --> v03["v0.3 NOW\nthe loop\npropose, tap, report\non Daniel's phone"]
+    v03 --> v04["v0.4\nlonger leashes\npersistent workspaces\nricher tools, cloud video"]
+    v04 --> v05["v0.5 NORTH STAR\nlong-horizon agents\nrunning evals\non themselves"]
+```
+
 ## Setup already done
 
 Bot created by Daniel via BotFather (t.me/Learn1901_bot); first ping delivered 2026-08-18 with dummy buttons; chat id captured.
