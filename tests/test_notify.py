@@ -131,6 +131,9 @@ def test_flush_sends_in_order_and_deletes(fabric, telegram_calls, monkeypatch):
     assert sent == 2
     texts = [kwargs["json"]["text"] for _, kwargs in telegram_calls]
     assert texts == ["first", "second"]
+    assert telegram_calls[1][1]["json"]["reply_markup"]["inline_keyboard"] == [
+        [{"text": "A", "callback_data": "prop:x:approve"}]
+    ]
     remaining = [
         i for i in table.scan()["Items"] if i["experiment_id"] == PENDING_PARTITION
     ]
@@ -164,6 +167,46 @@ def test_flush_stops_at_first_failure_and_keeps_remainder(fabric, monkeypatch):
         i for i in table.scan()["Items"] if i["experiment_id"] == PENDING_PARTITION
     ]
     assert len(remaining) == 2
+
+
+def test_flush_partial_failure_keeps_only_unsent(fabric, monkeypatch):
+    table, ssm = fabric
+    _quiet(monkeypatch)
+    notify(table, ssm, "one")
+    notify(table, ssm, "two")
+
+    call_count = [0]
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+    def selective_post(url, **kwargs):
+        call_count[0] += 1
+        if call_count[0] > 1:
+            raise RuntimeError("telegram down")
+        return FakeResponse()
+
+    monkeypatch.setattr(notify_mod.httpx, "post", selective_post)
+    with pytest.raises(RuntimeError):
+        flush_pending(table, ssm)
+    remaining = [
+        i for i in table.scan()["Items"] if i["experiment_id"] == PENDING_PARTITION
+    ]
+    assert len(remaining) == 1
+    payload = json.loads(remaining[0]["payload"])
+    assert payload["text"] == "two"
+
+
+def test_photo_caption_truncated_to_1024(fabric, telegram_calls, monkeypatch):
+    table, ssm = fabric
+    _daytime(monkeypatch)
+    long_text = "x" * 1500
+    notify(table, ssm, long_text, photo_png=b"img")
+    assert len(telegram_calls) == 1
+    url, kwargs = telegram_calls[0]
+    assert url.endswith("/sendPhoto")
+    assert len(kwargs["data"]["caption"]) == 1024
 
 
 def test_oversized_photo_dropped_from_queue(fabric, telegram_calls, monkeypatch):

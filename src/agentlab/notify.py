@@ -133,10 +133,25 @@ def flush_pending(table, ssm_client) -> int:
     A send failure propagates: the failed ping and everything after it stay
     queued for the next flush, while already-delivered items are gone (each
     is deleted immediately after its successful send).
+    No quiet-hours guard here by design: the callers are the 08:00 flush
+    schedule and the daytime propose runs, so a flush call is always outside
+    quiet hours.
     """
-    items = table.query(
-        KeyConditionExpression=Key("experiment_id").eq(PENDING_PARTITION)
-    )["Items"]
+    # Accumulate items across pages
+    items = []
+    last_evaluated_key = None
+    while True:
+        query_kwargs = {
+            "KeyConditionExpression": Key("experiment_id").eq(PENDING_PARTITION)
+        }
+        if last_evaluated_key:
+            query_kwargs["ExclusiveStartKey"] = last_evaluated_key
+        response = table.query(**query_kwargs)
+        items.extend(response["Items"])
+        last_evaluated_key = response.get("LastEvaluatedKey")
+        if not last_evaluated_key:
+            break
+
     if not items:
         return 0
     config = load_config(ssm_client)
