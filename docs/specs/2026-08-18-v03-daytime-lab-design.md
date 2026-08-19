@@ -33,6 +33,7 @@ New spend classes still require a tap; the $50 budget alarm and per-tournament c
 ## Deferred to later versions (the destination, not exclusions)
 
 The north star (Daniel, 2026-08-19): autonomous agents over long-horizon sessions, running evals on themselves, with Daniel steering by taps and learning from the output.
+Escalation principle (Daniel, 2026-08-19): agents own their tools (CLI, MCP, skills, the fabric) and act freely inside the sandbox; escalation to Daniel is ONLY for actions that need his authority, like messaging humans or opening a new spend class. v0.3 gates more than that (new hypotheses still need taps); the gate narrows toward authority-only as trust is earned.
 v0.3 deliberately ships the smallest loop that talks to him; each rung below is planned, gated by the authority ladder, and lands in a later version:
 - In-cloud video rendering (v0.4 candidate: manim in the worker image, videos without the laptop).
 - Computer use and richer tools in persistent environments (v0.4+: capability from containers, authority per mission).
