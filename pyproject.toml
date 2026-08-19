@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "boto3>=1.40.61",
     "faker>=40.36.0",
+    "httpx>=0.28.1",
     "inspect-ai>=0.3.258",
     "inspect-evals>=0.17.0",
     "jinja2>=3.1.6",

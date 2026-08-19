@@ -29,6 +29,7 @@ source = { editable = "." }
 dependencies = [
     { name = "boto3" },
     { name = "faker" },
+    { name = "httpx" },
     { name = "inspect-ai" },
     { name = "inspect-evals" },
     { name = "jinja2" },
@@ -51,6 +52,7 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.40.61" },
     { name = "faker", specifier = ">=40.36.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "inspect-ai", specifier = ">=0.3.258" },
     { name = "inspect-evals", specifier = ">=0.17.0" },
     { name = "jinja2", specifier = ">=3.1.6" },
