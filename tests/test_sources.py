@@ -78,12 +78,13 @@ def test_github_releases_normalized():
 
 
 def test_arxiv_filters_by_keyword():
-    """Test arXiv fetcher filters by keywords."""
+    """Test arXiv fetcher filters by keywords and collapses whitespace."""
     arxiv_xml = """<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <entry>
     <id>http://arxiv.org/abs/2401.00001v1</id>
-    <title>Agent Evaluation Framework for Large Language Models</title>
+    <title>Agent  Evaluation
+      Framework for Large Language Models</title>
     <summary>This paper presents a comprehensive framework for evaluating agent evaluation systems using LLMs.  Multiple testing approaches are explored.</summary>
   </entry>
   <entry>
@@ -104,24 +105,24 @@ def test_arxiv_filters_by_keyword():
     # Should only match the first entry (contains "agent" and "evaluation")
     assert len(result) == 1
     assert result[0]["source"] == "arxiv"
-    # Whitespace should be collapsed
-    assert "Agent Evaluation Framework" in result[0]["title"]
+    # Whitespace should be collapsed (double spaces and newline removed)
+    assert result[0]["title"] == "Agent Evaluation Framework for Large Language Models"
     assert result[0]["url"] == "http://arxiv.org/abs/2401.00001v1"
 
 
 def test_hn_front_page_filter():
-    """Test HN front page fetcher filters by keywords."""
+    """Test HN front page fetcher filters by keywords and exercises url fallback."""
     hn_json = {
         "hits": [
             {
                 "title": "New agent harness released for production",
-                "url": "https://example.com/agent-harness",
-                "objectID": "12345",
+                "url": None,  # url is null, should use objectID fallback
+                "objectID": "41000001",
                 "points": 250,
             },
             {
                 "title": "Show HN: my cat's diary",
-                "url": None,  # url is null, should use objectID fallback
+                "url": "https://example.com/cats",
                 "objectID": "67890",
                 "points": 150,
             },
@@ -140,7 +141,8 @@ def test_hn_front_page_filter():
     assert len(result) == 1
     assert result[0]["source"] == "hn"
     assert result[0]["title"] == "New agent harness released for production"
-    assert result[0]["url"] == "https://example.com/agent-harness"
+    # Should use fallback to news.ycombinator.com when url is null
+    assert result[0]["url"] == "https://news.ycombinator.com/item?id=41000001"
     assert result[0]["points"] == 250
 
 
