@@ -86,6 +86,7 @@ def test_set_verdict_once_then_already_decided(fabric):
     item = get_proposal(table, "prop-3")
     assert item["status"] == "APPROVED"
     assert item["verdict_source"] == "telegram_tap"
+    assert "verdict_ts" in item
     with pytest.raises(AlreadyDecided):
         set_verdict(table, "prop-3", "REJECTED", "telegram_tap")
     assert get_proposal(table, "prop-3")["status"] == "APPROVED"
@@ -113,4 +114,16 @@ def test_list_recent_newest_first_and_count_today(fabric, monkeypatch):
     recent = list_recent(table, limit=2)
     assert len(recent) == 2
     assert recent[0]["created_ts"] > recent[1]["created_ts"]
+    assert [r["pid"] for r in recent] == ["prop-c", "prop-b"]
+
+    # Cross-day negative case: file a proposal from yesterday, verify count_created_today filters it out
+    monkeypatch.setattr(
+        proposals_mod, "now", lambda: datetime(2026, 8, 18, 12, 0, tzinfo=UTC)
+    )
+    file_proposal(table, "prop-old", "Old", "O.", "https://x", "d0", "new_hypothesis")
+
+    # Re-freeze now to 2026-08-19 for count_created_today
+    monkeypatch.setattr(
+        proposals_mod, "now", lambda: datetime(2026, 8, 19, 15, 0, tzinfo=UTC)
+    )
     assert count_created_today(table) == 3
