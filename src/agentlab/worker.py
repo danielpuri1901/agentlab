@@ -210,6 +210,8 @@ def finalize_command() -> None:
         result = paired_analysis(baseline.scores, candidate.scores)
         cost = total_cost(baseline.usages + candidate.usages)
         verdict_str = verdict(result, protected=[])
+        baseline_mean = mean_score(baseline.scores)
+        candidate_mean = mean_score(candidate.scores)
 
         report_md = render_report(
             result=result,
@@ -222,8 +224,8 @@ def finalize_command() -> None:
             candidate_style=candidate_style,
             seeds=seeds,
             repeats=repeats,
-            baseline_recall=mean_score(baseline.scores),
-            candidate_recall=mean_score(candidate.scores),
+            baseline_recall=baseline_mean,
+            candidate_recall=candidate_mean,
             total_tokens=total_tokens(baseline.usages + candidate.usages),
             unpriced_models=sorted(cost.unpriced_models),
         )
@@ -235,8 +237,8 @@ def finalize_command() -> None:
             chart = verdict_chart_png(
                 baseline_style,
                 candidate_style,
-                mean_score(baseline.scores),
-                mean_score(candidate.scores),
+                baseline_mean,
+                candidate_mean,
                 result.mean_delta,
                 result.ci_low,
                 result.ci_high,
@@ -244,14 +246,22 @@ def finalize_command() -> None:
             text = (
                 f"Experiment {experiment_id} is done.\n"
                 f"Verdict: {verdict_str}.\n"
-                f"{candidate_style} scores {mean_score(candidate.scores):.3f}. "
-                f"{baseline_style} scores {mean_score(baseline.scores):.3f}.\n"
+                f"{candidate_style} scores {candidate_mean:.3f}. "
+                f"{baseline_style} scores {baseline_mean:.3f}.\n"
                 f"The 95% CI of the difference is {result.ci_low:+.3f} to {result.ci_high:+.3f}.\n"
                 f"Report: s3://{results_bucket}/experiments/{experiment_id}/report.md"
             )
             ping_status = notify(table, ssm_client, text, photo_png=chart)
             typer.echo(f"finalize ping: {ping_status}")
         except Exception as exc:  # noqa: BLE001 - a ping failure must never fail a finished experiment
-            transition(table, experiment_id, "PING_FAILED", None, str(exc))
+            # The invariant is that nothing after FINALIZED may fail the
+            # command: if the PING_FAILED write itself fails (e.g. the same
+            # DynamoDB outage that broke the ping), swallow that too instead
+            # of letting it escape and turn a finished experiment into a
+            # nonzero exit.
+            try:
+                transition(table, experiment_id, "PING_FAILED", None, str(exc))
+            except Exception as t_exc:  # noqa: BLE001
+                typer.echo(f"ping failed and PING_FAILED write failed: {t_exc}", err=True)
 
     typer.echo(f"verdict: {verdict_str}")

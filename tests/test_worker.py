@@ -17,7 +17,7 @@ from agentlab import notify as notify_mod
 from agentlab.cli import app
 from agentlab.eval_runner import _run_arm
 from agentlab.notify import CHAT_ID_PARAM, TOKEN_PARAM, notify
-from agentlab.results import extract_results
+from agentlab.results import extract_results, mean_score
 from agentlab.stats import paired_analysis
 from agentlab.stats import verdict as compute_verdict
 from agentlab.worker import _optional_int_env, transition, upload_log
@@ -267,6 +267,15 @@ def test_finalize_sends_ping_with_chart(
     upload_log(s3, BUCKET, experiment_id, "truncate", baseline_log.location)
     upload_log(s3, BUCKET, experiment_id, "structured", candidate_log.location)
 
+    # Ground truth computed directly against the same two logs, independent
+    # of the `finalize` command under test, so the caption assertions below
+    # pin the exact formatted numbers finalize is expected to produce.
+    baseline_results = extract_results(baseline_log.location)
+    candidate_results = extract_results(candidate_log.location)
+    expected_result = paired_analysis(baseline_results.scores, candidate_results.scores)
+    expected_baseline_mean = mean_score(baseline_results.scores)
+    expected_candidate_mean = mean_score(candidate_results.scores)
+
     monkeypatch.setattr(
         notify_mod, "now_amsterdam", lambda: datetime(2026, 8, 19, 14, 0, tzinfo=AMS)
     )
@@ -289,6 +298,13 @@ def test_finalize_sends_ping_with_chart(
     caption = kwargs["data"]["caption"]
     assert "Verdict:" in caption
     assert experiment_id in caption
+    assert f"structured scores {expected_candidate_mean:.3f}" in caption
+    assert f"truncate scores {expected_baseline_mean:.3f}" in caption
+    assert "95% CI" in caption
+    assert (
+        f"{expected_result.ci_low:+.3f} to {expected_result.ci_high:+.3f}" in caption
+    )
+    assert f"s3://{BUCKET}/experiments/{experiment_id}/report.md" in caption
 
     items = table.scan()["Items"]
     assert not [item for item in items if item["event"] == "PING_FAILED"]
@@ -331,6 +347,57 @@ def test_finalize_ping_failure_records_transition_not_crash(
 
     finalized = [item for item in items if item["event"] == "FINALIZED"]
     assert len(finalized) == 1
+
+
+def test_finalize_ping_and_ping_failed_write_both_fail_still_exits_zero(
+    moto_fabric_with_ssm, monkeypatch, tmp_path
+):
+    # Cascading-failure case: notify() raises AND the PING_FAILED transition
+    # write itself raises (e.g. the same outage took down DynamoDB too). The
+    # invariant is that nothing after FINALIZED may fail the command, so
+    # finalize must still exit 0 - the second failure is swallowed and
+    # surfaced only as stderr output, not a nonzero exit.
+    s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    experiment_id = "exp-test-ping-cascade-fail"
+    seeds = [0, 1]
+
+    baseline_log = _make_log(tmp_path / "logs", "truncate", seeds)
+    candidate_log = _make_log(tmp_path / "logs", "structured", seeds)
+
+    upload_log(s3, BUCKET, experiment_id, "truncate", baseline_log.location)
+    upload_log(s3, BUCKET, experiment_id, "structured", candidate_log.location)
+
+    def exploding_notify(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("agentlab.worker.notify", exploding_notify)
+
+    real_transition = transition
+
+    def selectively_exploding_transition(table_, experiment_id_, event, arm, detail, ts=None):
+        if event == "PING_FAILED":
+            raise RuntimeError("dynamo also down")
+        return real_transition(table_, experiment_id_, event, arm, detail, ts=ts)
+
+    monkeypatch.setattr("agentlab.worker.transition", selectively_exploding_transition)
+
+    monkeypatch.setenv("EXPERIMENT_ID", experiment_id)
+    monkeypatch.setenv("MODEL", "mockllm/model")
+    monkeypatch.setenv("TASKS", "2")
+    monkeypatch.setenv("REPEATS", "1")
+    monkeypatch.setenv("BASELINE_STYLE", "truncate")
+    monkeypatch.setenv("CANDIDATE_STYLE", "structured")
+    monkeypatch.setenv("RESULTS_BUCKET", BUCKET)
+    monkeypatch.setenv("STATE_TABLE", TABLE)
+
+    result = runner.invoke(app, ["worker", "finalize"])
+    assert result.exit_code == 0, result.output
+    assert "ping failed and PING_FAILED write failed" in result.output
+
+    items = table.scan()["Items"]
+    finalized = [item for item in items if item["event"] == "FINALIZED"]
+    assert len(finalized) == 1
+    assert not [item for item in items if item["event"] == "PING_FAILED"]
 
 
 def test_optional_int_env_treats_jsonata_null_string_as_absent(monkeypatch):
