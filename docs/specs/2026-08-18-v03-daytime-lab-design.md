@@ -30,9 +30,16 @@ Proposer task role: Bedrock invoke + its own S3/DynamoDB slots + SSM read of the
 Lambda role: ledger write + SSM read + logs; nothing else.
 New spend classes still require a tap; the $50 budget alarm and per-tournament caps remain the hard floors.
 
-## Explicitly out of scope
+## Deferred to later versions (the destination, not exclusions)
 
-Outreach to humans, computer use, Hermes touchpoints, lab site, in-cloud video rendering (registered follow-up), email digests (Telegram replaces them).
+The north star (Daniel, 2026-08-19): autonomous agents over long-horizon sessions, running evals on themselves, with Daniel steering by taps and learning from the output.
+v0.3 deliberately ships the smallest loop that talks to him; each rung below is planned, gated by the authority ladder, and lands in a later version:
+- In-cloud video rendering (v0.4 candidate: manim in the worker image, videos without the laptop).
+- Computer use and richer tools in persistent environments (v0.4+: capability from containers, authority per mission).
+- Long-horizon self-evaluating agents (the core goal: agents whose own trajectories feed the eval loop that gates them).
+- Lab site for sharing findings (trigger: first time Daniel wants to share externally).
+- Outreach to humans, e.g. the expert-call agent (last rung: highest authority, approval-gated end to end).
+Not planned at any version: Hermes touchpoints (separate project) and email digests (Telegram replaced them).
 
 ## Setup already done
 
