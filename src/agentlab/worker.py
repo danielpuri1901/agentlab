@@ -23,7 +23,9 @@ import typer
 from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 
+from agentlab.charts import verdict_chart_png
 from agentlab.eval_runner import _run_arm, hypothesis_for
+from agentlab.notify import flush_pending, notify
 from agentlab.report import render_report
 from agentlab.results import extract_results, mean_score, total_cost, total_tokens
 from agentlab.stats import paired_analysis, verdict
@@ -124,6 +126,16 @@ def upload_report(s3_client, bucket: str, experiment_id: str, report_md: str) ->
     return key
 
 
+@worker_app.command("flush-pings")
+def flush_pings_command() -> None:
+    """Deliver pings queued during quiet hours (the 08:00 schedule's job)."""
+    state_table = _require_env("STATE_TABLE")
+    table = boto3.resource("dynamodb").Table(state_table)
+    ssm_client = boto3.client("ssm")
+    count = flush_pending(table, ssm_client)
+    typer.echo(f"flushed {count} pending pings")
+
+
 @worker_app.command("run-arm")
 def run_arm_command() -> None:
     """Run one arm of a paired experiment: env-var driven, reuses the local
@@ -217,5 +229,29 @@ def finalize_command() -> None:
         )
         upload_report(s3_client, results_bucket, experiment_id, report_md)
 
-    transition(table, experiment_id, "FINALIZED", None, verdict_str)
+        transition(table, experiment_id, "FINALIZED", None, verdict_str)
+        try:
+            ssm_client = boto3.client("ssm")
+            chart = verdict_chart_png(
+                baseline_style,
+                candidate_style,
+                mean_score(baseline.scores),
+                mean_score(candidate.scores),
+                result.mean_delta,
+                result.ci_low,
+                result.ci_high,
+            )
+            text = (
+                f"Experiment {experiment_id} is done.\n"
+                f"Verdict: {verdict_str}.\n"
+                f"{candidate_style} scores {mean_score(candidate.scores):.3f}. "
+                f"{baseline_style} scores {mean_score(baseline.scores):.3f}.\n"
+                f"The 95% CI of the difference is {result.ci_low:+.3f} to {result.ci_high:+.3f}.\n"
+                f"Report: s3://{results_bucket}/experiments/{experiment_id}/report.md"
+            )
+            ping_status = notify(table, ssm_client, text, photo_png=chart)
+            typer.echo(f"finalize ping: {ping_status}")
+        except Exception as exc:  # noqa: BLE001 - a ping failure must never fail a finished experiment
+            transition(table, experiment_id, "PING_FAILED", None, str(exc))
+
     typer.echo(f"verdict: {verdict_str}")

@@ -4,15 +4,19 @@ live AWS or makes a network call.
 """
 
 import asyncio
+from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import boto3
 import pytest
 from moto import mock_aws
 from typer.testing import CliRunner
 
+from agentlab import notify as notify_mod
 from agentlab.cli import app
 from agentlab.eval_runner import _run_arm
+from agentlab.notify import CHAT_ID_PARAM, TOKEN_PARAM, notify
 from agentlab.results import extract_results
 from agentlab.stats import paired_analysis
 from agentlab.stats import verdict as compute_verdict
@@ -23,6 +27,7 @@ runner = CliRunner()
 BUCKET = "agentlab-results-test"
 TABLE = "agentlab-state-test"
 REGION = "us-east-1"
+AMS = ZoneInfo("Europe/Amsterdam")
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +59,34 @@ def moto_fabric():
         )
         table.wait_until_exists()
         yield s3, dynamodb, table
+
+
+@pytest.fixture
+def moto_fabric_with_ssm(moto_fabric):
+    # Same s3/dynamodb/table as moto_fabric, plus an SSM client with both
+    # telegram parameters loaded (mirrors tests/test_notify.py's `fabric`
+    # fixture) so finalize's ping path can load_config successfully.
+    s3, dynamodb, table = moto_fabric
+    ssm = boto3.client("ssm", region_name=REGION)
+    ssm.put_parameter(Name=TOKEN_PARAM, Value="test-token", Type="SecureString")
+    ssm.put_parameter(Name=CHAT_ID_PARAM, Value="6309668956", Type="String")
+    yield s3, dynamodb, table, ssm
+
+
+@pytest.fixture
+def telegram_calls(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return FakeResponse()
+
+    monkeypatch.setattr(notify_mod.httpx, "post", fake_post)
+    return calls
 
 
 def _make_log(log_dir, style, seeds):
@@ -200,6 +233,104 @@ def test_finalize_writes_report_and_matches_local_verdict(moto_fabric, monkeypat
     finalized = [item for item in items if item["event"] == "FINALIZED"]
     assert len(finalized) == 1
     assert finalized[0]["detail"] == expected_verdict
+
+
+def test_flush_pings_command(moto_fabric_with_ssm, telegram_calls, monkeypatch):
+    _s3, _dynamodb, table, ssm = moto_fabric_with_ssm
+    # Queue one ping during quiet hours, directly via notify() (no CLI
+    # involved yet), so there is exactly one pending item for the
+    # flush-pings command to deliver.
+    monkeypatch.setattr(
+        notify_mod, "now_amsterdam", lambda: datetime(2026, 8, 19, 2, 0, tzinfo=AMS)
+    )
+    status = notify(table, ssm, "queued during quiet hours")
+    assert status == "queued"
+    assert telegram_calls == []
+
+    result = runner.invoke(app, ["worker", "flush-pings"], env={"STATE_TABLE": TABLE})
+
+    assert result.exit_code == 0, result.output
+    assert "flushed 1" in result.output
+    assert len(telegram_calls) == 1
+
+
+def test_finalize_sends_ping_with_chart(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch, tmp_path
+):
+    s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    experiment_id = "exp-test-ping"
+    seeds = [0, 1]
+
+    baseline_log = _make_log(tmp_path / "logs", "truncate", seeds)
+    candidate_log = _make_log(tmp_path / "logs", "structured", seeds)
+
+    upload_log(s3, BUCKET, experiment_id, "truncate", baseline_log.location)
+    upload_log(s3, BUCKET, experiment_id, "structured", candidate_log.location)
+
+    monkeypatch.setattr(
+        notify_mod, "now_amsterdam", lambda: datetime(2026, 8, 19, 14, 0, tzinfo=AMS)
+    )
+
+    monkeypatch.setenv("EXPERIMENT_ID", experiment_id)
+    monkeypatch.setenv("MODEL", "mockllm/model")
+    monkeypatch.setenv("TASKS", "2")
+    monkeypatch.setenv("REPEATS", "1")
+    monkeypatch.setenv("BASELINE_STYLE", "truncate")
+    monkeypatch.setenv("CANDIDATE_STYLE", "structured")
+    monkeypatch.setenv("RESULTS_BUCKET", BUCKET)
+    monkeypatch.setenv("STATE_TABLE", TABLE)
+
+    result = runner.invoke(app, ["worker", "finalize"])
+    assert result.exit_code == 0, result.output
+
+    assert len(telegram_calls) >= 1
+    url, kwargs = telegram_calls[-1]
+    assert url.endswith("/sendPhoto")
+    caption = kwargs["data"]["caption"]
+    assert "Verdict:" in caption
+    assert experiment_id in caption
+
+    items = table.scan()["Items"]
+    assert not [item for item in items if item["event"] == "PING_FAILED"]
+
+
+def test_finalize_ping_failure_records_transition_not_crash(
+    moto_fabric_with_ssm, monkeypatch, tmp_path
+):
+    s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    experiment_id = "exp-test-ping-fail"
+    seeds = [0, 1]
+
+    baseline_log = _make_log(tmp_path / "logs", "truncate", seeds)
+    candidate_log = _make_log(tmp_path / "logs", "structured", seeds)
+
+    upload_log(s3, BUCKET, experiment_id, "truncate", baseline_log.location)
+    upload_log(s3, BUCKET, experiment_id, "structured", candidate_log.location)
+
+    def exploding_notify(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("agentlab.worker.notify", exploding_notify)
+
+    monkeypatch.setenv("EXPERIMENT_ID", experiment_id)
+    monkeypatch.setenv("MODEL", "mockllm/model")
+    monkeypatch.setenv("TASKS", "2")
+    monkeypatch.setenv("REPEATS", "1")
+    monkeypatch.setenv("BASELINE_STYLE", "truncate")
+    monkeypatch.setenv("CANDIDATE_STYLE", "structured")
+    monkeypatch.setenv("RESULTS_BUCKET", BUCKET)
+    monkeypatch.setenv("STATE_TABLE", TABLE)
+
+    result = runner.invoke(app, ["worker", "finalize"])
+    assert result.exit_code == 0, result.output
+
+    items = table.scan()["Items"]
+    ping_failed = [item for item in items if item["event"] == "PING_FAILED"]
+    assert len(ping_failed) == 1
+    assert ping_failed[0]["detail"] == "boom"
+
+    finalized = [item for item in items if item["event"] == "FINALIZED"]
+    assert len(finalized) == 1
 
 
 def test_optional_int_env_treats_jsonata_null_string_as_absent(monkeypatch):
