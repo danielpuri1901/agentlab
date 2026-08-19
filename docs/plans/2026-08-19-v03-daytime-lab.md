@@ -1015,8 +1015,10 @@ git commit -m "feat: proposer source fetchers (github releases, arxiv, hn)"
 Create `tests/test_proposer.py` (moto table + SSM fixture as before, plus a moto S3 bucket; monkeypatch `proposer._complete`, `proposer.gather`, and `agentlab.notify.now_amsterdam`/`httpx.post`):
 
 ```python
-VALID_LLM_OUTPUT = """```json
-[
+# Built with explicit \n joins (NOT a triple-quoted block containing literal
+# fence lines) so markdown tooling that scans this plan never desyncs on it;
+# the VALUE is a fenced ```json block exactly as a model would emit it.
+VALID_LLM_JSON = """[
   {"title": "Haiku vs codes_first rerun", "headline": "Test the champion on Haiku again.",
    "citation": "https://github.com/UKGovernmentBEIS/inspect_ai/releases/tag/v0.4.0",
    "distance": "Repeats tournament 001 round 1 on a new inspect version.",
@@ -1026,8 +1028,8 @@ VALID_LLM_OUTPUT = """```json
   {"title": "Reflection on arithmetic", "headline": "New hypothesis needs your call.",
    "citation": "https://arxiv.org/abs/2601.00001", "distance": "No archive overlap.",
    "kind": "new_hypothesis"}
-]
-```"""
+]"""
+VALID_LLM_OUTPUT = "`" * 3 + "json\n" + VALID_LLM_JSON + "\n" + "`" * 3
 
 
 def test_parse_proposals_strips_fences_and_clips(): ...
