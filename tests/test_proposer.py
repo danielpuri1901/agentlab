@@ -17,7 +17,7 @@ from moto import mock_aws
 from agentlab import notify as notify_mod
 from agentlab import proposals as proposals_mod
 from agentlab import proposer as proposer_mod
-from agentlab.notify import CHAT_ID_PARAM, TOKEN_PARAM
+from agentlab.notify import CHAT_ID_PARAM, PENDING_PARTITION, TOKEN_PARAM
 from agentlab.proposals import DAILY_CAP, file_proposal
 from agentlab.proposer import (
     DEFAULT_PROPOSER_MODEL,
@@ -123,12 +123,13 @@ def test_parse_proposals_strips_fences_and_clips():
     assert proposals[1]["kind"] == "new_hypothesis"
 
     long_title = "x" * 500
+    long_citation = "https://x/" + "y" * 2000
     raw = json.dumps(
         [
             {
                 "title": long_title,
                 "headline": "h",
-                "citation": "https://x",
+                "citation": long_citation,
                 "distance": "d",
                 "kind": "weird",
             },
@@ -139,6 +140,8 @@ def test_parse_proposals_strips_fences_and_clips():
     assert len(parsed) == 1
     assert parsed[0]["title"] == long_title[:80]
     assert len(parsed[0]["title"]) == 80
+    assert parsed[0]["citation"] == long_citation[:300]
+    assert len(parsed[0]["citation"]) == 300
     assert parsed[0]["kind"] == "new_hypothesis"
 
     assert parse_proposals("not json") == []
@@ -187,6 +190,18 @@ def test_registered_submit_body_rejects():
     missing_model = {k: v for k, v in base.items() if k != "model"}
     assert _registered_submit_body(missing_model) is None
 
+    too_many_facts = dict(base, n_facts=50000)
+    assert _registered_submit_body(too_many_facts) is None
+
+    too_many_filler = dict(base, filler_turns=100000)
+    assert _registered_submit_body(too_many_filler) is None
+
+    too_many_budget = dict(base, summary_budget=100000)
+    assert _registered_submit_body(too_many_budget) is None
+
+    filler_below_facts = dict(base, filler_turns=5, n_facts=12)
+    assert _registered_submit_body(filler_below_facts) is None
+
 
 def test_run_propose_files_pings_and_uploads(fabric, telegram_calls, monkeypatch):
     table, ssm, s3 = fabric
@@ -212,6 +227,7 @@ def test_run_propose_files_pings_and_uploads(fabric, telegram_calls, monkeypatch
     assert len(telegram_calls) == 1
     url, kwargs = telegram_calls[0]
     assert url.endswith("/sendMessage")
+    assert "Distance:" in kwargs["json"]["text"]
     reply_markup = kwargs["json"]["reply_markup"]
     rows = reply_markup["inline_keyboard"]
     assert len(rows) == 2
@@ -279,3 +295,30 @@ def test_run_propose_no_sources_says_so(fabric, telegram_calls, monkeypatch):
     assert len(telegram_calls) == 1
     _url, kwargs = telegram_calls[0]
     assert "no fresh sources" in kwargs["json"]["text"]
+
+
+def test_run_propose_queues_ping_when_notify_fails(fabric, monkeypatch):
+    # A Telegram-side failure must never strand filed proposals: run_propose
+    # falls back to queue_ping so the next flush delivers the batch ping.
+    table, ssm, s3 = fabric
+    _daytime(monkeypatch)
+    monkeypatch.setattr(proposer_mod, "gather", lambda: FAKE_SOURCES)
+    monkeypatch.setattr(proposer_mod, "_complete", lambda model, messages: VALID_LLM_OUTPUT)
+
+    def exploding_notify(*args, **kwargs):
+        raise RuntimeError("telegram down")
+
+    monkeypatch.setattr(proposer_mod, "notify", exploding_notify)
+
+    count = run_propose(table, ssm, s3, BUCKET, DEFAULT_PROPOSER_MODEL)
+
+    assert count == 2
+
+    items = table.scan()["Items"]
+    proposed = [i for i in items if i.get("sk") == "proposal"]
+    assert len(proposed) == 2
+
+    pending = [i for i in items if i["experiment_id"] == PENDING_PARTITION]
+    assert len(pending) == 1
+    payload = json.loads(pending[0]["payload"])
+    assert "New proposals" in payload["text"]

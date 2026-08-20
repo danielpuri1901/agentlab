@@ -18,7 +18,7 @@ from agentlab.cloud import (
     build_message_body,
     generate_experiment_id,
 )
-from agentlab.notify import notify
+from agentlab.notify import notify, queue_ping
 from agentlab.proposals import (
     DAILY_CAP,
     count_created_today,
@@ -31,6 +31,8 @@ from agentlab.sources import gather
 DEFAULT_PROPOSER_MODEL = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
 MAX_TITLE = 80
 MAX_HEADLINE = 300
+MAX_CITATION = 300
+MAX_DISTANCE = 300
 
 PROPOSER_SYSTEM = """You are the proposer for AgentLab, an experimentation \
 lab that measures agent techniques with paired statistics. You read fresh \
@@ -92,6 +94,8 @@ def parse_proposals(raw: str) -> list[dict]:
             continue
         entry["title"] = entry["title"][:MAX_TITLE]
         entry["headline"] = entry["headline"][:MAX_HEADLINE]
+        entry["citation"] = entry["citation"][:MAX_CITATION]
+        entry["distance"] = entry["distance"][:MAX_DISTANCE]
         if entry["kind"] not in ("registered_rerun", "new_hypothesis"):
             entry["kind"] = "new_hypothesis"
         proposals.append(entry)
@@ -117,6 +121,16 @@ def _registered_submit_body(exp: dict) -> dict | None:
     if baseline not in valid or candidate not in valid or baseline == candidate:
         return None
     if not (1 <= tasks <= 20 and 1 <= repeats <= 5):
+        return None
+    # n_facts multiplies model calls linearly and filler_turns/summary_budget
+    # inflate tokens, so they are spend knobs exactly like tasks/repeats;
+    # filler_turns must also be >= n_facts or the corpus generator rejects
+    # the run.
+    if not (
+        1 <= n_facts <= 25
+        and n_facts <= filler_turns <= 200
+        and 1 <= summary_budget <= 500
+    ):
         return None
     return build_message_body(
         generate_experiment_id(),
@@ -189,6 +203,7 @@ def run_propose(table, ssm_client, s3_client, bucket: str, model: str) -> int:
             f"{index}. {proposal['title']}\n"
             f"{proposal['headline']}\n"
             f"Source: {proposal['citation']}\n"
+            f"Distance: {proposal['distance']}\n"
             f"Kind: {proposal['kind']}"
         )
         buttons.append(
@@ -198,5 +213,8 @@ def run_propose(table, ssm_client, s3_client, bucket: str, model: str) -> int:
             ]
         )
     text = "New proposals. Tap to decide.\n\n" + "\n\n".join(lines)
-    notify(table, ssm_client, text, buttons=buttons)
+    try:
+        notify(table, ssm_client, text, buttons=buttons)
+    except Exception:  # noqa: BLE001 - filed proposals must never be silently stranded
+        queue_ping(table, text, buttons, None)
     return len(proposals)
