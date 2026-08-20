@@ -151,11 +151,22 @@ def handler(event, context):
     decided = _set_verdict(table, pid, verdict)
 
     submitted = None
+    submit_failed = False
     if decided and verdict == "APPROVED":
-        submitted = _auto_submit(table, pid)
+        # The verdict is already written; an SQS/DynamoDB failure here must
+        # not 5xx the handler, or Telegram's retry hits "already decided" and
+        # the approved run is silently never submitted. Surface it in the
+        # toast instead so Daniel can resubmit manually.
+        try:
+            submitted = _auto_submit(table, pid)
+        except Exception as exc:  # noqa: BLE001
+            submit_failed = True
+            print(f"auto-submit failed after verdict write: pid={pid} {exc}")
 
     if not decided:
         toast = f"{pid} was already decided"
+    elif submit_failed:
+        toast = f"APPROVED but submit FAILED: {pid}. Resubmit manually."
     elif submitted:
         toast = f"APPROVED and submitted: {submitted}"
     else:

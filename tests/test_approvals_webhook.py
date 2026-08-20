@@ -412,3 +412,46 @@ def test_wrong_secret_rejected_before_parsing(fabric, recorder):
 
     assert response["statusCode"] == 403
     assert recorder == []
+
+
+def test_auto_submit_failure_keeps_verdict_and_warns(fabric, recorder, monkeypatch):
+    # The verdict write is the point of no return: if auto-submit then blows
+    # up (SQS outage), the handler must still return 200, the proposal must
+    # stay APPROVED, and the toast must say the submit failed so Daniel can
+    # resubmit manually instead of trusting a misleading "submitted" toast.
+    table, _, _ = fabric
+    _file_proposal(
+        table,
+        "p-subfail",
+        submit_body=json.dumps({"experiment_id": "exp-subfail", "model": "bedrock/x"}),
+    )
+
+    def exploding_submit(table_arg, pid_arg):
+        raise RuntimeError("sqs down")
+
+    monkeypatch.setattr(webhook, "_auto_submit", exploding_submit)
+    response = webhook.handler(make_event(data="prop:p-subfail:approve"), None)
+
+    assert response["statusCode"] == 200
+    item = _get_proposal(table, "p-subfail")
+    assert item["status"] == "APPROVED"
+    toasts = [p["text"] for m, p in recorder if m == "answerCallbackQuery"]
+    assert len(toasts) == 1 and "FAILED" in toasts[0] and "p-subfail" in toasts[0]
+
+
+def test_verdict_write_stays_in_sync_with_proposals_module():
+    # Tripwire for the deliberate duplication: the Lambda re-implements
+    # proposals.set_verdict because its deployment package is a single file.
+    # If either side's update drifts, this fails before production does.
+    from pathlib import Path
+
+    lambda_src = _LAMBDA_PATH.read_text()
+    module_src = (
+        Path(__file__).parent.parent / "src" / "agentlab" / "proposals.py"
+    ).read_text()
+    for literal in (
+        'UpdateExpression="SET #s = :v, verdict_ts = :ts, verdict_source = :src"',
+        'ConditionExpression="#s = :proposed"',
+    ):
+        assert literal in lambda_src, f"lambda lost: {literal}"
+        assert literal in module_src, f"proposals.py lost: {literal}"
