@@ -45,3 +45,9 @@ variable "image_tag" {
   type        = string
   default     = "latest"
 }
+
+variable "telegram_chat_id" {
+  description = "Daniel's Telegram chat/user id. The webhook Lambda accepts taps from this id only. Not a secret."
+  type        = string
+  default     = "6309668956"
+}

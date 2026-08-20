@@ -77,6 +77,7 @@ resource "aws_iam_role_policy" "ecs_execution" {
         Resource = [
           "${aws_cloudwatch_log_group.arm_runner.arn}:*",
           "${aws_cloudwatch_log_group.finalizer.arn}:*",
+          "${aws_cloudwatch_log_group.proposer.arn}:*",
         ]
       },
     ]
@@ -156,6 +157,21 @@ resource "aws_iam_role_policy" "ecs_task" {
         Action = [
           "dynamodb:PutItem",
         ]
+        Resource = aws_dynamodb_table.state.arn
+      },
+      {
+        Sid      = "TelegramParams"
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = "${local.telegram_param_arn_prefix}/*"
+      },
+      {
+        # notify() queues pending pings (PutItem - already granted) and
+        # flush/queue reads need Query + DeleteItem on the pending partition;
+        # DynamoDB cannot scope IAM to a partition, so table-level it is.
+        Sid      = "PendingPings"
+        Effect   = "Allow"
+        Action   = ["dynamodb:Query", "dynamodb:DeleteItem"]
         Resource = aws_dynamodb_table.state.arn
       },
     ]
@@ -316,6 +332,77 @@ resource "aws_iam_role_policy" "pipe" {
           "logs:PutLogEvents",
         ]
         Resource = "${aws_cloudwatch_log_group.pipe.arn}:*"
+      },
+    ]
+  })
+}
+
+# ---------------------------------------------------------------------------
+# Proposer task role: assumed by the proposer/flush-pings Fargate task.
+# ---------------------------------------------------------------------------
+
+resource "aws_iam_role" "proposer_task" {
+  name = "agentlab-proposer-task"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "ecs-tasks.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "proposer_task" {
+  name = "proposer-runtime"
+  role = aws_iam_role.proposer_task.id
+
+  # Exactly what worker propose/flush-pings does at runtime: one Bedrock
+  # completion, telegram params, ledger + pending-ping items, proposal docs
+  # to its own S3 prefix. No SQS: auto-submission is the Lambda's job.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BedrockInvoke"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+          "bedrock:Converse",
+          "bedrock:ConverseStream",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid      = "TelegramParams"
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = "${local.telegram_param_arn_prefix}/*"
+      },
+      {
+        Sid    = "Ledger"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+          "dynamodb:Scan",
+        ]
+        Resource = aws_dynamodb_table.state.arn
+      },
+      {
+        Sid      = "ProposalDocs"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "${aws_s3_bucket.results.arn}/proposals/*"
       },
     ]
   })

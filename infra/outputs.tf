@@ -62,3 +62,13 @@ output "pipe_arn" {
   description = "EventBridge Pipe ARN wiring the experiments queue to the state machine."
   value       = aws_pipes_pipe.experiments.arn
 }
+
+output "approvals_webhook_url" {
+  description = "Public function URL of the approvals webhook - the setWebhook target for scripts/register_telegram_webhook.py."
+  value       = aws_lambda_function_url.approvals_webhook.function_url
+}
+
+output "proposer_task_definition_arn" {
+  description = "Proposer task definition ARN, for manual `aws ecs run-task` smoke runs."
+  value       = aws_ecs_task_definition.proposer.arn
+}

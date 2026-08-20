@@ -104,3 +104,48 @@ resource "aws_ecs_task_definition" "finalizer" {
     }
   ])
 }
+
+resource "aws_cloudwatch_log_group" "proposer" {
+  name              = "/ecs/agentlab-proposer"
+  retention_in_days = 30
+}
+
+# 0.5 vCPU / 1 GB: the proposer makes one LLM call and a handful of HTTP/AWS
+# calls; it never runs evals.
+resource "aws_ecs_task_definition" "proposer" {
+  family                   = "agentlab-proposer"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  task_role_arn            = aws_iam_role.proposer_task.arn
+
+  runtime_platform {
+    cpu_architecture        = "ARM64"
+    operating_system_family = "LINUX"
+  }
+
+  container_definitions = jsonencode([
+    {
+      name      = "proposer"
+      image     = "${aws_ecr_repository.agentlab.repository_url}:${var.image_tag}"
+      essential = true
+      command   = ["worker", "propose"]
+      environment = [
+        { name = "AWS_REGION", value = var.aws_region },
+        { name = "AWS_DEFAULT_REGION", value = var.aws_region },
+        { name = "STATE_TABLE", value = aws_dynamodb_table.state.name },
+        { name = "RESULTS_BUCKET", value = aws_s3_bucket.results.id },
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.proposer.name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "proposer"
+        }
+      }
+    }
+  ])
+}

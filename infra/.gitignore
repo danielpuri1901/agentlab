@@ -3,3 +3,5 @@
 *.tfstate.*
 terraform.tfvars
 image_tag.auto.tfvars
+tfplan
+.build/

@@ -9,6 +9,10 @@ terraform {
       # latest published version was 6.60.0, so major version 6 is current.
       version = "~> 6.0"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.0"
+    }
   }
 }
 
