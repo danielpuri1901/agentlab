@@ -136,6 +136,26 @@ def flush_pings_command() -> None:
     typer.echo(f"flushed {count} pending pings")
 
 
+@worker_app.command("propose")
+def propose_command() -> None:
+    """Scheduled proposer run: flush queued pings, then propose new work."""
+    from agentlab.proposer import DEFAULT_PROPOSER_MODEL, run_propose
+
+    state_table = _require_env("STATE_TABLE")
+    results_bucket = _require_env("RESULTS_BUCKET")
+    model = os.environ.get("PROPOSER_MODEL", DEFAULT_PROPOSER_MODEL)
+    table = boto3.resource("dynamodb").Table(state_table)
+    ssm_client = boto3.client("ssm")
+    s3_client = boto3.client("s3")
+    try:
+        flushed = flush_pending(table, ssm_client)
+    except Exception as exc:  # noqa: BLE001 - a stuck queued ping must not block proposing
+        typer.echo(f"flush failed, continuing: {exc}", err=True)
+        flushed = 0
+    count = run_propose(table, ssm_client, s3_client, results_bucket, model)
+    typer.echo(f"flushed {flushed} pending pings, filed {count} proposals")
+
+
 @worker_app.command("run-arm")
 def run_arm_command() -> None:
     """Run one arm of a paired experiment: env-var driven, reuses the local

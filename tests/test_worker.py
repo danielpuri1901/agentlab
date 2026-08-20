@@ -254,6 +254,27 @@ def test_flush_pings_command(moto_fabric_with_ssm, telegram_calls, monkeypatch):
     assert len(telegram_calls) == 1
 
 
+def test_propose_command_flushes_then_proposes(monkeypatch):
+    # The propose command itself is a thin wrapper: it flushes queued pings,
+    # then delegates proposing to agentlab.proposer.run_propose (tested in
+    # depth in tests/test_proposer.py). Both collaborators are faked here so
+    # this test only pins the CLI's own wiring and echo line, not AWS calls.
+    monkeypatch.setattr("agentlab.worker.flush_pending", lambda table, ssm_client: 0)
+    monkeypatch.setattr(
+        "agentlab.proposer.run_propose",
+        lambda table, ssm_client, s3_client, bucket, model: 2,
+    )
+
+    result = runner.invoke(
+        app,
+        ["worker", "propose"],
+        env={"STATE_TABLE": TABLE, "RESULTS_BUCKET": BUCKET},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "filed 2 proposals" in result.output
+
+
 def test_finalize_sends_ping_with_chart(
     moto_fabric_with_ssm, telegram_calls, monkeypatch, tmp_path
 ):
