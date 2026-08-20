@@ -163,16 +163,7 @@ resource "aws_iam_role_policy" "ecs_task" {
         Sid      = "TelegramParams"
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
-        Resource = "${local.telegram_param_arn_prefix}/*"
-      },
-      {
-        # notify() queues pending pings (PutItem - already granted) and
-        # flush/queue reads need Query + DeleteItem on the pending partition;
-        # DynamoDB cannot scope IAM to a partition, so table-level it is.
-        Sid      = "PendingPings"
-        Effect   = "Allow"
-        Action   = ["dynamodb:Query", "dynamodb:DeleteItem"]
-        Resource = aws_dynamodb_table.state.arn
+        Resource = [local.telegram_token_param_arn, local.telegram_chat_id_param_arn]
       },
     ]
   })
@@ -384,13 +375,14 @@ resource "aws_iam_role_policy" "proposer_task" {
         Sid      = "TelegramParams"
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
-        Resource = "${local.telegram_param_arn_prefix}/*"
+        Resource = [local.telegram_token_param_arn, local.telegram_chat_id_param_arn]
       },
       {
+        # No GetItem: get_proposal() is never called under this role (fix round 1 -
+        # only PutItem/DeleteItem/Query/Scan are used by propose/flush-pings).
         Sid    = "Ledger"
         Effect = "Allow"
         Action = [
-          "dynamodb:GetItem",
           "dynamodb:PutItem",
           "dynamodb:DeleteItem",
           "dynamodb:Query",

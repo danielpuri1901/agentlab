@@ -51,7 +51,7 @@ resource "aws_iam_role_policy" "approvals_webhook" {
         Sid      = "TelegramParams"
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
-        Resource = "${local.telegram_param_arn_prefix}/*"
+        Resource = [local.telegram_token_param_arn, local.telegram_secret_param_arn]
       },
       {
         Sid      = "Ledger"
@@ -97,10 +97,27 @@ resource "aws_lambda_function_url" "approvals_webhook" {
   authorization_type = "NONE"
 }
 
+# Function URLs created after October 2025 require BOTH permission statements below -
+# lambda:InvokeFunctionUrl alone is no longer sufficient even with authorization_type
+# NONE; every request 403s without the second lambda:InvokeFunction grant. Verified
+# against https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html on 2026-08-20
+# (fix round 1).
 resource "aws_lambda_permission" "approvals_webhook_url" {
   statement_id           = "AllowPublicFunctionUrl"
   action                 = "lambda:InvokeFunctionUrl"
   function_name          = aws_lambda_function.approvals_webhook.function_name
   principal              = "*"
   function_url_auth_type = "NONE"
+}
+
+# See the comment above aws_lambda_permission.approvals_webhook_url: this second
+# statement is the other half of the October 2025 dual-permission requirement
+# (https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html) - without it, calls to
+# the function URL 403 even though authorization_type is NONE.
+resource "aws_lambda_permission" "approvals_webhook_invoke" {
+  statement_id             = "AllowPublicFunctionUrlInvoke"
+  action                   = "lambda:InvokeFunction"
+  function_name            = aws_lambda_function.approvals_webhook.function_name
+  principal                = "*"
+  invoked_via_function_url = true
 }

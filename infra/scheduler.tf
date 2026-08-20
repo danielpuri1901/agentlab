@@ -52,7 +52,6 @@ resource "aws_iam_role_policy" "scheduler" {
         Effect = "Allow"
         Action = ["ecs:RunTask"]
         Resource = [
-          aws_ecs_task_definition.proposer.arn,
           "${aws_ecs_task_definition.proposer.arn_without_revision}:*",
         ]
       },
