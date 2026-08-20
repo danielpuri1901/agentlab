@@ -362,3 +362,53 @@ def test_telegram_failure_does_not_lose_verdict(fabric, monkeypatch):
     item = _get_proposal(table, "p1")
     assert item["status"] == "APPROVED"
     assert item["verdict_source"] == "telegram_tap"
+
+
+def test_double_tap_with_submit_body_submits_exactly_once(fabric, recorder):
+    # Pins `if decided and verdict == "APPROVED":` - a mutant that drops the
+    # `decided` guard would re-run _auto_submit on the second (already
+    # decided) tap, since `verdict` alone is still "APPROVED" for an approve
+    # callback regardless of whether this tap actually won the race.
+    table, sqs, queue_url = fabric
+    submit_body = json.dumps({"experiment_id": "exp-race", "model": "mockllm/model"})
+    _file_proposal(table, "p1", submit_body=submit_body)
+    event = make_event(data="prop:p1:approve")
+
+    first = webhook.handler(event, None)
+    assert first["statusCode"] == 200
+    recorder.clear()
+
+    second = webhook.handler(event, None)
+    assert second["statusCode"] == 200
+
+    assert _get_proposal(table, "p1")["status"] == "APPROVED"
+
+    messages = sqs.receive_message(QueueUrl=queue_url, MaxNumberOfMessages=10)
+    received = messages.get("Messages", [])
+    assert len(received) == 1
+
+    items = table.scan()["Items"]
+    created = [i for i in items if i.get("event") == "CREATED"]
+    assert len(created) == 1
+    assert created[0]["experiment_id"] == "exp-race"
+
+    # Second tap: only its toast fires, no repeat submit.
+    assert len(recorder) == 1
+    method, payload = recorder[0]
+    assert method == "answerCallbackQuery"
+    assert "already decided" in payload["text"]
+
+
+def test_wrong_secret_rejected_before_parsing(fabric, recorder):
+    # Pins that the secret header check happens before json.loads(body); a
+    # malformed body must still produce a clean 403, never an unhandled
+    # JSONDecodeError / 500.
+    event = {
+        "headers": {"x-telegram-bot-api-secret-token": "wrong-secret"},
+        "body": "not valid json {{{",
+    }
+
+    response = webhook.handler(event, None)
+
+    assert response["statusCode"] == 403
+    assert recorder == []
