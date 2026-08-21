@@ -187,3 +187,10 @@ The broker service leaves the v0.1 critical path; v0.2 uses a scoped Bedrock-onl
 4. Harbor's exact license/governance and whether its task format is stable enough to pin (not yet verified to the same depth as Inspect).
 5. MCP spec revision 2026-07-28 is a large breaking change: pin to what harnesses actually speak; avoid sampling, roots, and elicitation features for now.
 6. Which task suite seeds the first experiments: inspect_evals' existing SWE/terminal tasks vs a small hand-built ops environment (Phase 1 decision, after the compaction experiment's needs are concrete).
+
+## Grounding reference (added 2026-08-21, Daniel: "this is the paper")
+
+arXiv 2607.07663, "Recursive Self-Improvement in AI: From Bounded Self-Refinement to Autonomous Research Loops" (survey of 1,250 papers, 2024-2026).
+Adopted as the lab's conceptual spine for self-improvement design.
+Its verification hierarchy (formal/executable verifiers strongest, intrinsic self-assessment weakest) is now the design rubric: every new eval or gate states where it sits on the hierarchy, and anything below independent-critic level needs explicit justification.
+Its failure catalog (self-confirming loops, model collapse, diversity collapse) maps to our existing anti-collapse rules and to experiment 004.
