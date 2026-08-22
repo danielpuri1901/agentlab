@@ -457,3 +457,72 @@ def test_transition_is_idempotent_on_retry(moto_fabric):
     items = table.scan()["Items"]
     assert len(items) == 1
     assert items[0]["event"] == "ARM_STARTED"
+
+
+def test_run_arm_failure_sends_ping(moto_fabric, monkeypatch):
+    # A failed arm must ping Daniel (the Grok intake run died silently 3x on
+    # AccessDenied and nobody knew for a day). The ping is best-effort: here
+    # we capture it via a monkeypatched notify and assert content.
+    _s3, _dynamodb, table = moto_fabric
+    pings = []
+    monkeypatch.setattr(
+        "agentlab.worker.notify",
+        lambda tbl, ssm, text, **kw: pings.append(text) or "sent",
+    )
+
+    def exploding_run_arm(*args, **kwargs):
+        raise RuntimeError("AccessDeniedException: model not available")
+
+    monkeypatch.setattr("agentlab.worker._run_arm", exploding_run_arm)
+    env = {
+        "EXPERIMENT_ID": "exp-fail-ping",
+        "ARM_STYLE": "truncate",
+        "MODEL": "bedrock/global.xai.grok-4.6",
+        "TASKS": "2",
+        "REPEATS": "1",
+        "N_FACTS": "3",
+        "FILLER_TURNS": "6",
+        "SUMMARY_BUDGET": "50",
+        "RESULTS_BUCKET": BUCKET,
+        "STATE_TABLE": TABLE,
+    }
+    result = runner.invoke(app, ["worker", "run-arm"], env=env)
+
+    assert result.exit_code != 0
+    assert len(pings) == 1
+    assert "FAILED" in pings[0] and "exp-fail-ping" in pings[0]
+    events = [i["event"] for i in table.scan()["Items"]]
+    assert "ARM_FAILED" in events
+
+
+def test_run_arm_failure_ping_failure_does_not_mask_error(moto_fabric, monkeypatch):
+    # If the failure ping itself fails, the original arm error must still
+    # surface (non-zero exit + ARM_FAILED recorded), never the ping error.
+    _s3, _dynamodb, table = moto_fabric
+
+    def exploding_notify(*args, **kwargs):
+        raise RuntimeError("telegram down")
+
+    monkeypatch.setattr("agentlab.worker.notify", exploding_notify)
+    monkeypatch.setattr(
+        "agentlab.worker._run_arm",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("real arm error")),
+    )
+    env = {
+        "EXPERIMENT_ID": "exp-double-fail",
+        "ARM_STYLE": "truncate",
+        "MODEL": "bedrock/eu.amazon.nova-lite-v1:0",
+        "TASKS": "2",
+        "REPEATS": "1",
+        "N_FACTS": "3",
+        "FILLER_TURNS": "6",
+        "SUMMARY_BUDGET": "50",
+        "RESULTS_BUCKET": BUCKET,
+        "STATE_TABLE": TABLE,
+    }
+    result = runner.invoke(app, ["worker", "run-arm"], env=env)
+
+    assert result.exit_code != 0
+    items = table.scan()["Items"]
+    failed = [i for i in items if i["event"] == "ARM_FAILED"]
+    assert len(failed) == 1 and "real arm error" in failed[0]["detail"]

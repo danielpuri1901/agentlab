@@ -276,7 +276,10 @@ def test_run_propose_respects_daily_cap(fabric, telegram_calls, monkeypatch):
     count = run_propose(table, ssm, s3, BUCKET, DEFAULT_PROPOSER_MODEL)
 
     assert count == 0
-    assert telegram_calls == []
+    # The capped run must still announce itself: silence means broken, a
+    # message means alive (Daniel mistook cap-silence for failure).
+    assert len(telegram_calls) == 1
+    assert "daily cap" in telegram_calls[0][1]["json"]["text"]
 
 
 def test_run_propose_no_sources_says_so(fabric, telegram_calls, monkeypatch):

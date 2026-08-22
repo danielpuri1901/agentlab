@@ -42,7 +42,13 @@ from the archive in one sentence. Do not repropose anything the archive \
 already rejected or completed. Kind "registered_rerun" means a compaction \
 suite run and must include an experiment object with model, tasks, repeats, \
 baseline_style, candidate_style. Any new idea is kind "new_hypothesis" and \
-carries no experiment object. Write titles and headlines in short plain \
+carries no experiment object. Your headline may claim ONLY what the cited \
+source's own title or summary supports. Never attribute a method, tool, or \
+result to a source unless its listed title or summary states it. If your \
+idea goes beyond the source, say "building on" the source, not that the \
+source did it. A proposal that misstates its source is worse than no \
+proposal (a hallucinated claim was caught on 2026-08-21 and wasted a day). \
+Write titles and headlines in short plain \
 sentences. Output ONLY a JSON array of proposal objects with keys: title, \
 headline, citation, distance, kind, and optionally experiment."""
 
@@ -149,6 +155,14 @@ def _registered_submit_body(exp: dict) -> dict | None:
 def run_propose(table, ssm_client, s3_client, bucket: str, model: str) -> int:
     slots = DAILY_CAP - count_created_today(table)
     if slots <= 0:
+        # Silence must always mean "not running", never "ran with nothing to
+        # say" (Daniel mistook a capped run for a dead lab, 2026-08-21).
+        notify(
+            table,
+            ssm_client,
+            "The proposer ran. The daily cap of "
+            f"{DAILY_CAP} proposals is already used. Nothing new today.",
+        )
         return 0
     sources = gather()
     if not sources:

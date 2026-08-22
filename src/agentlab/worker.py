@@ -196,6 +196,20 @@ def run_arm_command() -> None:
             key = upload_log(s3_client, results_bucket, experiment_id, arm_style, log.location)
     except Exception as exc:
         transition(table, experiment_id, "ARM_FAILED", arm_style, str(exc))
+        # A failed experiment must never be silent (lesson: the Grok intake
+        # run died 3x with AccessDenied and Daniel only noticed a day later).
+        # Ping failure must not mask the original error, hence the guard.
+        try:
+            ssm_client = boto3.client("ssm")
+            notify(
+                table,
+                ssm_client,
+                f"Experiment {experiment_id} FAILED.\n"
+                f"Arm '{arm_style}' error: {str(exc)[:400]}\n"
+                "The fabric will retry up to 3 times; repeated pings mean it is dead.",
+            )
+        except Exception as ping_exc:  # noqa: BLE001 - never mask the arm error
+            typer.echo(f"failure ping could not be sent: {ping_exc}", err=True)
         raise
 
     transition(table, experiment_id, "ARM_COMPLETED", arm_style, key)
