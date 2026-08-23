@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task.
 
-**Goal:** Two voiced, subtitled ~90s paper-explainer videos land on Daniel's Telegram daily (fresh + classic track), with a full digest linked, rating buttons wired to the ledger, and deterministic dedup across all sources.
+**Goal:** Three voiced, subtitled ~90s paper-explainer videos land on Daniel's Telegram daily (core + classic + novel tracks), with a full digest linked, rating buttons wired to the ledger, and deterministic dedup across all sources.
 
 **Architecture:** Deterministic pipeline with exactly two model calls (pick, deep-read). New modules `papers_db`, `scene_plan`, `video_render`; new worker command `explain`; explore/exploit fetch pools in `sources.py`; `vid:` callback namespace in the approvals Lambda; a dedicated Manim/ffmpeg worker image and one new schedule.
 
@@ -65,9 +65,9 @@
 **Files:** Modify src/agentlab/worker.py, src/agentlab/notify.py, tests/test_worker.py, tests/test_notify.py. Create docs/interests.md (initial profile: agents, evals, RSI, compaction, memory, harnesses, verification; explicitly editable).
 **Interfaces:**
 - notify.py: `send_video(config, caption, video_path, buttons=None)` beside send_photo (multipart, sendVideo endpoint); `notify(...)` gains optional `video_path` param routed like photo_png (queued videos: store S3 key not bytes; flush re-downloads - keep simple: during quiet hours video pings store {text, video_s3_key, buttons} and flush sends via a fresh download to tmp).
-- worker.py `explain_command()`: env STATE_TABLE, RESULTS_BUCKET, TRACK (fresh|classic|both, default both). Flow per track: build candidate pool (fresh: exploit or explore per weekday rule Wed/Sat; classic: next unseen entry from docs/classics.json packaged into the image) -> dedup via papers_db -> pick -> mark_seen -> deep_read -> upload digest S3 + presign -> narrate+render -> upload video S3 -> send via notify with buttons [("IMPLEMENT","vid:<key>:implement"),("LEARNED","vid:<key>:learned"),("SKIP","vid:<key>:skip")] and caption: claim + street-test question + digest link -> write video# item. EVERY stage in try/except: on failure, ping the text fallback (digest link if it exists, else claim text, else error) and continue to next track; exit 0 unless both tracks crashed before any ping.
+- worker.py `explain_command()`: env STATE_TABLE, RESULTS_BUCKET, TRACK (core|classic|novel|all, default all). Flow per track: build candidate pool (core: exploit pool; novel: explore pool, picked on the novelty prompt 'newest coolest thing Daniel does not know yet'; classic: next unseen entry from docs/classics.json packaged into the image) -> dedup via papers_db -> pick -> mark_seen -> deep_read -> upload digest S3 + presign -> narrate+render -> upload video S3 -> send via notify with buttons [("IMPLEMENT","vid:<key>:implement"),("LEARNED","vid:<key>:learned"),("SKIP","vid:<key>:skip")] and caption: claim + street-test question + digest link -> write video# item. EVERY stage in try/except: on failure, ping the text fallback (digest link if it exists, else claim text, else error) and continue to next track; exit 0 unless both tracks crashed before any ping.
 - docs/classics.json: THIS task creates it with 10 entries only (verified canonical: Attention Is All You Need 1706.03762 etc. - verify each id live with curl before writing); full curation to 60+ is a registered follow-up.
-**Steps:** failing tests (weekday pool rule; happy path with all externals monkeypatched -> one telegram sendVideo + ledger items; render-failure -> text fallback ping; classic track advances) -> implement -> green -> commit "feat: worker explain - daily paper videos end to end".
+**Steps:** failing tests (three tracks with correct pools; happy path with all externals monkeypatched -> one telegram sendVideo + ledger items; render-failure -> text fallback ping; classic track advances) -> implement -> green -> commit "feat: worker explain - daily paper videos end to end".
 
 ## Task 6: Lambda `vid:` namespace + infra + deploy
 

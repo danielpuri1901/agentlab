@@ -4,10 +4,11 @@ Status: designed with Daniel 2026-08-23 (deterministic fetch + dedup DB, two tra
 
 ## The product
 
-Every day, two ~90-second videos land on Daniel's Telegram, in the house style (mechanism-first, real numbers, one street-test question):
+Every day, three ~90-second videos land on Daniel's Telegram, in the house style (mechanism-first, real numbers, one street-test question). Daniel's three sections (2026-08-23):
 
-1. FRESH track: the most relevant paper from the last 7 days.
-2. CLASSIC track: the next paper from a curated list of ~60-100 all-time influential papers (AI/ML, software engineering, RSI/evals/verification; the "Attention Is All You Need" tier).
+1. CORE track: the best agents/evals/RSI paper of the week (his known interests; he wants essentially all of these, so the pick here is low-ambiguity ranking).
+2. CLASSIC track: the next paper from a curated list of all-time influential papers (the "Attention Is All You Need" tier).
+3. NOVEL track: something he does NOT already know about, picked from the explore pool on "sounds cool" (world models, diffusion, whatever is trending) - THIS is the track the judge-alignment flywheel tunes, because "cool and new to Daniel" is the ambiguous judgment his labels teach.
 
 Daniel rates each video by tap: IMPLEMENT (would implement this) / LEARNED / SKIP.
 The rating is the pipeline's outcome metric; "would implement" later cross-links to techniques that actually become lab experiments.
@@ -17,8 +18,8 @@ The rating is the pipeline's outcome metric; "would implement" later cross-links
 1. FETCH (deterministic), TWO POOLS (Daniel's explore/exploit split, 2026-08-23):
    - EXPLOIT: the existing keyword-filtered pull (arXiv last 7 days, tracked GitHub repos, HN matching KEYWORDS).
    - EXPLORE: no keywords by design (you cannot keyword-search the unknown); selected purely on crowd traction: HN front-page items above a points threshold regardless of topic, plus HuggingFace Daily Papers (community-upvoted, all-of-AI; endpoint verified at build time).
-   Fresh-track scheduling is deterministic: five exploit days, two fixed explore days (Wed, Sat) per week.
-   Explore papers that earn IMPLEMENT or LEARNED ratings feed back: the weekly tuner proposes their topics as new keywords in docs/interests.md via the same gated PR, so the interest profile evolves from evidence.
+   The CORE track picks from the exploit pool daily; the NOVEL track picks from the explore pool daily (no rotation).
+   Novel papers that earn IMPLEMENT or LEARNED ratings feed back: the weekly tuner proposes their topics as new keywords in docs/interests.md via the same gated PR, so the interest profile evolves from evidence.
 2. DEDUP (deterministic): every candidate is checked against the seen-papers store before anything else sees it.
    Identity resolution, in order: exact arXiv id (extracted from any URL form), else normalized title (lowercase, punctuation and whitespace collapsed), else fuzzy title ratio >= 92 (difflib, stdlib).
    No embeddings; this is identity, not similarity.
@@ -58,7 +59,7 @@ The rating is the pipeline's outcome metric; "would implement" later cross-links
 ## Schedule and cost
 
 - One new EventBridge Scheduler entry (10:30 Amsterdam) runs `worker explain` on the video image: it produces the fresh video, then the classic video.
-- Est. cost/day: two deep-read model calls (Sonnet-tier) + ~20 Fargate-minutes; well under $1/day. Bounded by the existing $50 alarm.
+- Est. cost/day: three deep-read model calls (Sonnet-tier) + ~30 Fargate-minutes; around $1/day. Bounded by the existing $50 alarm.
 
 ## The flywheel (incremental, outcome-driven)
 
@@ -79,4 +80,4 @@ The pipeline is deterministic everywhere except two prompts (pick, deep-read), s
 
 ## Explicitly out of scope for v1
 
-Freeform animation, more than two videos/day, embedding-based similarity, auto-updating the interest profile.
+Freeform animation, more than three videos/day, embedding-based similarity, auto-updating the interest profile.
