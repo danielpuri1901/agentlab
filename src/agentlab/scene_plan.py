@@ -19,6 +19,7 @@ and env overrides.
 import json
 import re
 from collections.abc import Callable
+from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -43,6 +44,10 @@ class MechanismStep(BaseModel):
     label: str = Field(min_length=1, max_length=MAX_LABEL)
     detail: str = Field(min_length=1, max_length=MAX_DETAIL)
     narration: str = Field(min_length=1, max_length=MAX_NARRATION)
+    # The visual motif the template animates for this step. The model picks
+    # the fitting one; it never writes animation code (Daniel's feedback
+    # 2026-08-23: show the mechanism operating, not text about it).
+    kind: Literal["transform", "gate", "loop", "split", "store", "compare"] = "transform"
 
 
 class KeyNumber(BaseModel):
@@ -83,13 +88,19 @@ your output; use a plain dash or a period instead.
 After the digest, output a fenced ```json block containing ONLY the scene \
 plan object, nothing before or after it, with these keys: title, \
 one_line_claim, mechanism_steps (3 to 6 objects with label, detail, \
-narration), key_numbers (0 to 3 objects with value, meaning), \
+narration, kind), key_numbers (0 to 3 objects with value, meaning), \
 limits_or_caveats, street_test_question, citation_url. The narration field \
 of each mechanism step is read aloud as the video's voiceover: write it as \
 short, spoken-style sentences a person would actually say out loud, plain \
 language, one idea per sentence, never an em dash. Every key_numbers value \
 must be a number that appears in the source text. limits_or_caveats is one \
-sentence about what the paper does NOT claim."""
+sentence about what the paper does NOT claim.
+
+Each mechanism step also has a kind field, the visual motif the video \
+animates for that step. Pick the one that fits what actually happens: \
+transform (input becomes output), gate (something is accepted or rejected), \
+loop (a cycle repeats), split (one path becomes several), store (something \
+is saved for later), compare (two things are measured against each other)."""
 
 
 def build_deep_read_prompt(url: str, source_text: str) -> str:

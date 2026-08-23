@@ -326,3 +326,18 @@ def test_deep_read_pins_citation_to_fetch_url(monkeypatch):
         complete=lambda model, messages: output,
     )
     assert plan.citation_url == "https://arxiv.org/abs/2607.07663"
+
+
+def test_mechanism_step_kind_defaults_and_validates():
+    from pydantic import ValidationError as VE
+
+    from agentlab.scene_plan import MechanismStep
+
+    step = MechanismStep(label="L", detail="D", narration="N")
+    assert step.kind == "transform"
+    assert MechanismStep(label="L", detail="D", narration="N", kind="gate").kind == "gate"
+    try:
+        MechanismStep(label="L", detail="D", narration="N", kind="explode")
+        raise AssertionError("unknown kind must be rejected")
+    except VE:
+        pass
