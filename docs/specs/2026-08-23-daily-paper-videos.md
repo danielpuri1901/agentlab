@@ -21,11 +21,18 @@ The rating is the pipeline's outcome metric; "would implement" later cross-links
    New candidates are recorded as seen the moment they are picked, not when fetched (unpicked papers may resurface later).
 3. PICK (one model call): rank the new candidates against Daniel's interest profile (a versioned file in the repo, docs/interests.md, itself editable learned state); papers outrank HN links; output ONE paper URL for the fresh track.
    The classic track needs no model: next unwatched entry in the curated list.
-4. DEEP READ -> SCENE PLAN (one model call per paper): fetch the full text, produce a STRICT JSON scene plan validated against a schema:
-   {title, one_line_claim, mechanism_steps: [{label, detail}] (3-6), key_numbers: [{value, meaning}] (up to 3), street_test_question, citation_url}.
+4. DEEP READ -> TWO ARTIFACTS (the layering rule: compression must never mean loss).
+   One deep read produces both:
+   a. The FULL DIGEST: a complete deep-dive document (the rsi-survey-digest treatment: every load-bearing idea, mechanisms, numbers, limits), committed to docs/digests/ and linked in the Telegram message. This is where the paper's full value lives.
+   b. The SCENE PLAN, distilled from the digest: a STRICT JSON plan validated against a schema:
+   {title, one_line_claim, mechanism_steps: [{label, detail, narration}] (3-6), key_numbers: [{value, meaning}] (up to 3), limits_or_caveats (one sentence: what the paper does NOT claim), street_test_question, citation_url}.
+   The video is the retention layer; the digest is the depth layer; the street-test question is the bridge between them.
    Grounding rule: every number must appear in the fetched text; the prompt forbids attributing anything the source does not say (same rule as the proposer).
 5. RENDER (deterministic): a fixed Manim template turns any valid scene plan into the video.
-   Scene skeleton: title card -> claim -> mechanism steps animating one by one -> numbers -> question card.
+   Scene skeleton: title card -> claim -> mechanism steps animating one by one -> numbers -> caveat -> question card.
+   VOICEOVER: Amazon Polly (neural TTS) narrates each scene's narration text; scene durations are set from the measured audio clip lengths; ffmpeg muxes audio in.
+   SUBTITLES: burned in from the same narration text (we own every spoken word, so subtitles are exact, no transcription).
+   Polly voice availability in eu-west-1 is verified at build time, not assumed.
    The model never writes animation code; a bad model day yields a boring video, never a broken one.
    Renders in the worker container (Manim + ffmpeg in a dedicated image); target under 10 minutes per video on 1 vCPU.
 6. DELIVER + RATE: notify.py send_video with inline buttons [IMPLEMENT / LEARNED / SKIP]; quiet hours queue as usual.
@@ -49,11 +56,11 @@ The rating is the pipeline's outcome metric; "would implement" later cross-links
 - One new EventBridge Scheduler entry (10:30 Amsterdam) runs `worker explain` on the video image: it produces the fresh video, then the classic video.
 - Est. cost/day: two deep-read model calls (Sonnet-tier) + ~20 Fargate-minutes; well under $1/day. Bounded by the existing $50 alarm.
 
-## Feedback loop (v1 records, v2 gates)
+## Roadmap of this pipeline
 
-v1: ratings are recorded and shown in a weekly tally ping.
-v2 (registered follow-up): the pick prompt and the template become champion/challenger subjects gated on rating outcomes, and IMPLEMENT ratings cross-link to experiments that later implement the technique.
+- v1 (this build): the full loop, fresh + classic tracks, digest + video with voiceover and subtitles, ratings RECORDED, weekly tally ping.
+- v2 (after ratings data exists): the loop gates itself. The pick prompt and the template become champion/challenger subjects judged on Daniel's IMPLEMENT rate, and IMPLEMENT ratings cross-link to lab experiments that later implement the technique (the true outcome).
 
 ## Explicitly out of scope for v1
 
-Voiceover/audio, freeform animation, more than two videos/day, embedding-based similarity, auto-updating the interest profile.
+Freeform animation, more than two videos/day, embedding-based similarity, auto-updating the interest profile.
