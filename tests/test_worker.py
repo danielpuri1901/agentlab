@@ -5,6 +5,7 @@ live AWS or makes a network call.
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -18,6 +19,7 @@ from agentlab.cli import app
 from agentlab.eval_runner import _run_arm
 from agentlab.notify import CHAT_ID_PARAM, TOKEN_PARAM, notify
 from agentlab.results import extract_results, mean_score
+from agentlab.scene_plan import ScenePlan
 from agentlab.stats import paired_analysis
 from agentlab.stats import verdict as compute_verdict
 from agentlab.worker import _optional_int_env, transition, upload_log
@@ -526,3 +528,228 @@ def test_run_arm_failure_ping_failure_does_not_mask_error(moto_fabric, monkeypat
     items = table.scan()["Items"]
     failed = [i for i in items if i["event"] == "ARM_FAILED"]
     assert len(failed) == 1 and "real arm error" in failed[0]["detail"]
+
+
+# ---------------------------------------------------------------------------
+# `worker explain`: three tracks (core/classic/novel), fully offline.
+# gather_exploit/gather_explore/pick_paper/deep_read/verify_voice/narrate/
+# render_video are all monkeypatched on `agentlab.worker` (the names looked
+# up at call time inside explain_command's own module, same pattern as
+# `agentlab.worker._run_arm` above); DynamoDB/S3/Telegram stay real against
+# moto/the monkeypatched httpx.post, so mark_seen/is_seen, the S3 digest
+# upload + presign, and the video ledger item all run for real.
+# ---------------------------------------------------------------------------
+
+CORE_CANDIDATE = {
+    "source": "arxiv",
+    "title": "Core Candidate Paper",
+    "url": "https://arxiv.org/abs/9911.00001",
+    "pool": "exploit",
+}
+NOVEL_CANDIDATE = {
+    "source": "hf",
+    "title": "Novel Candidate Paper",
+    "url": "https://arxiv.org/abs/9911.00002",
+    "pool": "explore",
+}
+ATTENTION_URL = "https://arxiv.org/abs/1706.03762"
+COT_URL = "https://arxiv.org/abs/2201.11903"
+
+
+def _make_scene_plan(url: str, title: str) -> ScenePlan:
+    return ScenePlan(
+        title=title[:70],
+        one_line_claim=f"{title} shows something new.",
+        mechanism_steps=[
+            {
+                "label": "Step 1",
+                "detail": "First mechanism detail.",
+                "narration": "First, this happens.",
+            },
+            {
+                "label": "Step 2",
+                "detail": "Second mechanism detail.",
+                "narration": "Then, this happens.",
+            },
+            {
+                "label": "Step 3",
+                "detail": "Third mechanism detail.",
+                "narration": "Finally, this happens.",
+            },
+        ],
+        key_numbers=[],
+        limits_or_caveats="The paper does not claim to solve everything.",
+        street_test_question="Would you implement this in your own harness?",
+        citation_url=url,
+    )
+
+
+def _make_fake_deep_read(fail_urls=frozenset()):
+    def fake_deep_read(url, fetch_text, complete, model=None):
+        if url in fail_urls:
+            raise ValueError(f"scene plan invalid after retry for {url}: boom")
+        digest = f"# Digest\n\nContent for {url}.\n\n## Limits\n\nNone stated."
+        return digest, _make_scene_plan(url, f"Paper at {url}")
+
+    return fake_deep_read
+
+
+def _fake_pick_paper(candidates, interests_text, complete, mode="core", model=None):
+    return candidates[0]
+
+
+def _fake_render_video(plan, clips, out_path):
+    Path(out_path).write_bytes(b"fake-mp4-bytes")
+    return Path(out_path)
+
+
+def _set_explain_env(monkeypatch, track="all"):
+    monkeypatch.setenv("STATE_TABLE", TABLE)
+    monkeypatch.setenv("RESULTS_BUCKET", BUCKET)
+    monkeypatch.setenv("TRACK", track)
+
+
+def _set_daytime(monkeypatch):
+    monkeypatch.setattr(
+        notify_mod, "now_amsterdam", lambda: datetime(2026, 8, 19, 14, 0, tzinfo=AMS)
+    )
+
+
+def _patch_explain_render_stages(monkeypatch, fail_urls=frozenset()):
+    monkeypatch.setattr("agentlab.worker.deep_read", _make_fake_deep_read(fail_urls))
+    monkeypatch.setattr("agentlab.worker.verify_voice", lambda polly_client: "Joanna")
+    monkeypatch.setattr(
+        "agentlab.worker.narrate", lambda polly_client, plan, voice_id, out_dir: ["clip"]
+    )
+    monkeypatch.setattr("agentlab.worker.render_video", _fake_render_video)
+
+
+def _patch_explain_pools(monkeypatch):
+    monkeypatch.setattr("agentlab.worker.gather_exploit", lambda: [CORE_CANDIDATE])
+    monkeypatch.setattr("agentlab.worker.gather_explore", lambda: [NOVEL_CANDIDATE])
+    monkeypatch.setattr("agentlab.worker.pick_paper", _fake_pick_paper)
+
+
+def test_explain_all_three_tracks_send_three_videos_and_mark_seen(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    _set_explain_env(monkeypatch, track="all")
+    _set_daytime(monkeypatch)
+    _patch_explain_pools(monkeypatch)
+    _patch_explain_render_stages(monkeypatch)
+
+    result = runner.invoke(app, ["worker", "explain"])
+    assert result.exit_code == 0, result.output
+
+    sendvideo_calls = [c for c in telegram_calls if c[0].endswith("/sendVideo")]
+    assert len(sendvideo_calls) == 3
+
+    items = table.scan()["Items"]
+    video_items = [i for i in items if i.get("sk") == "video"]
+    assert len(video_items) == 3
+    assert {i["track"] for i in video_items} == {"core", "classic", "novel"}
+
+    seen_items = [i for i in items if i.get("sk") == "paper"]
+    assert len(seen_items) == 3
+    assert {i["track"] for i in seen_items} == {"core", "classic", "novel"}
+
+    assert "explain: core=sent classic=sent novel=sent" in result.output
+
+
+def test_explain_track_core_runs_only_core(moto_fabric_with_ssm, telegram_calls, monkeypatch):
+    _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    _set_explain_env(monkeypatch, track="core")
+    _set_daytime(monkeypatch)
+    novel_pool_calls = []
+    monkeypatch.setattr("agentlab.worker.gather_exploit", lambda: [CORE_CANDIDATE])
+    monkeypatch.setattr(
+        "agentlab.worker.gather_explore",
+        lambda: novel_pool_calls.append(1) or [NOVEL_CANDIDATE],
+    )
+    monkeypatch.setattr("agentlab.worker.pick_paper", _fake_pick_paper)
+    _patch_explain_render_stages(monkeypatch)
+
+    result = runner.invoke(app, ["worker", "explain"])
+    assert result.exit_code == 0, result.output
+    assert novel_pool_calls == []
+
+    sendvideo_calls = [c for c in telegram_calls if c[0].endswith("/sendVideo")]
+    assert len(sendvideo_calls) == 1
+
+    video_items = [i for i in table.scan()["Items"] if i.get("sk") == "video"]
+    assert len(video_items) == 1
+    assert video_items[0]["track"] == "core"
+
+    assert result.output.strip().endswith("explain: core=sent")
+
+
+def test_explain_core_deep_read_failure_pings_fallback_novel_still_sends(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    _set_explain_env(monkeypatch, track="all")
+    _set_daytime(monkeypatch)
+    _patch_explain_pools(monkeypatch)
+    _patch_explain_render_stages(monkeypatch, fail_urls={CORE_CANDIDATE["url"]})
+
+    result = runner.invoke(app, ["worker", "explain"])
+    assert result.exit_code == 0, result.output
+
+    text_calls = [c for c in telegram_calls if c[0].endswith("/sendMessage")]
+    assert len(text_calls) == 1
+    fallback_text = text_calls[0][1]["json"]["text"]
+    assert "core" in fallback_text.lower()
+    assert "error" in fallback_text.lower()
+
+    sendvideo_calls = [c for c in telegram_calls if c[0].endswith("/sendVideo")]
+    # classic and novel both still succeed; only core failed, before ever
+    # producing a digest (the fake deep_read raises before any S3 upload).
+    assert len(sendvideo_calls) == 2
+
+    video_items = [i for i in table.scan()["Items"] if i.get("sk") == "video"]
+    assert {i["track"] for i in video_items} == {"classic", "novel"}
+
+    # Core is still marked seen: papers_db.mark_seen runs the moment a
+    # candidate is picked, before deep_read, so a failed deep-read must not
+    # leave the candidate eligible to resurface tomorrow.
+    seen_items = [i for i in table.scan()["Items"] if i.get("sk") == "paper"]
+    assert {i["track"] for i in seen_items} == {"core", "classic", "novel"}
+
+    assert "explain: core=failed classic=sent novel=sent" in result.output
+
+
+def test_explain_classic_track_advances_to_next_unseen_entry_across_two_runs(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    _set_explain_env(monkeypatch, track="classic")
+    _set_daytime(monkeypatch)
+    _patch_explain_render_stages(monkeypatch)
+
+    result1 = runner.invoke(app, ["worker", "explain"])
+    assert result1.exit_code == 0, result1.output
+    video_items = [i for i in table.scan()["Items"] if i.get("sk") == "video"]
+    assert len(video_items) == 1
+    assert video_items[0]["url"] == ATTENTION_URL
+
+    result2 = runner.invoke(app, ["worker", "explain"])
+    assert result2.exit_code == 0, result2.output
+    video_items = sorted(
+        (i for i in table.scan()["Items"] if i.get("sk") == "video"),
+        key=lambda i: i["sent_ts"],
+    )
+    assert len(video_items) == 2
+    assert video_items[0]["url"] == ATTENTION_URL
+    assert video_items[1]["url"] == COT_URL
+    assert video_items[1]["url"] != video_items[0]["url"]
+
+    sendvideo_calls = [c for c in telegram_calls if c[0].endswith("/sendVideo")]
+    assert len(sendvideo_calls) == 2
+
+
+def test_explain_invalid_track_env_exits_nonzero(moto_fabric_with_ssm, monkeypatch):
+    _s3, _dynamodb, _table, _ssm = moto_fabric_with_ssm
+    _set_explain_env(monkeypatch, track="bogus")
+    result = runner.invoke(app, ["worker", "explain"])
+    assert result.exit_code != 0

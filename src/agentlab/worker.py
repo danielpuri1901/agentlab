@@ -13,12 +13,16 @@ internally, so tests can hit them directly against a moto-mocked client.
 """
 
 import asyncio
+import json
 import os
+import re
+import secrets
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
 import boto3
+import httpx
 import typer
 from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
@@ -26,11 +30,33 @@ from botocore.exceptions import ClientError
 from agentlab.charts import verdict_chart_png
 from agentlab.eval_runner import _run_arm, hypothesis_for
 from agentlab.notify import flush_pending, notify
+from agentlab.papers_db import is_seen, mark_seen, paper_identity, recent_seen_titles
 from agentlab.report import render_report
 from agentlab.results import extract_results, mean_score, total_cost, total_tokens
+from agentlab.scene_plan import (
+    DEFAULT_DEEP_READ_MODEL,
+    DEFAULT_PICK_MODEL,
+    deep_read,
+    pick_paper,
+)
+from agentlab.sources import gather_exploit, gather_explore
 from agentlab.stats import paired_analysis, verdict
+from agentlab.video_render import narrate, render_video, verify_voice
 
 worker_app = typer.Typer()
+
+# `docs/` lives at the repo root, not under src/agentlab/, so this walks up
+# from this module's location (src/agentlab/worker.py -> src/agentlab ->
+# src -> repo root) rather than relying on the process cwd; the Dockerfile's
+# `COPY . .` puts the whole repo under /app, so this resolves the same way
+# in the worker container as it does locally.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+CLASSICS_PATH = _REPO_ROOT / "docs" / "classics.json"
+INTERESTS_PATH = _REPO_ROOT / "docs" / "interests.md"
+
+_ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5})")
+EXPLAIN_TRACKS = ("core", "classic", "novel")
+DIGEST_URL_EXPIRY_SECONDS = 7 * 24 * 3600
 
 
 def _require_env(name: str) -> str:
@@ -128,11 +154,18 @@ def upload_report(s3_client, bucket: str, experiment_id: str, report_md: str) ->
 
 @worker_app.command("flush-pings")
 def flush_pings_command() -> None:
-    """Deliver pings queued during quiet hours (the 08:00 schedule's job)."""
+    """Deliver pings queued during quiet hours (the 08:00 schedule's job).
+
+    RESULTS_BUCKET is optional here: it is only needed to flush a queued
+    video ping (worker explain's quiet-hours path), so omitting it keeps
+    working exactly as before for text/photo-only queues.
+    """
     state_table = _require_env("STATE_TABLE")
+    results_bucket = os.environ.get("RESULTS_BUCKET")
     table = boto3.resource("dynamodb").Table(state_table)
     ssm_client = boto3.client("ssm")
-    count = flush_pending(table, ssm_client)
+    s3_client = boto3.client("s3")
+    count = flush_pending(table, ssm_client, s3_client, results_bucket)
     typer.echo(f"flushed {count} pending pings")
 
 
@@ -148,7 +181,7 @@ def propose_command() -> None:
     ssm_client = boto3.client("ssm")
     s3_client = boto3.client("s3")
     try:
-        flushed = flush_pending(table, ssm_client)
+        flushed = flush_pending(table, ssm_client, s3_client, results_bucket)
     except Exception as exc:  # noqa: BLE001 - a stuck queued ping must not block proposing
         typer.echo(f"flush failed, continuing: {exc}", err=True)
         flushed = 0
@@ -299,3 +332,245 @@ def finalize_command() -> None:
                 typer.echo(f"ping failed and PING_FAILED write failed: {t_exc}", err=True)
 
     typer.echo(f"verdict: {verdict_str}")
+
+
+# ---------------------------------------------------------------------------
+# `worker explain`: the daily-paper-videos orchestrator
+# (docs/specs/2026-08-23-daily-paper-videos.md). Three tracks - core
+# (exploit pool, ranked against docs/interests.md), classic (the next
+# unwatched entry in docs/classics.json), novel (explore pool, picked for
+# surprise) - each run fetch -> dedup -> pick -> deep-read -> render ->
+# deliver -> ledger, fully isolated from one another: a failure in one
+# track pings a text fallback and the next track still runs.
+# ---------------------------------------------------------------------------
+
+
+def _complete(model: str, messages: list[dict]) -> str:
+    """The pick/deep-read model calls, delegated to the proposer's own
+    `_complete` (same litellm shape). Imported lazily, not at module level:
+    cloud.py imports `transition` from this module at import time, so a
+    top-level `from agentlab.proposer import _complete` here would form
+    worker -> proposer -> cloud -> worker, a circular import. propose_command
+    below already lazy-imports from proposer for the same reason.
+    """
+    from agentlab.proposer import _complete as _proposer_complete
+
+    return _proposer_complete(model, messages)
+
+
+def _load_classics() -> list[dict]:
+    return json.loads(CLASSICS_PATH.read_text(encoding="utf-8"))
+
+
+def _load_interests() -> str:
+    return INTERESTS_PATH.read_text(encoding="utf-8")
+
+
+def _next_unseen_classic(table) -> dict | None:
+    """First docs/classics.json entry not already in the seen-papers store,
+    in file order; None once every classic has been sent."""
+    fuzzy_titles = recent_seen_titles(table)
+    for entry in _load_classics():
+        identity = paper_identity(entry["url"], entry["title"])
+        if not is_seen(table, identity, fuzzy_titles):
+            return entry
+    return None
+
+
+def _fresh_candidates(pool: list[dict], table) -> list[dict]:
+    """Fetch-pool candidates not already in the seen-papers store."""
+    fuzzy_titles = recent_seen_titles(table)
+    return [
+        c
+        for c in pool
+        if not is_seen(
+            table, paper_identity(c.get("url", ""), c.get("title", "")), fuzzy_titles
+        )
+    ]
+
+
+def _fetch_text(url: str) -> str:
+    """Deep-read source fetch: the arXiv HTML rendering for an arxiv.org
+    URL (60s timeout), falling back to the abs page if the html render
+    isn't available; any other URL is fetched directly."""
+    match = _ARXIV_ID_RE.search(url or "") if "arxiv.org" in (url or "") else None
+    if match:
+        arxiv_id = match.group(1)
+        try:
+            response = httpx.get(f"https://arxiv.org/html/{arxiv_id}", timeout=60)
+            if response.status_code == 200:
+                return response.text
+        except Exception:  # noqa: BLE001, S110 - fall through to the abs page
+            pass
+        response = httpx.get(f"https://arxiv.org/abs/{arxiv_id}", timeout=60)
+        response.raise_for_status()
+        return response.text
+    response = httpx.get(url, timeout=60)
+    response.raise_for_status()
+    return response.text
+
+
+def _generate_video_key(track: str) -> str:
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return f"{track}-{ts}-{secrets.token_hex(2)}"
+
+
+def _run_explain_track(
+    track: str,
+    table,
+    ssm_client,
+    s3_client,
+    polly_client,
+    bucket: str,
+    deep_read_model: str,
+    pick_model: str,
+    partial: dict,
+) -> str:
+    """Run one explain track end to end. Returns "sent" or "empty" (no
+    candidate left to pick). Raises on any other failure; `partial`
+    accumulates title/url/claim/digest_url as they become available so the
+    caller can send a useful fallback ping without redoing the work."""
+    if track == "classic":
+        candidate = _next_unseen_classic(table)
+        if candidate is None:
+            return "empty"
+    else:
+        pool = gather_exploit() if track == "core" else gather_explore()
+        fresh = _fresh_candidates(pool, table)
+        if not fresh:
+            return "empty"
+        mode = "novel" if track == "novel" else "core"
+        candidate = pick_paper(fresh, _load_interests(), _complete, mode=mode, model=pick_model)
+        if candidate is None:
+            return "empty"
+
+    url = candidate["url"]
+    title = candidate.get("title", "")
+    partial["title"] = title
+    partial["url"] = url
+
+    # New candidates are recorded as seen the moment they are picked, not
+    # when fetched, so an unpicked candidate can resurface later.
+    identity = paper_identity(url, title)
+    mark_seen(table, identity, url, title, candidate.get("source", track), track)
+
+    digest, plan = deep_read(url, _fetch_text, _complete, model=deep_read_model)
+    partial["claim"] = plan.one_line_claim
+
+    key = _generate_video_key(track)
+    digest_key = f"digests/{key}.md"
+    s3_client.put_object(Bucket=bucket, Key=digest_key, Body=digest.encode("utf-8"))
+    digest_url = s3_client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": digest_key},
+        ExpiresIn=DIGEST_URL_EXPIRY_SECONDS,
+    )
+    partial["digest_url"] = digest_url
+
+    voice_id = verify_voice(polly_client)
+    with tempfile.TemporaryDirectory(prefix=f"agentlab-explain-{track}-") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        clips = narrate(polly_client, plan, voice_id, tmp_path / "narration")
+        video_path = tmp_path / "video.mp4"
+        render_video(plan, clips, video_path)
+
+        # Uploaded to S3 before notify so a quiet-hours queue can flush the
+        # video later even though this tmp directory will be gone by then.
+        video_key = f"videos/{key}.mp4"
+        s3_client.upload_file(str(video_path), bucket, video_key)
+
+        caption = f"{plan.one_line_claim}\n\n{plan.street_test_question}\n\n{digest_url}"
+        buttons = [
+            [
+                ("IMPLEMENT", f"vid:{key}:implement"),
+                ("LEARNED", f"vid:{key}:learned"),
+                ("SKIP", f"vid:{key}:skip"),
+            ]
+        ]
+        notify(
+            table,
+            ssm_client,
+            caption,
+            buttons=buttons,
+            video_path=str(video_path),
+            video_s3_key=video_key,
+        )
+
+    sent_ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    table.put_item(
+        Item={
+            "experiment_id": f"video#{key}",
+            "sk": "video",
+            "track": track,
+            "url": url,
+            "title": title,
+            "digest_key": digest_key,
+            "video_key": video_key,
+            "sent_ts": sent_ts,
+            "rating": None,
+            "rating_ts": None,
+        }
+    )
+    return "sent"
+
+
+@worker_app.command("explain")
+def explain_command() -> None:
+    """Scheduled daily-paper-video run (10:30 Amsterdam): the CORE, CLASSIC,
+    and NOVEL tracks, each fetch -> dedup -> pick -> deep-read -> render ->
+    deliver -> ledger. Every track is isolated in its own try/except: a
+    failure pings a text fallback (the digest link if one was made, else
+    the error, in STE style) and the run continues to the next track -
+    silence must never mean broken.
+    """
+    state_table = _require_env("STATE_TABLE")
+    results_bucket = _require_env("RESULTS_BUCKET")
+    track_env = os.environ.get("TRACK", "all").strip().lower()
+    deep_read_model = os.environ.get("DEEP_READ_MODEL", DEFAULT_DEEP_READ_MODEL)
+    pick_model = os.environ.get("PICK_MODEL", DEFAULT_PICK_MODEL)
+
+    tracks = list(EXPLAIN_TRACKS) if track_env == "all" else [track_env]
+    if any(t not in EXPLAIN_TRACKS for t in tracks):
+        typer.echo(
+            f"error: invalid TRACK '{track_env}' (must be core, classic, novel, or all)",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    table = boto3.resource("dynamodb").Table(state_table)
+    ssm_client = boto3.client("ssm")
+    s3_client = boto3.client("s3")
+    polly_client = boto3.client("polly")
+
+    statuses: dict[str, str] = {}
+    for track in tracks:
+        partial: dict = {}
+        try:
+            statuses[track] = _run_explain_track(
+                track,
+                table,
+                ssm_client,
+                s3_client,
+                polly_client,
+                results_bucket,
+                deep_read_model,
+                pick_model,
+                partial,
+            )
+        except Exception as exc:  # noqa: BLE001 - one track's failure must not sink the others
+            statuses[track] = "failed"
+            if partial.get("digest_url"):
+                claim = partial.get("claim", "")
+                fallback = (
+                    f"No video today for the {track} track. {claim}\n"
+                    f"Read the full digest instead.\n{partial['digest_url']}"
+                ).strip()
+            else:
+                fallback = f"No video today for the {track} track. Error: {str(exc)[:400]}"
+            try:
+                notify(table, ssm_client, fallback)
+            except Exception as ping_exc:  # noqa: BLE001 - never mask the track error
+                typer.echo(f"fallback ping failed for {track}: {ping_exc}", err=True)
+
+    summary = " ".join(f"{t}={statuses[t]}" for t in EXPLAIN_TRACKS if t in statuses)
+    typer.echo(f"explain: {summary}")

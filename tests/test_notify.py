@@ -18,9 +18,11 @@ from agentlab.notify import (
     flush_pending,
     in_quiet_hours,
     notify,
+    send_video,
 )
 
 TABLE = "agentlab-state-test"
+BUCKET = "agentlab-results-test"
 REGION = "us-east-1"
 AMS = ZoneInfo("Europe/Amsterdam")
 
@@ -53,6 +55,17 @@ def fabric():
         ssm.put_parameter(Name=TOKEN_PARAM, Value="test-token", Type="SecureString")
         ssm.put_parameter(Name=CHAT_ID_PARAM, Value="6309668956", Type="String")
         yield table, ssm
+
+
+@pytest.fixture
+def fabric_with_s3(fabric):
+    # Same table/ssm as `fabric`, plus a real (moto-mocked) S3 bucket so the
+    # video-queue flush test can round-trip an actual upload/download, not a
+    # stubbed one.
+    table, ssm = fabric
+    s3 = boto3.client("s3", region_name=REGION)
+    s3.create_bucket(Bucket=BUCKET)
+    yield table, ssm, s3
 
 
 @pytest.fixture
@@ -219,3 +232,169 @@ def test_oversized_photo_dropped_from_queue(fabric, telegram_calls, monkeypatch)
     payload = json.loads(items[0]["payload"])
     assert "photo_b64" not in payload
     assert "chart omitted" in payload["text"]
+
+
+# ---------------------------------------------------------------------------
+# send_video / notify(video_path=...) / video queue + flush
+# ---------------------------------------------------------------------------
+
+
+def _config():
+    return notify_mod.TelegramConfig(token="test-token", chat_id="6309668956")
+
+
+def test_send_video_caption_truncated_and_buttons_present(telegram_calls, tmp_path):
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake-mp4-bytes")
+    long_caption = "x" * 1500
+
+    send_video(
+        _config(),
+        long_caption,
+        video_path,
+        buttons=[[("IMPLEMENT", "vid:k1:implement"), ("SKIP", "vid:k1:skip")]],
+    )
+
+    assert len(telegram_calls) == 1
+    url, kwargs = telegram_calls[0]
+    assert url.endswith("/sendVideo")
+    assert len(kwargs["data"]["caption"]) == 1024
+    assert kwargs["files"]["video"][0] == "clip.mp4"
+    reply_markup = json.loads(kwargs["data"]["reply_markup"])
+    assert reply_markup["inline_keyboard"][0] == [
+        {"text": "IMPLEMENT", "callback_data": "vid:k1:implement"},
+        {"text": "SKIP", "callback_data": "vid:k1:skip"},
+    ]
+
+
+def test_send_video_omits_reply_markup_without_buttons(telegram_calls, tmp_path):
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake-mp4-bytes")
+
+    send_video(_config(), "caption", video_path)
+
+    assert "reply_markup" not in telegram_calls[0][1]["data"]
+
+
+def test_notify_daytime_sends_video_directly_no_followup_message(
+    fabric, telegram_calls, monkeypatch, tmp_path
+):
+    # Unlike the photo path (send_photo, then a separate buttons message),
+    # sendVideo carries reply_markup itself, so exactly one Telegram call is
+    # expected here.
+    table, ssm = fabric
+    _daytime(monkeypatch)
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake-mp4-bytes")
+
+    status = notify(
+        table,
+        ssm,
+        "claim\n\nstreet test question\n\nhttps://digest.example/x",
+        buttons=[[("IMPLEMENT", "vid:k1:implement")]],
+        video_path=video_path,
+        video_s3_key="videos/k1.mp4",
+    )
+
+    assert status == "sent"
+    assert len(telegram_calls) == 1
+    url, kwargs = telegram_calls[0]
+    assert url.endswith("/sendVideo")
+    assert kwargs["data"]["caption"].startswith("claim")
+    reply_markup = json.loads(kwargs["data"]["reply_markup"])
+    assert reply_markup["inline_keyboard"][0][0]["callback_data"] == "vid:k1:implement"
+
+
+def test_notify_quiet_hours_queues_video_s3_key_not_bytes(
+    fabric, telegram_calls, monkeypatch, tmp_path
+):
+    table, ssm = fabric
+    _quiet(monkeypatch)
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake-mp4-bytes")
+
+    status = notify(
+        table,
+        ssm,
+        "no video tonight",
+        buttons=[[("LEARNED", "vid:k2:learned")]],
+        video_path=video_path,
+        video_s3_key="videos/k2.mp4",
+    )
+
+    assert status == "queued"
+    assert telegram_calls == []
+    items = [
+        i for i in table.scan()["Items"] if i["experiment_id"] == PENDING_PARTITION
+    ]
+    assert len(items) == 1
+    payload = json.loads(items[0]["payload"])
+    assert payload["video_s3_key"] == "videos/k2.mp4"
+    assert "photo_b64" not in payload
+    assert payload["buttons"] == [[["LEARNED", "vid:k2:learned"]]]
+
+
+def test_flush_video_downloads_from_s3_and_sends(fabric_with_s3, monkeypatch):
+    table, ssm, s3 = fabric_with_s3
+    _quiet(monkeypatch)
+    video_bytes = b"real-mp4-bytes-from-s3"
+    s3.put_object(Bucket=BUCKET, Key="videos/k3.mp4", Body=video_bytes)
+
+    notify(
+        table,
+        ssm,
+        "queued video",
+        buttons=[[("SKIP", "vid:k3:skip")]],
+        video_path="/tmp/does-not-exist-at-flush-time.mp4",
+        video_s3_key="videos/k3.mp4",
+    )
+
+    # A dedicated fake_post, not the shared `telegram_calls` fixture: it must
+    # read the video field's bytes while send_video's `with video_path.open`
+    # block is still open (i.e. during the call itself), because that block
+    # closes the handle the moment send_video returns - capturing the raw
+    # kwargs dict for later inspection would hold a reference to an
+    # already-closed file.
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["reply_markup"] = kwargs["data"].get("reply_markup")
+        filename, handle, _content_type = kwargs["files"]["video"]
+        captured["video_filename"] = filename
+        captured["video_bytes"] = handle.read()
+        return FakeResponse()
+
+    monkeypatch.setattr(notify_mod.httpx, "post", fake_post)
+
+    _daytime(monkeypatch)
+    sent = flush_pending(table, ssm, s3, BUCKET)
+
+    assert sent == 1
+    assert captured["url"].endswith("/sendVideo")
+    assert captured["video_bytes"] == video_bytes
+    reply_markup = json.loads(captured["reply_markup"])
+    assert reply_markup["inline_keyboard"][0][0]["callback_data"] == "vid:k3:skip"
+    remaining = [
+        i for i in table.scan()["Items"] if i["experiment_id"] == PENDING_PARTITION
+    ]
+    assert remaining == []
+
+
+def test_flush_video_without_s3_client_raises(fabric, monkeypatch):
+    table, ssm = fabric
+    _quiet(monkeypatch)
+    notify(
+        table,
+        ssm,
+        "queued video, no s3 client at flush time",
+        video_path="/tmp/whatever.mp4",
+        video_s3_key="videos/k4.mp4",
+    )
+    _daytime(monkeypatch)
+    with pytest.raises(RuntimeError):
+        flush_pending(table, ssm)
