@@ -14,7 +14,11 @@ The rating is the pipeline's outcome metric; "would implement" later cross-links
 
 ## Pipeline (six stages)
 
-1. FETCH (deterministic): existing sources.py pulls arXiv (last 7 days), GitHub releases, HN.
+1. FETCH (deterministic), TWO POOLS (Daniel's explore/exploit split, 2026-08-23):
+   - EXPLOIT: the existing keyword-filtered pull (arXiv last 7 days, tracked GitHub repos, HN matching KEYWORDS).
+   - EXPLORE: no keywords by design (you cannot keyword-search the unknown); selected purely on crowd traction: HN front-page items above a points threshold regardless of topic, plus HuggingFace Daily Papers (community-upvoted, all-of-AI; endpoint verified at build time).
+   Fresh-track scheduling is deterministic: five exploit days, two fixed explore days (Wed, Sat) per week.
+   Explore papers that earn IMPLEMENT or LEARNED ratings feed back: the weekly tuner proposes their topics as new keywords in docs/interests.md via the same gated PR, so the interest profile evolves from evidence.
 2. DEDUP (deterministic): every candidate is checked against the seen-papers store before anything else sees it.
    Identity resolution, in order: exact arXiv id (extracted from any URL form), else normalized title (lowercase, punctuation and whitespace collapsed), else fuzzy title ratio >= 92 (difflib, stdlib).
    No embeddings; this is identity, not similarity.
