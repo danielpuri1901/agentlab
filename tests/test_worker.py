@@ -126,7 +126,7 @@ def test_run_arm_uploads_log_and_writes_transitions(moto_fabric, monkeypatch):
     assert keys == ["experiments/exp-test-1/logs/structured.eval"]
 
     items = table.scan()["Items"]
-    events = {item["event"] for item in items}
+    events = {item.get("event") for item in items}
     assert {"ARM_STARTED", "ARM_COMPLETED"} <= events
     assert all(item["arm"] == "structured" for item in items)
 
@@ -160,7 +160,7 @@ def test_run_arm_generic_failure_writes_arm_failed_and_exits_nonzero(moto_fabric
     assert result.exit_code != 0
 
     items = table.scan()["Items"]
-    failed = [item for item in items if item["event"] == "ARM_FAILED"]
+    failed = [item for item in items if item.get("event") == "ARM_FAILED"]
     assert len(failed) == 1
     assert failed[0]["detail"] == "boom: simulated provider failure"
     assert failed[0]["arm"] == "structured"
@@ -186,7 +186,7 @@ def test_run_arm_check_log_status_failure_writes_diagnosis_not_bare_exit_code(
     assert result.exit_code != 0
 
     items = table.scan()["Items"]
-    failed = [item for item in items if item["event"] == "ARM_FAILED"]
+    failed = [item for item in items if item.get("event") == "ARM_FAILED"]
     assert len(failed) == 1
     detail = failed[0]["detail"]
     assert detail != "1"
@@ -230,7 +230,7 @@ def test_finalize_writes_report_and_matches_local_verdict(moto_fabric, monkeypat
     assert "mockllm/model" in report_text
 
     items = table.scan()["Items"]
-    finalized = [item for item in items if item["event"] == "FINALIZED"]
+    finalized = [item for item in items if item.get("event") == "FINALIZED"]
     assert len(finalized) == 1
     assert finalized[0]["detail"] == expected_verdict
 
@@ -328,7 +328,7 @@ def test_finalize_sends_ping_with_chart(
     assert f"s3://{BUCKET}/experiments/{experiment_id}/report.md" in caption
 
     items = table.scan()["Items"]
-    assert not [item for item in items if item["event"] == "PING_FAILED"]
+    assert not [item for item in items if item.get("event") == "PING_FAILED"]
 
 
 def test_finalize_ping_failure_records_transition_not_crash(
@@ -362,11 +362,11 @@ def test_finalize_ping_failure_records_transition_not_crash(
     assert result.exit_code == 0, result.output
 
     items = table.scan()["Items"]
-    ping_failed = [item for item in items if item["event"] == "PING_FAILED"]
+    ping_failed = [item for item in items if item.get("event") == "PING_FAILED"]
     assert len(ping_failed) == 1
     assert ping_failed[0]["detail"] == "boom"
 
-    finalized = [item for item in items if item["event"] == "FINALIZED"]
+    finalized = [item for item in items if item.get("event") == "FINALIZED"]
     assert len(finalized) == 1
 
 
@@ -416,9 +416,9 @@ def test_finalize_ping_and_ping_failed_write_both_fail_still_exits_zero(
     assert "ping failed and PING_FAILED write failed" in result.output
 
     items = table.scan()["Items"]
-    finalized = [item for item in items if item["event"] == "FINALIZED"]
+    finalized = [item for item in items if item.get("event") == "FINALIZED"]
     assert len(finalized) == 1
-    assert not [item for item in items if item["event"] == "PING_FAILED"]
+    assert not [item for item in items if item.get("event") == "PING_FAILED"]
 
 
 def test_optional_int_env_treats_jsonata_null_string_as_absent(monkeypatch):
