@@ -291,3 +291,38 @@ def test_pick_paper_empty_candidates_returns_none_without_calling_complete():
         raise AssertionError("complete must not be called with no candidates")
 
     assert pick_paper([], "agents", exploding_complete) is None
+
+
+def test_pick_prompt_prefers_papers_over_hn_in_both_modes():
+    from agentlab.scene_plan import build_pick_prompt
+
+    for mode in ("core", "novel"):
+        prompt = build_pick_prompt(
+            [{"source": "hn", "title": "T", "points": 100}], "interests", mode=mode
+        )
+        assert "Prefer candidates from arxiv or hf" in prompt
+
+
+def test_deep_read_pins_citation_to_fetch_url(monkeypatch):
+    from agentlab.scene_plan import deep_read
+
+    valid_plan = {
+        "title": "T",
+        "one_line_claim": "C.",
+        "mechanism_steps": [
+            {"label": f"L{i}", "detail": "D.", "narration": "N."} for i in range(3)
+        ],
+        "key_numbers": [],
+        "limits_or_caveats": "L.",
+        "street_test_question": "Q?",
+        "citation_url": "https://evil.example/hallucinated",
+    }
+    import json as _json
+
+    output = "# Digest\n\nBody.\n\n```json\n" + _json.dumps(valid_plan) + "\n```"
+    _digest, plan = deep_read(
+        "https://arxiv.org/abs/2607.07663",
+        fetch_text=lambda url: "paper text",
+        complete=lambda model, messages: output,
+    )
+    assert plan.citation_url == "https://arxiv.org/abs/2607.07663"

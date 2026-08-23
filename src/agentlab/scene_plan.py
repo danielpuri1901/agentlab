@@ -203,6 +203,12 @@ def deep_read(
         plan, error = _parse_scene_plan_verbose(plan_raw)
     if plan is None:
         raise ValueError(f"scene plan invalid after retry for {url}: {error}")
+    # The model never writes the citation: the fetch URL is ground truth
+    # (a hallucinated citation burned this lab once, see proposer.py).
+    plan.citation_url = url
+    # The model never writes the citation: the fetch URL is ground truth
+    # (a hallucinated citation burned this lab once, see proposer.py).
+    plan.citation_url = url
     return digest, plan
 
 
@@ -217,7 +223,14 @@ _NOVEL_INSTRUCTION = (
     "overlaps what he already tracks; the goal here is surprise, not "
     "relevance."
 )
-_CORE_INSTRUCTION = "Pick the single candidate MOST relevant to Daniel's interests below."
+_PAPER_PREFERENCE = (
+    " Prefer candidates from arxiv or hf over hn ones; pick an hn candidate"
+    " only if its title clearly refers to an actual paper."
+)
+_CORE_INSTRUCTION = (
+    "Pick the single candidate MOST relevant to Daniel's interests below."
+    + _PAPER_PREFERENCE
+)
 
 
 def _candidate_signal(candidate: dict) -> str:
@@ -238,7 +251,7 @@ def build_pick_prompt(candidates: list[dict], interests_text: str, mode: str) ->
         f"{c.get('title', '')} ({_candidate_signal(c)})"
         for i, c in enumerate(candidates, 1)
     )
-    instruction = _NOVEL_INSTRUCTION if mode == "novel" else _CORE_INSTRUCTION
+    instruction = (_NOVEL_INSTRUCTION + _PAPER_PREFERENCE) if mode == "novel" else _CORE_INSTRUCTION
     return (
         f"Candidates:\n{lines}\n\n"
         f"Daniel's interests:\n{interests_text}\n\n"

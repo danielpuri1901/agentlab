@@ -41,6 +41,12 @@ def normalize_title(title: str) -> str:
     t = title.lower()
     t = _NON_ALNUM_SPACE_RE.sub("", t)
     t = _WHITESPACE_RE.sub(" ", t).strip()
+    if not t:
+        # Non-ASCII titles would otherwise all collapse to "" and collide;
+        # fall back to a stable hash of the raw title.
+        import hashlib
+
+        return "x" + hashlib.sha1(title.encode("utf-8")).hexdigest()[:16]
     return t
 
 

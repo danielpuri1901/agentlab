@@ -225,3 +225,12 @@ def test_recent_seen_titles_respects_limit(fabric, monkeypatch):
         )
     titles = recent_seen_titles(table, limit=2)
     assert titles == ["Paper 3", "Paper 2"]
+
+
+def test_non_ascii_titles_do_not_collide():
+    from agentlab.papers_db import paper_identity
+
+    a = paper_identity("https://example.com/a", "深層学習の新手法")
+    b = paper_identity("https://example.com/b", "強化学習と探索")
+    assert a != b
+    assert a.startswith("title:x") and b.startswith("title:x")

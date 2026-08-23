@@ -105,7 +105,10 @@ def fetch_arxiv(client, max_results: int = 25) -> list[dict]:
     return entries
 
 
-def fetch_hn_front(client) -> list[dict]:
+def _hn_front_hits(client) -> list[dict]:
+    """One shared Algolia front-page fetch; both HN fetchers filter it locally
+    so a run that builds both pools hits the endpoint once per fetcher call,
+    not with duplicated request logic."""
     try:
         response = client.get(
             "https://hn.algolia.com/api/v1/search",
@@ -114,53 +117,36 @@ def fetch_hn_front(client) -> list[dict]:
         )
         if response.status_code != 200:
             return []
-        hits = response.json().get("hits", [])
+        return response.json().get("hits", [])
     except Exception:  # noqa: BLE001
         return []
-    out = []
-    for hit in hits:
-        title = hit.get("title") or ""
-        if any(k in title.lower() for k in KEYWORDS):
-            out.append(
-                {
-                    "source": "hn",
-                    "title": title,
-                    "url": hit.get("url")
-                    or f"https://news.ycombinator.com/item?id={hit.get('objectID')}",
-                    "points": hit.get("points") or 0,
-                }
-            )
-    return out
+
+
+def _hn_item(hit: dict) -> dict:
+    return {
+        "source": "hn",
+        "title": hit.get("title") or "",
+        "url": hit.get("url")
+        or f"https://news.ycombinator.com/item?id={hit.get('objectID')}",
+        "points": hit.get("points") or 0,
+    }
+
+
+def fetch_hn_front(client) -> list[dict]:
+    return [
+        _hn_item(hit)
+        for hit in _hn_front_hits(client)
+        if any(k in (hit.get("title") or "").lower() for k in KEYWORDS)
+    ]
 
 
 def fetch_hn_explore(client, min_points: int = 80) -> list[dict]:
     """HN front page for the explore pool: no keyword filter, high points only."""
-    try:
-        response = client.get(
-            "https://hn.algolia.com/api/v1/search",
-            params={"tags": "front_page", "hitsPerPage": 30},
-            timeout=30,
-        )
-        if response.status_code != 200:
-            return []
-        hits = response.json().get("hits", [])
-    except Exception:  # noqa: BLE001
-        return []
-    out = []
-    for hit in hits:
-        points = hit.get("points") or 0
-        if points < min_points:
-            continue
-        out.append(
-            {
-                "source": "hn",
-                "title": hit.get("title") or "",
-                "url": hit.get("url")
-                or f"https://news.ycombinator.com/item?id={hit.get('objectID')}",
-                "points": points,
-            }
-        )
-    return out
+    return [
+        _hn_item(hit)
+        for hit in _hn_front_hits(client)
+        if (hit.get("points") or 0) >= min_points
+    ]
 
 
 def fetch_hf_daily(client) -> list[dict]:
