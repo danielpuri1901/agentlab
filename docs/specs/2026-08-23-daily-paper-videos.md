@@ -56,10 +56,13 @@ The rating is the pipeline's outcome metric; "would implement" later cross-links
 - One new EventBridge Scheduler entry (10:30 Amsterdam) runs `worker explain` on the video image: it produces the fresh video, then the classic video.
 - Est. cost/day: two deep-read model calls (Sonnet-tier) + ~20 Fargate-minutes; well under $1/day. Bounded by the existing $50 alarm.
 
-## Roadmap of this pipeline
+## The flywheel (incremental, outcome-driven)
 
-- v1 (this build): the full loop, fresh + classic tracks, digest + video with voiceover and subtitles, ratings RECORDED, weekly tally ping.
-- v2 (after ratings data exists): the loop gates itself. The pick prompt and the template become champion/challenger subjects judged on Daniel's IMPLEMENT rate, and IMPLEMENT ratings cross-link to lab experiments that later implement the technique (the true outcome).
+The pipeline is deterministic everywhere except two prompts (pick, deep-read), so improving it means aligning those prompts with Daniel's labels.
+- Daniel's ratings (IMPLEMENT / LEARNED / SKIP) are the human labels; the pick prompt is an LLM judge choosing what he sees.
+- The loop: ratings accumulate in the ledger -> review where the judge's picks disagree with the labels -> tweak the prompt, following production prompt practice (Anthropic and LangChain prompt-engineering guidance) -> agreement climbs.
+- IMPLEMENT ratings additionally cross-link to lab experiments that later implement the technique; that link is the true outcome behind the label.
+- A weekly tally ping keeps the label data visible without dashboards.
 
 ## Explicitly out of scope for v1
 
