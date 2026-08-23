@@ -1,6 +1,15 @@
 """Tests for the proposer's external sources fetcher."""
 
-from agentlab.sources import fetch_arxiv, fetch_github_releases, fetch_hn_front, gather
+from agentlab.sources import (
+    fetch_arxiv,
+    fetch_github_releases,
+    fetch_hf_daily,
+    fetch_hn_explore,
+    fetch_hn_front,
+    gather,
+    gather_exploit,
+    gather_explore,
+)
 
 
 class FakeResponse:
@@ -146,12 +155,179 @@ def test_hn_front_page_filter():
     assert result[0]["points"] == 250
 
 
+def test_hf_daily_parses_real_observed_shape():
+    """Test fetch_hf_daily against the real live shape observed 2026-08-23:
+    a bare list of {"paper": {"id", "title", "upvotes", ...}, "title", ...}.
+    """
+    hf_json = [
+        {
+            "paper": {
+                "id": "2607.21596",
+                "title": (
+                    "FlowEvo: Self-Evolving Agents through the Co-Evolution "
+                    "of Workflows and Executable Skills"
+                ),
+                "upvotes": 2,
+                "publishedAt": "2026-08-20T00:00:00.000Z",
+            },
+            "title": (
+                "FlowEvo: Self-Evolving Agents through the Co-Evolution "
+                "of Workflows and Executable Skills"
+            ),
+            "publishedAt": "2026-08-20T00:00:00.000Z",
+        },
+        {
+            "paper": {
+                "id": "2608.00042",
+                "title": "Astrophysics Today: New Telescope Discoveries",
+                "upvotes": 41,
+            },
+            "title": "Astrophysics Today: New Telescope Discoveries",
+        },
+    ]
+
+    fake_client = FakeClient(
+        {
+            "huggingface.co/api/daily_papers": FakeResponse(200, json_data=hf_json),
+        }
+    )
+
+    result = fetch_hf_daily(fake_client)
+
+    assert len(result) == 2
+    assert all(r["source"] == "hf" for r in result)
+    assert result[0]["title"] == (
+        "FlowEvo: Self-Evolving Agents through the Co-Evolution "
+        "of Workflows and Executable Skills"
+    )
+    assert result[0]["url"] == "https://arxiv.org/abs/2607.21596"
+    assert result[0]["upvotes"] == 2
+    assert result[1]["url"] == "https://arxiv.org/abs/2608.00042"
+
+
+def test_hf_daily_fails_soft_on_bad_payload():
+    """Test fetch_hf_daily returns [] on non-200 without raising."""
+    fake_client = FakeClient(
+        {
+            "huggingface.co/api/daily_papers": FakeResponse(500),
+        }
+    )
+
+    assert fetch_hf_daily(fake_client) == []
+
+
+def test_hn_explore_points_threshold_no_keyword_needed():
+    """Test fetch_hn_explore keeps points >= 80 regardless of keywords,
+    and drops points < 80.
+    """
+    hn_json = {
+        "hits": [
+            {
+                "title": "Show HN: my cat's diary",  # no tracked keyword
+                "url": "https://example.com/cats",
+                "objectID": "11111",
+                "points": 80,  # kept: at threshold
+            },
+            {
+                "title": "A new kind of pasta sauce",  # no tracked keyword
+                "url": "https://example.com/pasta",
+                "objectID": "22222",
+                "points": 79,  # dropped: below threshold
+            },
+        ]
+    }
+
+    fake_client = FakeClient(
+        {
+            "hn.algolia.com": FakeResponse(200, json_data=hn_json),
+        }
+    )
+
+    result = fetch_hn_explore(fake_client)
+
+    assert len(result) == 1
+    assert result[0]["source"] == "hn"
+    assert result[0]["title"] == "Show HN: my cat's diary"
+    assert result[0]["points"] == 80
+
+
+def test_gather_exploit_tags_pool_exploit():
+    """Test gather_exploit tags every dict with pool='exploit'."""
+    fake_client = FakeClient(
+        {
+            "hn.algolia.com": FakeResponse(
+                200,
+                json_data={
+                    "hits": [
+                        {
+                            "title": "New agent harness released",
+                            "url": "https://example.com/harness",
+                            "objectID": "33333",
+                            "points": 200,
+                        }
+                    ]
+                },
+            ),
+        }
+    )
+
+    result = gather_exploit(client=fake_client)
+
+    assert len(result) == 1
+    assert all(r["pool"] == "exploit" for r in result)
+
+
+def test_gather_explore_tags_pool_explore():
+    """Test gather_explore combines HN (unfiltered, points>=80) and HF daily,
+    tagging every dict with pool='explore'.
+    """
+    fake_client = FakeClient(
+        {
+            "hn.algolia.com": FakeResponse(
+                200,
+                json_data={
+                    "hits": [
+                        {
+                            "title": "A totally unrelated but popular post",
+                            "url": "https://example.com/popular",
+                            "objectID": "44444",
+                            "points": 500,
+                        }
+                    ]
+                },
+            ),
+            "huggingface.co/api/daily_papers": FakeResponse(
+                200,
+                json_data=[
+                    {
+                        "paper": {
+                            "id": "2608.00099",
+                            "title": "Some Daily Paper",
+                            "upvotes": 10,
+                        },
+                        "title": "Some Daily Paper",
+                    }
+                ],
+            ),
+        }
+    )
+
+    result = gather_explore(client=fake_client)
+
+    assert len(result) == 2
+    assert all(r["pool"] == "explore" for r in result)
+    sources = {r["source"] for r in result}
+    assert sources == {"hn", "hf"}
+
+
 class NetworkError(Exception):
     """Fake network error for testing."""
 
 
 def test_gather_survives_total_network_failure():
-    """Test gather returns empty list on complete network failure."""
+    """Test gather (the gather_exploit alias) returns empty list on complete
+    network failure.
+    """
 
     def raise_exception(*args, **kwargs):
         raise NetworkError("Network error")
@@ -164,7 +340,27 @@ def test_gather_survives_total_network_failure():
         }
     )
 
+    assert gather is gather_exploit
+
     result = gather(client=fake_client)
 
     # Should return empty list, not raise
+    assert result == []
+
+
+def test_gather_explore_survives_total_network_failure():
+    """Test gather_explore returns empty list on complete network failure."""
+
+    def raise_exception(*args, **kwargs):
+        raise NetworkError("Network error")
+
+    fake_client = FakeClient(
+        {
+            "hn.algolia.com": raise_exception,
+            "huggingface.co/api/daily_papers": raise_exception,
+        }
+    )
+
+    result = gather_explore(client=fake_client)
+
     assert result == []

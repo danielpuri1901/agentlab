@@ -1,10 +1,18 @@
-"""Fresh external sources for the proposer: GitHub releases, arXiv, HN.
+"""Fresh external sources for the proposer: GitHub releases, arXiv, HN, HF.
 
 Each fetcher normalizes to small dicts and fails soft: a non-200,
 a malformed payload, or a network error yields fewer sources, never an
-exception out of gather(). The proposer treats an empty list as "no fresh
-sources today" and says so instead of inventing work (anti-collapse rule:
-fresh-external-source anchoring).
+exception out of gather_exploit()/gather_explore(). The proposer treats an
+empty list as "no fresh sources today" and says so instead of inventing work
+(anti-collapse rule: fresh-external-source anchoring).
+
+Two pools:
+- exploit: the keyword-filtered GitHub/arXiv/HN sweep (agent/eval/harness
+  territory Daniel already tracks). Every dict is tagged "pool": "exploit".
+- explore: high-signal picks with no keyword filter, meant to surface
+  things outside the tracked keyword set - HN front-page hits with
+  points >= 80, and the Hugging Face daily papers list. Every dict is
+  tagged "pool": "explore".
 """
 
 import xml.etree.ElementTree as ET
@@ -125,6 +133,83 @@ def fetch_hn_front(client) -> list[dict]:
     return out
 
 
-def gather(client=None) -> list[dict]:
+def fetch_hn_explore(client, min_points: int = 80) -> list[dict]:
+    """HN front page for the explore pool: no keyword filter, high points only."""
+    try:
+        response = client.get(
+            "https://hn.algolia.com/api/v1/search",
+            params={"tags": "front_page", "hitsPerPage": 30},
+            timeout=30,
+        )
+        if response.status_code != 200:
+            return []
+        hits = response.json().get("hits", [])
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for hit in hits:
+        points = hit.get("points") or 0
+        if points < min_points:
+            continue
+        out.append(
+            {
+                "source": "hn",
+                "title": hit.get("title") or "",
+                "url": hit.get("url")
+                or f"https://news.ycombinator.com/item?id={hit.get('objectID')}",
+                "points": points,
+            }
+        )
+    return out
+
+
+def fetch_hf_daily(client) -> list[dict]:
+    """Hugging Face daily papers list.
+
+    Observed live shape (checked 2026-08-23): a bare JSON list of objects,
+    each shaped like {"paper": {"id", "title", "upvotes", ...}, "title",
+    "publishedAt", ...}. The fields we need - id, title, upvotes - live
+    under the nested "paper" object.
+    """
+    try:
+        response = client.get("https://huggingface.co/api/daily_papers", timeout=30)
+        if response.status_code != 200:
+            return []
+        items = response.json()
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for item in items:
+        paper = item.get("paper") or {}
+        paper_id = paper.get("id") or ""
+        if not paper_id:
+            continue
+        out.append(
+            {
+                "source": "hf",
+                "title": paper.get("title") or item.get("title") or "",
+                "url": f"https://arxiv.org/abs/{paper_id}",
+                "upvotes": paper.get("upvotes") or 0,
+            }
+        )
+    return out
+
+
+def gather_exploit(client=None) -> list[dict]:
     client = client or httpx.Client()
-    return fetch_github_releases(client) + fetch_arxiv(client) + fetch_hn_front(client)
+    items = fetch_github_releases(client) + fetch_arxiv(client) + fetch_hn_front(client)
+    for item in items:
+        item["pool"] = "exploit"
+    return items
+
+
+# The proposer imports `gather`; keep it as a working alias for gather_exploit.
+gather = gather_exploit
+
+
+def gather_explore(client=None) -> list[dict]:
+    client = client or httpx.Client()
+    items = fetch_hn_explore(client) + fetch_hf_daily(client)
+    for item in items:
+        item["pool"] = "explore"
+    return items
