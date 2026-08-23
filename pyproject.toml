@@ -37,6 +37,12 @@ dev = [
     "ruff>=0.16.3",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "render: renders a real video via `uvx manim` + ffmpeg (slow, needs a network fetch on first use); excluded by default, run with `-m render`",
+]
+addopts = "-m 'not render'"
+
 [tool.ruff.lint.flake8-bugbear]
 # Typer's own documented pattern is `param: T = typer.Option(...)` /
 # `typer.Argument(...)` as the default value; both are effectively immutable
