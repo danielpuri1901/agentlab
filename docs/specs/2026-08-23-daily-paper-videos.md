@@ -64,6 +64,15 @@ The pipeline is deterministic everywhere except two prompts (pick, deep-read), s
 - IMPLEMENT ratings additionally cross-link to lab experiments that later implement the technique; that link is the true outcome behind the label.
 - A weekly tally ping keeps the label data visible without dashboards.
 
+### The golden set and the weekly auto-tuner (Daniel's design, 2026-08-23)
+
+- GOLDEN SET: docs/golden-papers.jsonl, entries {title, url, label: IMPLEMENT|LEARNED|SKIP, why (one line)}.
+  Seeded with this session's evidence-backed labels (SPADE, covert-coordination, RSI survey, Voyager: IMPLEMENT by demonstrated action; the meta-agent paper: "seemed implementable, premise failed scrutiny") plus 10-20 examples from Daniel.
+  Every week's ratings append to it, so the set grows itself.
+- WEEKLY AUTO-TUNER (activates once the golden set supports its gate, ~30+ labels): a Friday-evening scheduled agent aggregates the week's ratings, finds where the pick-judge disagreed with the labels, drafts a revised pick prompt, and evaluates old vs new on the golden set.
+  The swap gate is deterministic: the new prompt must score strictly better on agreement AND misrank none of a protected core subset; otherwise no change, findings ping Daniel instead.
+  This is the lab's first automated self-modification loop, deliberately bounded: creative rewrite, deterministic acceptance, regression-protected, human-visible.
+
 ## Explicitly out of scope for v1
 
 Freeform animation, more than two videos/day, embedding-based similarity, auto-updating the interest profile.
