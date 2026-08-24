@@ -1,4 +1,4 @@
-"""Video render pipeline: Polly narration, srt subtitles, Manim template.
+"""Video render pipeline: Polly narration, burned-in captions, Manim template.
 
 This module never imports manim; manim runs in a separate uvx-managed
 environment (see the docstring at the top of video_scenes.py) and is
@@ -13,14 +13,20 @@ scripts/videos/tournament_001_cliff.py as the reference): dark background,
 one accent color, step-by-step mechanism build with arrows, every text
 block inside safe margins. The model never writes animation code; a bad
 model day yields a boring video, never a broken one, because video_scenes.py
-only ever reads a validated ScenePlan plus a list of numbers (durations).
+only ever reads a validated ScenePlan plus a list of numbers (durations)
+plus the matching narration texts (captions).
 
 Concat pattern: render the whole scene as ONE Manim video, timed segment by
 segment from `durations` (one per narration clip) so the video's total
 length matches the narration exactly; separately concat the per-clip mp3s
-into one narration track; mux that track onto the video and burn subtitles
-built from the same clip texts (we own every spoken word, so subtitles are
-exact, no transcription).
+into one narration track; mux that track onto the video with a plain
+video+audio mux (no ffmpeg video filter). Captions are burned in by
+video_scenes.py itself, not by ffmpeg: the target environment's ffmpeg build
+lacks libass (`ffmpeg -filters` has no `subtitles` entry), so the `-vf
+subtitles=...` approach fails there with "Filter not found". A plain .srt is
+still generated as a sidecar artifact (for future use, e.g. platform
+upload), but nothing in the render path depends on ffmpeg being able to
+render it.
 """
 
 import json
@@ -190,8 +196,8 @@ def build_srt(clips: list[NarrationClip]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _write_scene_spec(plan: ScenePlan, durations: list[float]) -> Path:
-    spec = {"plan": plan.model_dump(), "durations": durations}
+def _write_scene_spec(plan: ScenePlan, durations: list[float], captions: list[str]) -> Path:
+    spec = {"plan": plan.model_dump(), "durations": durations, "captions": captions}
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", prefix="agentlab-scene-spec-", delete=False
     ) as handle:
@@ -210,16 +216,20 @@ def _find_rendered_video(out_dir: Path) -> Path:
 def render_scene_video(
     plan: ScenePlan, durations: list[float], out_dir, quality: str = "l"
 ) -> Path:
-    """Render the Manim scene only (silent, no subtitles) for `plan`, timed
-    by `durations` (one entry per agentlab.video_render.scene_texts entry).
+    """Render the Manim scene only (silent, captions burned in) for `plan`,
+    timed by `durations` (one entry per agentlab.video_render.scene_texts
+    entry). Captions are `scene_texts(plan)` itself, written into the spec
+    JSON alongside durations so video_scenes.py never has to re-derive
+    narration text from the plan structure.
     Shells out to `uvx --python 3.12 manim`; see module docstring for why
     that has to be a subprocess rather than an import."""
-    expected = len(scene_texts(plan))
+    texts = scene_texts(plan)
+    expected = len(texts)
     if len(durations) != expected:
         raise ValueError(f"durations has {len(durations)} entries, plan needs {expected}")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    spec_path = _write_scene_spec(plan, durations)
+    spec_path = _write_scene_spec(plan, durations, texts)
     env = dict(os.environ)
     env["SCENE_SPEC_JSON"] = str(spec_path)
     cmd = [
@@ -238,12 +248,6 @@ def render_scene_video(
     return _find_rendered_video(out_dir)
 
 
-def _escape_ffmpeg_path(path: Path) -> str:
-    # ffmpeg filter arguments treat `:` and `\` specially; escape both so a
-    # path with either (rare on macOS, but cheap to guard) survives intact.
-    return str(path).replace("\\", "\\\\").replace(":", "\\:")
-
-
 def _concat_audio(clips: list[NarrationClip], out_path: Path) -> Path:
     inputs = []
     for clip in clips:
@@ -255,7 +259,11 @@ def _concat_audio(clips: list[NarrationClip], out_path: Path) -> Path:
     return out_path
 
 
-def _mux_final(video_path: Path, audio_path: Path, srt_path: Path, out_path: Path) -> Path:
+def _mux_final(video_path: Path, audio_path: Path, out_path: Path) -> Path:
+    """Plain video+audio mux, no filter graph: the silent video already has
+    captions burned in by Manim, so nothing here needs to touch the video
+    stream, and `-c:v copy` just repackages it (no re-encode, no libass
+    dependency)."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -265,14 +273,12 @@ def _mux_final(video_path: Path, audio_path: Path, srt_path: Path, out_path: Pat
         str(video_path),
         "-i",
         str(audio_path),
-        "-vf",
-        f"subtitles={_escape_ffmpeg_path(srt_path)}",
         "-map",
         "0:v:0",
         "-map",
         "1:a:0",
         "-c:v",
-        "libx264",
+        "copy",
         "-c:a",
         "aac",
         "-shortest",
@@ -282,14 +288,18 @@ def _mux_final(video_path: Path, audio_path: Path, srt_path: Path, out_path: Pat
     return out_path
 
 
-def render_video(plan: ScenePlan, clips: list[NarrationClip], out_path) -> Path:
-    """Full pipeline: render the silent scene sized to the narration,
-    concat the narration clips, burn subtitles, mux. Returns out_path."""
+def render_video(plan: ScenePlan, clips: list[NarrationClip], out_path) -> tuple[Path, Path]:
+    """Full pipeline: render the scene (captions burned in, sized to the
+    narration), concat the narration clips, mux. Returns (video_path,
+    srt_path); the .srt is a sidecar artifact only (e.g. for a future
+    platform upload) -- nothing in this render path depends on it."""
     out_path = Path(out_path)
     work_dir = Path(tempfile.mkdtemp(prefix="agentlab-video-"))
     durations = [clip.seconds for clip in clips]
     silent_video = render_scene_video(plan, durations, work_dir / "render", quality="m")
     audio_path = _concat_audio(clips, work_dir / "narration.mp3")
-    srt_path = work_dir / "captions.srt"
+    srt_path = out_path.with_suffix(".srt")
+    srt_path.parent.mkdir(parents=True, exist_ok=True)
     srt_path.write_text(build_srt(clips), encoding="utf-8")
-    return _mux_final(silent_video, audio_path, srt_path, out_path)
+    video_path = _mux_final(silent_video, audio_path, out_path)
+    return video_path, srt_path

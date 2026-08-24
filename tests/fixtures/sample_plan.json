@@ -5,22 +5,26 @@
     {
       "label": "Bounded loop",
       "detail": "The system improves against a fixed external evaluator, not its own definition of better.",
-      "narration": "Most self-improving systems run a bounded loop. They improve against a fixed external evaluator, not their own idea of what counts as better."
+      "narration": "Most self-improving systems run a bounded loop. They improve against a fixed external evaluator, not their own idea of what counts as better.",
+      "kind": "loop"
     },
     {
       "label": "Evaluator",
       "detail": "Every loop is a claim that some signal can substitute for human judgment.",
-      "narration": "Every loop rests on an evaluator. The system is only as good as whatever decides what counts as an improvement."
+      "narration": "Every loop rests on an evaluator. The system is only as good as whatever decides what counts as an improvement.",
+      "kind": "gate"
     },
     {
       "label": "Hierarchy",
       "detail": "Signal reliability rises from a model's own confidence up to a formal proof.",
-      "narration": "Evaluators sit on a hierarchy. Formal proofs are strongest, then tests, then learned judges, then the model's own confidence, weakest of all."
+      "narration": "Evaluators sit on a hierarchy. Formal proofs are strongest, then tests, then learned judges, then the model's own confidence, weakest of all.",
+      "kind": "compare"
     },
     {
       "label": "Failure modes",
       "detail": "Self-confirming loops, model collapse, and reward hacking follow from skipping a rung.",
-      "narration": "Skip a rung and the loop breaks. Self-confirming loops, model collapse, and reward hacking all follow from that."
+      "narration": "Skip a rung and the loop breaks. Self-confirming loops, model collapse, and reward hacking all follow from that.",
+      "kind": "split"
     }
   ],
   "key_numbers": [

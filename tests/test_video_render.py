@@ -255,6 +255,10 @@ def test_render_scene_video_builds_expected_manim_command(monkeypatch, tmp_path,
     assert spec["durations"] == durations
     assert spec["plan"]["title"] == sample_plan.title
     assert spec["plan"]["citation_url"] == sample_plan.citation_url
+    # Captions are the narration text itself (scene_texts(plan)), so
+    # video_scenes.py can burn them in without re-deriving anything from
+    # the plan structure.
+    assert spec["captions"] == video_render.scene_texts(sample_plan)
 
 
 def test_render_scene_video_raises_on_duration_count_mismatch(sample_plan, tmp_path):
@@ -295,9 +299,9 @@ def test_render_video_orchestrates_render_concat_mux(monkeypatch, tmp_path, samp
     monkeypatch.setattr(video_render, "run_subprocess", fake_run)
 
     out_path = tmp_path / "final" / "video.mp4"
-    result = video_render.render_video(sample_plan, clips, out_path)
+    video_path, srt_path = video_render.render_video(sample_plan, clips, out_path)
 
-    assert result == out_path
+    assert video_path == out_path
 
     # render_scene_video was called with durations pulled straight from clips
     assert len(render_calls) == 1
@@ -314,14 +318,97 @@ def test_render_video_orchestrates_render_concat_mux(monkeypatch, tmp_path, samp
     filter_arg = concat_cmd[concat_cmd.index("-filter_complex") + 1]
     assert f"concat=n={len(clips)}:v=0:a=1[out]" in filter_arg
 
+    # Plain mux: no video filter at all (the target ffmpeg build has no
+    # libass, so `-vf subtitles=...` is off the table -- captions are
+    # burned in by Manim instead). -c:v copy since nothing touches video.
     assert mux_cmd[0] == "ffmpeg"
+    assert "-vf" not in mux_cmd
+    assert not any("subtitles=" in arg for arg in mux_cmd)
     assert str(fake_silent_video) in mux_cmd
     assert str(out_path) in mux_cmd
-    vf_arg = mux_cmd[mux_cmd.index("-vf") + 1]
-    assert vf_arg.startswith("subtitles=")
-    srt_path = Path(vf_arg[len("subtitles=") :])
+    assert mux_cmd[mux_cmd.index("-c:v") + 1] == "copy"
+
+    # The .srt is still generated as a sidecar next to the video, unused by
+    # ffmpeg but returned for future use.
+    assert srt_path == out_path.with_suffix(".srt")
     assert srt_path.exists()
     assert srt_path.read_text(encoding="utf-8") == video_render.build_srt(clips)
+
+
+# ---------------------------------------------------------------------------
+# video_scenes.py pure helpers: caption wrapping, key-number parsing. These
+# are extracted above video_scenes.py's `from manim import ...` (wrapped in
+# try/except there) specifically so they're importable and testable here
+# without manim installed -- caption presence in the actual render is
+# otherwise only covered by the scene-spec-contains-narration assertions
+# above and by the real render test at the bottom of this file.
+# ---------------------------------------------------------------------------
+
+
+def test_video_scenes_importable_without_manim():
+    # This machine's main venv does not have manim installed (by design,
+    # see the module docstrings); importing video_scenes.py must still
+    # succeed so its pure helpers are testable.
+    from agentlab import video_scenes
+
+    assert video_scenes._MANIM_AVAILABLE is False
+
+
+def test_caption_text_wraps_long_narration_at_caption_width():
+    from agentlab.video_scenes import CAPTION_WRAP_WIDTH, caption_text
+
+    long_text = (
+        "Most self-improving systems run a bounded loop against a fixed "
+        "external evaluator, not their own idea of what counts as better."
+    )
+    wrapped = caption_text(long_text)
+    lines = wrapped.split("\n")
+    assert len(lines) > 1
+    assert all(len(line) <= CAPTION_WRAP_WIDTH for line in lines)
+    assert wrapped.replace("\n", " ") == long_text
+
+
+def test_caption_text_leaves_short_text_on_one_line():
+    from agentlab.video_scenes import caption_text
+
+    assert caption_text("Short caption.") == "Short caption."
+
+
+def test_leading_number_parses_plain_and_suffixed_values():
+    from agentlab.video_scenes import leading_number
+
+    assert leading_number("1250") == (1250.0, "")
+    assert leading_number("74%") == (74.0, "%")
+    assert leading_number("1,250") == (1250.0, "")
+    assert leading_number("-3.5x") == (-3.5, "x")
+
+
+def test_leading_number_returns_none_for_non_numeric_value():
+    from agentlab.video_scenes import leading_number
+
+    assert leading_number("n/a") is None
+    assert leading_number("~roughly") is None
+
+
+def test_scene_spec_captions_feed_video_scenes_directly(sample_plan):
+    # Round-trip: the exact strings render_scene_video writes into the spec
+    # are what video_scenes.py's construct() would slice per segment and
+    # hand to caption_mobject() -- verify the slicing math lines up with
+    # scene_texts' segment ordering (title+claim, N steps, numbers, caveat,
+    # question), the same ordering construct() assumes.
+    from agentlab.video_scenes import caption_text
+
+    captions = video_render.scene_texts(sample_plan)
+    n_steps = len(sample_plan.mechanism_steps)
+    expected = 1 + n_steps + 1 + 1 + 1
+    assert len(captions) == expected
+
+    mech_captions = captions[1 : 1 + n_steps]
+    assert mech_captions == [step.narration for step in sample_plan.mechanism_steps]
+    for text in captions:
+        # caption_mobject() would call this on every entry; make sure none
+        # of them error or produce an empty caption.
+        assert caption_text(text)
 
 
 # ---------------------------------------------------------------------------
