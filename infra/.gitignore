@@ -5,3 +5,4 @@ terraform.tfvars
 image_tag.auto.tfvars
 tfplan
 .build/
+video_image_tag.auto.tfvars
