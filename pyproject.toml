@@ -36,6 +36,16 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.3",
 ]
+# Manim + mutagen for the explain track's render path (Task 6). Kept out of
+# the main `dependencies` and out of `dev` on purpose: this group is synced
+# only inside Dockerfile.video (`uv sync --group video`), never in the main
+# worker image - the render/Polly toolchain (and manim's own system-library
+# footprint: cairo, pango) has no business in the arm-runner/finalizer/
+# proposer image, which never renders a video.
+video = [
+    "manim>=0.19.0",
+    "mutagen>=1.47.0",
+]
 
 [tool.pytest.ini_options]
 markers = [

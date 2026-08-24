@@ -56,10 +56,22 @@ resource "aws_iam_role_policy" "scheduler" {
         ]
       },
       {
-        Sid      = "PassEcsRoles"
-        Effect   = "Allow"
-        Action   = ["iam:PassRole"]
-        Resource = [aws_iam_role.ecs_execution.arn, aws_iam_role.proposer_task.arn]
+        Sid    = "RunExplain"
+        Effect = "Allow"
+        Action = ["ecs:RunTask"]
+        Resource = [
+          "${aws_ecs_task_definition.explain.arn_without_revision}:*",
+        ]
+      },
+      {
+        Sid    = "PassEcsRoles"
+        Effect = "Allow"
+        Action = ["iam:PassRole"]
+        Resource = [
+          aws_iam_role.ecs_execution.arn,
+          aws_iam_role.proposer_task.arn,
+          aws_iam_role.explain_task.arn,
+        ]
         Condition = {
           StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" }
         }
@@ -116,6 +128,53 @@ resource "aws_scheduler_schedule" "proposer" {
         {
           name    = "proposer"
           command = each.value.command
+        }
+      ]
+    })
+
+    retry_policy {
+      maximum_retry_attempts = 1
+    }
+  }
+}
+
+# The daily-paper-video schedule (spec stage "Schedule and cost": "One new
+# EventBridge Scheduler entry (10:30 Amsterdam) runs `worker explain` on the
+# video image"). A single explicit resource rather than folding into the
+# `proposer_schedules` for_each above: that for_each shares one task
+# definition and one hardcoded container name ("proposer") across all its
+# entries, neither of which holds here (different task definition,
+# container name "explain") - a clone of the same block shape, targeting
+# the explain task definition instead.
+resource "aws_scheduler_schedule" "explain" {
+  name                         = "agentlab-explain"
+  schedule_expression          = "cron(30 10 * * ? *)"
+  schedule_expression_timezone = "Europe/Amsterdam"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  target {
+    arn      = aws_ecs_cluster.agentlab.arn
+    role_arn = aws_iam_role.scheduler.arn
+
+    ecs_parameters {
+      task_definition_arn = aws_ecs_task_definition.explain.arn
+      launch_type         = "FARGATE"
+
+      network_configuration {
+        subnets          = data.aws_subnets.default_public.ids
+        security_groups  = [aws_security_group.fargate_egress.id]
+        assign_public_ip = true
+      }
+    }
+
+    input = jsonencode({
+      containerOverrides = [
+        {
+          name    = "explain"
+          command = ["worker", "explain"]
         }
       ]
     })

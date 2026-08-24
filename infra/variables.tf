@@ -51,3 +51,9 @@ variable "telegram_chat_id" {
   type        = string
   default     = "6309668956"
 }
+
+variable "video_image_tag" {
+  description = "Tag of the `agentlab` ECR image the explain task definition runs (same repo as image_tag, different image - it carries the render toolchain from Dockerfile.video). scripts/build_and_push_video_image.sh (Task 6) pushes and tags images with '<git short sha>-video'; override with -var video_image_tag=<tag> at apply time to roll out a new build."
+  type        = string
+  default     = "latest-video"
+}

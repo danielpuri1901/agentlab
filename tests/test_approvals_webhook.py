@@ -162,6 +162,41 @@ def _get_proposal(table, pid):
     ).get("Item")
 
 
+def _file_video(table, key, track="core"):
+    """Raw put_item mirroring worker.py's video#<key> item shape (rating
+    fields start unset, as the worker writes them right after send_video)."""
+    table.put_item(
+        Item={
+            "experiment_id": f"video#{key}",
+            "sk": "video",
+            "track": track,
+            "url": "https://example.com/paper",
+            "title": "Title",
+            "digest_key": f"digests/{key}.md",
+            "video_key": f"videos/{key}.mp4",
+            "sent_ts": "2026-08-24T10:30:00.000000Z",
+            "rating": None,
+            "rating_ts": None,
+        }
+    )
+
+
+def _get_video(table, key):
+    return table.get_item(Key={"experiment_id": f"video#{key}", "sk": "video"}).get(
+        "Item"
+    )
+
+
+def _vid_keyboard(key):
+    return [
+        [
+            {"text": "IMPLEMENT", "callback_data": f"vid:{key}:implement"},
+            {"text": "LEARNED", "callback_data": f"vid:{key}:learned"},
+            {"text": "SKIP", "callback_data": f"vid:{key}:skip"},
+        ]
+    ]
+
+
 def test_wrong_secret_403(fabric, recorder):
     table, _sqs, _queue_url = fabric
     _file_proposal(table, "p1")
@@ -437,6 +472,140 @@ def test_auto_submit_failure_keeps_verdict_and_warns(fabric, recorder, monkeypat
     assert item["status"] == "APPROVED"
     toasts = [p["text"] for m, p in recorder if m == "answerCallbackQuery"]
     assert len(toasts) == 1 and "FAILED" in toasts[0] and "p-subfail" in toasts[0]
+
+
+def test_vid_rating_happy_path(fabric, recorder):
+    table, _sqs, _queue_url = fabric
+    _file_video(table, "core-20260824T103000Z-a1b2")
+    keyboard = _vid_keyboard("core-20260824T103000Z-a1b2")
+
+    response = webhook.handler(
+        make_event(
+            data="vid:core-20260824T103000Z-a1b2:implement",
+            text="video caption",
+            keyboard=keyboard,
+        ),
+        None,
+    )
+
+    assert response["statusCode"] == 200
+    item = _get_video(table, "core-20260824T103000Z-a1b2")
+    assert item["rating"] == "IMPLEMENT"
+    assert item["rating_ts"] is not None
+
+    assert [method for method, _payload in recorder] == [
+        "answerCallbackQuery",
+        "editMessageText",
+    ]
+    _toast_method, toast_payload = recorder[0]
+    assert toast_payload["text"] == "Rated: IMPLEMENT"
+    _edit_method, edit = recorder[1]
+    # The video's own buttons are stripped entirely (single-video message,
+    # so the row list goes to empty, sent explicitly).
+    assert edit["reply_markup"]["inline_keyboard"] == []
+    assert edit["text"] == "video caption"
+
+
+def test_vid_unknown_key_ignored(fabric, recorder):
+    table, _sqs, _queue_url = fabric
+
+    response = webhook.handler(make_event(data="vid:no-such-key:implement"), None)
+
+    assert response["statusCode"] == 200
+    assert _get_video(table, "no-such-key") is None
+    # Only the toast fires; no editMessageText for an unknown key.
+    assert [method for method, _payload in recorder] == ["answerCallbackQuery"]
+    _method, payload = recorder[0]
+    assert payload["text"] == "unknown video"
+
+
+def test_vid_second_rating_overwrites(fabric, recorder):
+    # Ruling: re-rating is allowed, last tap wins - unlike prop:*'s
+    # first-tap-wins semantics, a second vid: tap on the same key still
+    # succeeds and the stored rating reflects the most recent tap.
+    table, _sqs, _queue_url = fabric
+    _file_video(table, "novel-20260824T103000Z-c3d4")
+    keyboard = _vid_keyboard("novel-20260824T103000Z-c3d4")
+
+    first = webhook.handler(
+        make_event(data="vid:novel-20260824T103000Z-c3d4:learned", keyboard=keyboard),
+        None,
+    )
+    assert first["statusCode"] == 200
+    item_after_first = _get_video(table, "novel-20260824T103000Z-c3d4")
+    assert item_after_first["rating"] == "LEARNED"
+    first_ts = item_after_first["rating_ts"]
+    recorder.clear()
+
+    second = webhook.handler(
+        make_event(data="vid:novel-20260824T103000Z-c3d4:skip", keyboard=keyboard),
+        None,
+    )
+
+    assert second["statusCode"] == 200
+    item_after_second = _get_video(table, "novel-20260824T103000Z-c3d4")
+    assert item_after_second["rating"] == "SKIP"
+    assert item_after_second["rating_ts"] != first_ts
+
+    # The second tap gets its own "Rated:" toast, not an "already decided"
+    # style rejection - this is the behavior that distinguishes vid: from
+    # prop:'s first-tap-wins conditional.
+    toasts = [p["text"] for m, p in recorder if m == "answerCallbackQuery"]
+    assert toasts == ["Rated: SKIP"]
+
+
+def test_vid_foreign_user_ignored(fabric, recorder):
+    table, _sqs, _queue_url = fabric
+    _file_video(table, "classic-20260824T103000Z-e5f6")
+
+    response = webhook.handler(
+        make_event(from_id=42, data="vid:classic-20260824T103000Z-e5f6:implement"),
+        None,
+    )
+
+    assert response["statusCode"] == 200
+    item = _get_video(table, "classic-20260824T103000Z-e5f6")
+    assert item["rating"] is None
+    assert recorder == []
+
+
+def test_vid_malformed_action_ignored(fabric, recorder):
+    # A vid: prefix with a rating word outside {implement, learned, skip}
+    # must fall through to the generic "unknown callback data" branch (same
+    # as prop:'s malformed-action guard), not crash on the _VID_RATINGS
+    # lookup.
+    table, _sqs, _queue_url = fabric
+    _file_video(table, "core-20260824T103000Z-a1b2")
+
+    response = webhook.handler(
+        make_event(data="vid:core-20260824T103000Z-a1b2:maybe"), None
+    )
+
+    assert response["statusCode"] == 200
+    item = _get_video(table, "core-20260824T103000Z-a1b2")
+    assert item["rating"] is None
+    assert recorder == []
+
+
+def test_prop_and_vid_coexist(fabric, recorder):
+    # prop:* and vid:* are independent namespaces on the same webhook; a
+    # prop tap must not touch any video item and vice versa.
+    table, _sqs, _queue_url = fabric
+    _file_proposal(table, "p1")
+    _file_video(table, "core-20260824T103000Z-a1b2")
+
+    prop_response = webhook.handler(make_event(data="prop:p1:approve"), None)
+    assert prop_response["statusCode"] == 200
+    assert _get_proposal(table, "p1")["status"] == "APPROVED"
+    assert _get_video(table, "core-20260824T103000Z-a1b2")["rating"] is None
+    recorder.clear()
+
+    vid_response = webhook.handler(
+        make_event(data="vid:core-20260824T103000Z-a1b2:learned"), None
+    )
+    assert vid_response["statusCode"] == 200
+    assert _get_video(table, "core-20260824T103000Z-a1b2")["rating"] == "LEARNED"
+    assert _get_proposal(table, "p1")["status"] == "APPROVED"
 
 
 def test_verdict_write_stays_in_sync_with_proposals_module():

@@ -120,6 +120,78 @@ def _strip_buttons(markup: dict, pid: str) -> list:
     ]
 
 
+# vid:<video_key>:<implement|learned|skip> - the daily-paper-video rating
+# callback. A second, independent namespace on the same secret + Daniel-only
+# check as prop:*; the two never overlap in the `data` prefix, so this block
+# is a self-contained addition that never touches prop:* handling below.
+_VID_RATINGS = {"implement": "IMPLEMENT", "learned": "LEARNED", "skip": "SKIP"}
+
+
+def _set_rating(table, video_key: str, rating: str) -> bool:
+    """True if video_key names a real video# item and the rating was
+    written; False if the key is unknown (no write happens). Unlike
+    _set_verdict, this has no status-guard beyond existence: re-rating is
+    allowed by design (ruling: last tap wins), so a second tap on a known
+    key still returns True and overwrites rating/rating_ts."""
+    try:
+        table.update_item(
+            Key={"experiment_id": f"video#{video_key}", "sk": "video"},
+            UpdateExpression="SET rating = :r, rating_ts = :ts",
+            ConditionExpression="attribute_exists(experiment_id)",
+            ExpressionAttributeValues={":r": rating, ":ts": _now()},
+        )
+        return True
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+def _strip_vid_buttons(markup: dict, video_key: str) -> list:
+    prefix = f"vid:{video_key}:"
+    rows = markup.get("inline_keyboard") or []
+    return [
+        row
+        for row in rows
+        if not any(
+            str(button.get("callback_data", "")).startswith(prefix) for button in row
+        )
+    ]
+
+
+def _handle_vid(callback, table, video_key: str, action: str) -> dict:
+    rating = _VID_RATINGS[action]
+    known = _set_rating(table, video_key, rating)
+    toast = f"Rated: {rating}" if known else "unknown video"
+
+    try:
+        _telegram(
+            "answerCallbackQuery",
+            {"callback_query_id": callback["id"], "text": toast[:200]},
+        )
+        message = callback.get("message")
+        if message and known:
+            # Every button on a video message belongs to that one video (see
+            # worker.py's send_video buttons), so the stripped row list is
+            # always sent explicitly (even when empty) rather than only on
+            # a truthy check - otherwise Telegram would leave the rated
+            # video's buttons showing.
+            rows = _strip_vid_buttons(message.get("reply_markup") or {}, video_key)
+            _telegram(
+                "editMessageText",
+                {
+                    "chat_id": message["chat"]["id"],
+                    "message_id": message["message_id"],
+                    "text": message.get("text") or "",
+                    "reply_markup": {"inline_keyboard": rows},
+                },
+            )
+    except Exception as exc:  # noqa: BLE001 - message cosmetics must never lose a recorded rating
+        print(f"telegram call failed after rating write: {exc}")
+
+    return _ok()
+
+
 def handler(event, context):
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
     if headers.get("x-telegram-bot-api-secret-token") != _param(
@@ -141,6 +213,11 @@ def handler(event, context):
         return _ok()
 
     parts = (callback.get("data") or "").split(":")
+
+    if len(parts) == 3 and parts[0] == "vid" and parts[2] in _VID_RATINGS:
+        table = boto3.resource("dynamodb").Table(os.environ["STATE_TABLE"])
+        return _handle_vid(callback, table, parts[1], parts[2])
+
     if len(parts) != 3 or parts[0] != "prop" or parts[2] not in ("approve", "reject"):
         print(f"unknown callback data ignored: {callback.get('data')!r}")
         return _ok()

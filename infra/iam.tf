@@ -78,6 +78,7 @@ resource "aws_iam_role_policy" "ecs_execution" {
           "${aws_cloudwatch_log_group.arm_runner.arn}:*",
           "${aws_cloudwatch_log_group.finalizer.arn}:*",
           "${aws_cloudwatch_log_group.proposer.arn}:*",
+          "${aws_cloudwatch_log_group.explain.arn}:*",
         ]
       },
     ]
@@ -395,6 +396,111 @@ resource "aws_iam_role_policy" "proposer_task" {
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
         Resource = "${aws_s3_bucket.results.arn}/proposals/*"
+      },
+    ]
+  })
+}
+
+# ---------------------------------------------------------------------------
+# Explain task role: assumed by the daily-paper-video Fargate task
+# (agentlab-explain, ecs.tf).
+# ---------------------------------------------------------------------------
+
+resource "aws_iam_role" "explain_task" {
+  name = "agentlab-explain-task"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "ecs-tasks.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "explain_task" {
+  name = "explain-runtime"
+  role = aws_iam_role.explain_task.id
+
+  # Exactly what `worker explain` does at runtime (src/agentlab/worker.py's
+  # _run_explain_track + video_render.py): a Bedrock call per track (pick +
+  # deep-read), telegram params to notify(), full read/write on the state
+  # table (seen-papers dedup via papers_db.is_seen/mark_seen is a
+  # Get+conditional Put; the video# ledger item is a Put then, from the
+  # webhook Lambda's vid: callback, an Update - this role only ever writes,
+  # never receives that Update, but Get/Put/Update/Delete/Query/Scan is the
+  # full CRUD surface the Task 6 brief specifies for the state table so the
+  # role is not re-scoped every time a future explain-track helper adds one
+  # more access pattern), S3 read/write scoped to its own two prefixes
+  # (digests/ - the full-digest artifact; videos/ - the rendered mp4), and
+  # Polly (voice verification + narration synthesis).
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BedrockInvoke"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+          "bedrock:Converse",
+          "bedrock:ConverseStream",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid      = "TelegramParams"
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = [local.telegram_token_param_arn, local.telegram_chat_id_param_arn]
+      },
+      {
+        Sid    = "StateTable"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+          "dynamodb:Scan",
+        ]
+        Resource = aws_dynamodb_table.state.arn
+      },
+      {
+        Sid    = "VideoArtifacts"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+        ]
+        Resource = [
+          "${aws_s3_bucket.results.arn}/digests/*",
+          "${aws_s3_bucket.results.arn}/videos/*",
+        ]
+      },
+      {
+        # Neither Polly action supports resource-level permissions - verified
+        # against https://docs.aws.amazon.com/polly/latest/dg/api-permissions-reference.html
+        # on 2026-08-24, whose own permissions table lists Resource "*" for
+        # both SynthesizeSpeech and DescribeVoices ("Because Amazon Polly
+        # doesn't support permissions for actions at the resource-level, most
+        # policies specify a wildcard character (*) as the Resource value."),
+        # the same reasoning already used for BedrockInvoke above and for
+        # EcrAuthToken in the ecs_execution policy.
+        Sid    = "PollyNarration"
+        Effect = "Allow"
+        Action = [
+          "polly:SynthesizeSpeech",
+          "polly:DescribeVoices",
+        ]
+        Resource = "*"
       },
     ]
   })
