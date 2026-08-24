@@ -345,13 +345,17 @@ def test_render_video_orchestrates_render_concat_mux(monkeypatch, tmp_path, samp
 # ---------------------------------------------------------------------------
 
 
-def test_video_scenes_importable_without_manim():
-    # This machine's main venv does not have manim installed (by design,
-    # see the module docstrings); importing video_scenes.py must still
-    # succeed so its pure helpers are testable.
+def test_video_scenes_importable_with_or_without_manim():
+    # The main venv has no manim (by design); the video image DOES. The
+    # invariant is that the import succeeds and matches the environment,
+    # not that manim is absent (this test runs inside both environments,
+    # including the video image's build gate).
+    import importlib.util
+
     from agentlab import video_scenes
 
-    assert video_scenes._MANIM_AVAILABLE is False
+    expected = importlib.util.find_spec("manim") is not None
+    assert video_scenes._MANIM_AVAILABLE is expected
 
 
 def test_caption_text_wraps_long_narration_at_caption_width():
