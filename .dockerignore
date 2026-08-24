@@ -33,3 +33,5 @@ __pycache__/
 
 # Editor/OS cruft.
 .DS_Store
+media/
+scripts/videos/media/
