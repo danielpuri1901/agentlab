@@ -385,7 +385,50 @@ def test_flush_video_downloads_from_s3_and_sends(fabric_with_s3, monkeypatch):
     assert remaining == []
 
 
-def test_flush_video_without_s3_client_raises(fabric, monkeypatch):
+def test_flush_video_s3_download_failure_degrades_and_later_pings_still_flush(
+    fabric_with_s3, telegram_calls, monkeypatch
+):
+    # The queued object is missing from S3 (deleted, expired, whatever);
+    # download_file raises a real ClientError from moto. That one ping must
+    # degrade to text-plus-note and get deleted rather than raising and
+    # leaving the rest of the queue (including the ping queued after it)
+    # stuck forever.
+    table, ssm, s3 = fabric_with_s3
+    _quiet(monkeypatch)
+    notify(
+        table,
+        ssm,
+        "video that vanished",
+        buttons=[[("SKIP", "vid:k5:skip")]],
+        video_path="/tmp/does-not-exist.mp4",
+        video_s3_key="videos/does-not-exist.mp4",
+    )
+    notify(table, ssm, "a plain ping queued right after")
+
+    _daytime(monkeypatch)
+    sent = flush_pending(table, ssm, s3, BUCKET)
+
+    assert sent == 2
+    assert len(telegram_calls) == 2
+    first_url, first_kwargs = telegram_calls[0]
+    assert first_url.endswith("/sendMessage")
+    assert "(video unavailable)" in first_kwargs["json"]["text"]
+    second_url, second_kwargs = telegram_calls[1]
+    assert second_url.endswith("/sendMessage")
+    assert second_kwargs["json"]["text"] == "a plain ping queued right after"
+    remaining = [
+        i for i in table.scan()["Items"] if i["experiment_id"] == PENDING_PARTITION
+    ]
+    assert remaining == []
+
+
+def test_flush_video_without_s3_client_degrades_to_text_not_raise(
+    fabric, telegram_calls, monkeypatch
+):
+    # A queued video ping flushed with no s3_client/bucket (e.g. flush-pings
+    # ran without RESULTS_BUCKET set) must not wedge the queue: it degrades
+    # to the text ping with a "(video unavailable)" note, and the item is
+    # still deleted like any other successful delivery.
     table, ssm = fabric
     _quiet(monkeypatch)
     notify(
@@ -396,5 +439,14 @@ def test_flush_video_without_s3_client_raises(fabric, monkeypatch):
         video_s3_key="videos/k4.mp4",
     )
     _daytime(monkeypatch)
-    with pytest.raises(RuntimeError):
-        flush_pending(table, ssm)
+    sent = flush_pending(table, ssm)
+
+    assert sent == 1
+    assert len(telegram_calls) == 1
+    url, kwargs = telegram_calls[0]
+    assert url.endswith("/sendMessage")
+    assert "(video unavailable)" in kwargs["json"]["text"]
+    remaining = [
+        i for i in table.scan()["Items"] if i["experiment_id"] == PENDING_PARTITION
+    ]
+    assert remaining == []

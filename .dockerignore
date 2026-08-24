@@ -4,9 +4,13 @@
 # Local experiment output - never needed to build or test the worker image.
 results/
 
-# Documentation and planning artifacts - not part of the runtime or test surface.
-docs/
+# Planning artifacts - not part of the runtime or test surface.
 .superpowers/
+
+# docs/ is NOT excluded: worker.py's explain_command reads
+# docs/classics.json and docs/interests.md at runtime inside the worker
+# container (src/agentlab/worker.py's CLASSICS_PATH/INTERESTS_PATH, resolved
+# relative to the repo root under /app).
 
 # VCS metadata.
 .git/

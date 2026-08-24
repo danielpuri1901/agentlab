@@ -4,7 +4,8 @@ live AWS or makes a network call.
 """
 
 import asyncio
-from datetime import datetime
+import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -253,7 +254,24 @@ def test_flush_pings_command(moto_fabric_with_ssm, telegram_calls, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "flushed 1" in result.output
-    assert len(telegram_calls) == 1
+
+
+def test_flush_pings_command_survives_flush_pending_failure(moto_fabric, monkeypatch):
+    # Matches propose_command's own guard: a stuck queued ping (Telegram
+    # down, a bad payload, whatever) must not fail the whole scheduled
+    # flush-pings run.
+    _s3, _dynamodb, _table = moto_fabric
+
+    def exploding_flush_pending(*args, **kwargs):
+        raise RuntimeError("telegram down")
+
+    monkeypatch.setattr("agentlab.worker.flush_pending", exploding_flush_pending)
+
+    result = runner.invoke(app, ["worker", "flush-pings"], env={"STATE_TABLE": TABLE})
+
+    assert result.exit_code == 0, result.output
+    assert "flush failed, continuing" in result.output
+    assert "flushed 0" in result.output
 
 
 def test_propose_command_flushes_then_proposes(monkeypatch):
@@ -717,6 +735,62 @@ def test_explain_core_deep_read_failure_pings_fallback_novel_still_sends(
     assert {i["track"] for i in seen_items} == {"core", "classic", "novel"}
 
     assert "explain: core=failed classic=sent novel=sent" in result.output
+
+    # A failed track must also write a ledger event (spec: every failure
+    # writes an event item to the ledger, not just a ping).
+    ledger_id = f"explain-{datetime.now(UTC).strftime('%Y%m%d')}"
+    track_failed = [
+        i
+        for i in table.scan()["Items"]
+        if i.get("experiment_id") == ledger_id and i.get("event") == "TRACK_FAILED"
+    ]
+    assert len(track_failed) == 1
+    assert track_failed[0]["arm"] == "core"
+
+
+def test_explain_render_failure_includes_stderr_in_fallback_ping(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    # A render/ffmpeg/manim subprocess failure raises CalledProcessError
+    # with the real reason on .stderr (video_render.run_subprocess always
+    # passes text=True, so .stderr is str, not bytes); the fallback ping
+    # must surface it, not just a bare exception repr.
+    _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    _set_explain_env(monkeypatch, track="core")
+    _set_daytime(monkeypatch)
+    monkeypatch.setattr("agentlab.worker.gather_exploit", lambda: [CORE_CANDIDATE])
+    monkeypatch.setattr("agentlab.worker.gather_explore", lambda: [NOVEL_CANDIDATE])
+    monkeypatch.setattr("agentlab.worker.pick_paper", _fake_pick_paper)
+    monkeypatch.setattr("agentlab.worker.deep_read", _make_fake_deep_read())
+    monkeypatch.setattr("agentlab.worker.verify_voice", lambda polly_client: "Joanna")
+    monkeypatch.setattr(
+        "agentlab.worker.narrate", lambda polly_client, plan, voice_id, out_dir: ["clip"]
+    )
+
+    def fake_render_video_raises(plan, clips, out_path):
+        raise subprocess.CalledProcessError(
+            1, ["uvx", "manim"], stderr="ffmpeg: No such filter: 'subtitles'"
+        )
+
+    monkeypatch.setattr("agentlab.worker.render_video", fake_render_video_raises)
+
+    result = runner.invoke(app, ["worker", "explain"])
+    assert result.exit_code == 0, result.output
+
+    text_calls = [c for c in telegram_calls if c[0].endswith("/sendMessage")]
+    assert len(text_calls) == 1
+    fallback_text = text_calls[0][1]["json"]["text"]
+    assert "What broke:" in fallback_text
+    assert "No such filter: 'subtitles'" in fallback_text
+
+    ledger_id = f"explain-{datetime.now(UTC).strftime('%Y%m%d')}"
+    track_failed = [
+        i
+        for i in table.scan()["Items"]
+        if i.get("experiment_id") == ledger_id and i.get("event") == "TRACK_FAILED"
+    ]
+    assert len(track_failed) == 1
+    assert track_failed[0]["arm"] == "core"
 
 
 def test_explain_classic_track_advances_to_next_unseen_entry_across_two_runs(

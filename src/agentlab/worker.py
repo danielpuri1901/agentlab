@@ -17,6 +17,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -165,7 +166,11 @@ def flush_pings_command() -> None:
     table = boto3.resource("dynamodb").Table(state_table)
     ssm_client = boto3.client("ssm")
     s3_client = boto3.client("s3")
-    count = flush_pending(table, ssm_client, s3_client, results_bucket)
+    try:
+        count = flush_pending(table, ssm_client, s3_client, results_bucket)
+    except Exception as exc:  # noqa: BLE001 - a stuck queued ping must not fail the schedule
+        typer.echo(f"flush failed, continuing: {exc}", err=True)
+        count = 0
     typer.echo(f"flushed {count} pending pings")
 
 
@@ -559,14 +564,42 @@ def explain_command() -> None:
             )
         except Exception as exc:  # noqa: BLE001 - one track's failure must not sink the others
             statuses[track] = "failed"
+
+            # Every failed track writes a ledger event, same shape as
+            # run-arm's ARM_FAILED, before the fallback ping - a failure
+            # must be recorded even if the ping itself then also fails.
+            try:
+                transition(
+                    table,
+                    f"explain-{datetime.now(UTC).strftime('%Y%m%d')}",
+                    "TRACK_FAILED",
+                    track,
+                    str(exc)[:200],
+                )
+            except Exception as ledger_exc:  # noqa: BLE001 - a ledger write failure must not block the ping
+                typer.echo(f"ledger write failed for {track}: {ledger_exc}", err=True)
+
+            # A render/ffmpeg/manim subprocess failure carries the real
+            # reason on .stderr; surface it so Daniel's ping says what
+            # broke instead of just a bare CalledProcessError repr.
+            stderr_note = ""
+            if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+                stderr_text = exc.stderr
+                if isinstance(stderr_text, bytes):
+                    stderr_text = stderr_text.decode(errors="replace")
+                stderr_note = f"\nWhat broke: {stderr_text[:400]}"
+
             if partial.get("digest_url"):
                 claim = partial.get("claim", "")
                 fallback = (
                     f"No video today for the {track} track. {claim}\n"
-                    f"Read the full digest instead.\n{partial['digest_url']}"
+                    f"Read the full digest instead.\n{partial['digest_url']}{stderr_note}"
                 ).strip()
             else:
-                fallback = f"No video today for the {track} track. Error: {str(exc)[:400]}"
+                fallback = (
+                    f"No video today for the {track} track. "
+                    f"Error: {str(exc)[:400]}{stderr_note}"
+                )
             try:
                 notify(table, ssm_client, fallback)
             except Exception as ping_exc:  # noqa: BLE001 - never mask the track error

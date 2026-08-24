@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
 TOKEN_PARAM = "/agentlab/telegram/bot-token"
 CHAT_ID_PARAM = "/agentlab/telegram/chat-id"
@@ -185,7 +186,12 @@ def flush_pending(table, ssm_client, s3_client=None, bucket: str | None = None) 
     quiet hours.
     A queued video ping (payload carries "video_s3_key") needs `s3_client`
     and `bucket` to re-download the file to a tmp path before sending;
-    callers that never queue videos may omit both.
+    callers that never queue videos may omit both. A lost or inaccessible
+    S3 object must never wedge the rest of the queue: if the download can't
+    happen at all (no s3_client/bucket) or fails (ClientError, e.g. the
+    object expired or was deleted), that one ping degrades to its text plus
+    a "(video unavailable)" note instead of raising, and is still deleted
+    like any other successful delivery, so later pings still flush.
     """
     # Accumulate items across pages
     items = []
@@ -213,16 +219,20 @@ def flush_pending(table, ssm_client, s3_client=None, bucket: str | None = None) 
             if "photo_b64" in payload
             else None
         )
+        text = payload["text"]
         video_path = None
         if "video_s3_key" in payload:
             if s3_client is None or bucket is None:
-                raise RuntimeError(
-                    "queued video ping needs s3_client and bucket to flush"
-                )
-            tmp_dir = tempfile.mkdtemp(prefix="agentlab-flush-video-")
-            video_path = str(Path(tmp_dir) / "video.mp4")
-            s3_client.download_file(bucket, payload["video_s3_key"], video_path)
-        _deliver(config, payload["text"], payload.get("buttons"), photo, video_path)
+                text = text + "\n(video unavailable)"
+            else:
+                tmp_dir = tempfile.mkdtemp(prefix="agentlab-flush-video-")
+                candidate_path = str(Path(tmp_dir) / "video.mp4")
+                try:
+                    s3_client.download_file(bucket, payload["video_s3_key"], candidate_path)
+                    video_path = candidate_path
+                except ClientError:
+                    text = text + "\n(video unavailable)"
+        _deliver(config, text, payload.get("buttons"), photo, video_path)
         table.delete_item(
             Key={"experiment_id": PENDING_PARTITION, "sk": item["sk"]}
         )

@@ -217,9 +217,6 @@ def deep_read(
     # The model never writes the citation: the fetch URL is ground truth
     # (a hallucinated citation burned this lab once, see proposer.py).
     plan.citation_url = url
-    # The model never writes the citation: the fetch URL is ground truth
-    # (a hallucinated citation burned this lab once, see proposer.py).
-    plan.citation_url = url
     return digest, plan
 
 
