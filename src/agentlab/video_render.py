@@ -196,6 +196,24 @@ def build_srt(clips: list[NarrationClip]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _manim_command() -> list[str]:
+    """Pick the manim invocation for this environment.
+
+    The video image installs manim in the project venv (Dockerfile.video's
+    `--group video`), so run it in-process via the current interpreter; on
+    Daniel's laptop the main venv deliberately has no manim (dependency
+    conflict), so fall back to the uvx-isolated install. The live failure
+    this guards against: uvx inside the container tried to resolve manim
+    from PyPI at runtime and died (explain run 2026-08-25, all 3 tracks).
+    """
+    import importlib.util
+    import sys
+
+    if importlib.util.find_spec("manim") is not None:
+        return [sys.executable, "-m", "manim"]
+    return ["uvx", "--python", "3.12", "manim"]
+
+
 def _write_scene_spec(plan: ScenePlan, durations: list[float], captions: list[str]) -> Path:
     spec = {"plan": plan.model_dump(), "durations": durations, "captions": captions}
     with tempfile.NamedTemporaryFile(
@@ -232,11 +250,7 @@ def render_scene_video(
     spec_path = _write_scene_spec(plan, durations, texts)
     env = dict(os.environ)
     env["SCENE_SPEC_JSON"] = str(spec_path)
-    cmd = [
-        "uvx",
-        "--python",
-        "3.12",
-        "manim",
+    cmd = _manim_command() + [
         "render",
         f"-q{quality}",
         "--media_dir",

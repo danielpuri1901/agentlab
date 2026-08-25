@@ -431,3 +431,24 @@ def test_render_scene_video_real_manim_output(tmp_path, sample_plan):
     assert video_path.exists()
     duration = video_render.ffprobe_duration(video_path)
     assert duration > 30
+
+
+def test_manim_command_prefers_in_env_manim(monkeypatch):
+    import importlib.util
+    import sys
+
+    from agentlab.video_render import _manim_command
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name: object() if name == "manim" else real_find_spec(name),
+    )
+    assert _manim_command() == [sys.executable, "-m", "manim"]
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name: None if name == "manim" else real_find_spec(name),
+    )
+    assert _manim_command() == ["uvx", "--python", "3.12", "manim"]
