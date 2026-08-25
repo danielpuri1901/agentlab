@@ -34,6 +34,9 @@ The rating is the pipeline's outcome metric; "would implement" later cross-links
    The video is the retention layer; the digest is the depth layer; the street-test question is the bridge between them.
    Grounding rule: every number must appear in the fetched text; the prompt forbids attributing anything the source does not say (same rule as the proposer).
 5. RENDER (deterministic): a fixed Manim template turns any valid scene plan into the video.
+   CONTENT-SPECIFIC VISUALS (Daniel's ruling 2026-08-25, after the first live videos looked identical): the scene plan carries a per-paper mechanism DIAGRAM as data: nodes (id, short label, optional emoji icon) and edges (from, to, optional label), plus which nodes/edges each mechanism step activates.
+   The template renders THIS paper's diagram (a harness paper shows user->LLM->tools->memory; a moon paper shows the moon icon) and animates activation step by step; motifs animate ON the diagram.
+   The model still writes only data; the vocabulary is nodes, edges, icons, and motif kinds, never code.
    Scene skeleton: title card -> claim -> mechanism steps animating one by one -> numbers -> caveat -> question card.
    VOICEOVER: Amazon Polly (neural TTS) narrates each scene's narration text; scene durations are set from the measured audio clip lengths; ffmpeg muxes audio in.
    SUBTITLES: burned in from the same narration text (we own every spoken word, so subtitles are exact, no transcription).
