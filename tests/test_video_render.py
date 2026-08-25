@@ -235,6 +235,11 @@ def test_render_scene_video_builds_expected_manim_command(monkeypatch, tmp_path,
         return _fake_manim_run(media_dir)(cmd, **kwargs)
 
     monkeypatch.setattr(video_render, "run_subprocess", fake_run)
+    # Pin the environment branch so this test passes both on the laptop
+    # (no manim) and inside the video image's build gate (manim present).
+    monkeypatch.setattr(
+        video_render, "_manim_command", lambda: ["uvx", "--python", "3.12", "manim"]
+    )
     durations = video_render.default_scene_durations(sample_plan)
 
     result = video_render.render_scene_video(sample_plan, durations, media_dir, quality="l")
