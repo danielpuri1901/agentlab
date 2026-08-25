@@ -101,12 +101,17 @@ def test_mechanism_steps_seven_is_rejected():
     assert parse_scene_plan(json.dumps(_plan_kwargs(mechanism_steps=seven_steps))) is None
 
 
-def test_overlong_narration_rejected():
+def test_overlong_narration_clipped_by_parse_but_rejected_by_model():
+    # Direct model construction stays strict (the schema is the contract);
+    # parse_scene_plan clips lengths instead of failing (ruling 2026-08-25:
+    # a truncated narration still makes a video, a dead track makes nothing).
     bad_steps = copy.deepcopy(VALID_PLAN_DICT["mechanism_steps"])
     bad_steps[0]["narration"] = "x" * 281
     with pytest.raises(ValidationError):
         ScenePlan(**_plan_kwargs(mechanism_steps=bad_steps))
-    assert parse_scene_plan(json.dumps(_plan_kwargs(mechanism_steps=bad_steps))) is None
+    plan = parse_scene_plan(json.dumps(_plan_kwargs(mechanism_steps=bad_steps)))
+    assert plan is not None
+    assert len(plan.mechanism_steps[0].narration) == 280
 
 
 def test_key_numbers_bounds():
@@ -341,3 +346,42 @@ def test_mechanism_step_kind_defaults_and_validates():
         raise AssertionError("unknown kind must be rejected")
     except VE:
         pass
+
+
+def test_overlong_strings_clip_instead_of_failing():
+    import json as _json
+
+    from agentlab.scene_plan import MAX_CLAIM, MAX_NARRATION, parse_scene_plan
+
+    plan_dict = {
+        "title": "T" * 500,
+        "one_line_claim": "C" * 500,
+        "mechanism_steps": [
+            {"label": "L" * 100, "detail": "D" * 500, "narration": "N" * 500}
+            for _ in range(3)
+        ],
+        "key_numbers": [{"value": "V" * 50, "meaning": "M" * 200}],
+        "limits_or_caveats": "X" * 500,
+        "street_test_question": "Q" * 500,
+        "citation_url": "https://arxiv.org/abs/2608.23493",
+    }
+    plan = parse_scene_plan(_json.dumps(plan_dict))
+    assert plan is not None
+    assert len(plan.one_line_claim) == MAX_CLAIM
+    assert len(plan.mechanism_steps[0].narration) == MAX_NARRATION
+
+
+def test_structural_violations_still_fail():
+    import json as _json
+
+    from agentlab.scene_plan import parse_scene_plan
+
+    plan_dict = {
+        "title": "T",
+        "one_line_claim": "C",
+        "mechanism_steps": [],
+        "limits_or_caveats": "X",
+        "street_test_question": "Q",
+        "citation_url": "u",
+    }
+    assert parse_scene_plan(_json.dumps(plan_dict)) is None
