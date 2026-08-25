@@ -490,7 +490,7 @@ def test_vid_rating_happy_path(fabric, recorder):
 
     assert response["statusCode"] == 200
     item = _get_video(table, "core-20260824T103000Z-a1b2")
-    assert item["rating"] == "IMPLEMENT"
+    assert item["rating"] == "COOL"
     assert item["rating_ts"] is not None
 
     assert [method for method, _payload in recorder] == [
@@ -498,7 +498,7 @@ def test_vid_rating_happy_path(fabric, recorder):
         "editMessageText",
     ]
     _toast_method, toast_payload = recorder[0]
-    assert toast_payload["text"] == "Rated: IMPLEMENT"
+    assert toast_payload["text"] == "Rated: COOL"
     _edit_method, edit = recorder[1]
     # The video's own buttons are stripped entirely (single-video message,
     # so the row list goes to empty, sent explicitly).
@@ -533,7 +533,7 @@ def test_vid_second_rating_overwrites(fabric, recorder):
     )
     assert first["statusCode"] == 200
     item_after_first = _get_video(table, "novel-20260824T103000Z-c3d4")
-    assert item_after_first["rating"] == "LEARNED"
+    assert item_after_first["rating"] == "MEH"
     first_ts = item_after_first["rating_ts"]
     recorder.clear()
 
@@ -604,7 +604,7 @@ def test_prop_and_vid_coexist(fabric, recorder):
         make_event(data="vid:core-20260824T103000Z-a1b2:learned"), None
     )
     assert vid_response["statusCode"] == 200
-    assert _get_video(table, "core-20260824T103000Z-a1b2")["rating"] == "LEARNED"
+    assert _get_video(table, "core-20260824T103000Z-a1b2")["rating"] == "MEH"
     assert _get_proposal(table, "p1")["status"] == "APPROVED"
 
 

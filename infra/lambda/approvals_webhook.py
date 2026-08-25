@@ -124,7 +124,16 @@ def _strip_buttons(markup: dict, pid: str) -> list:
 # callback. A second, independent namespace on the same secret + Daniel-only
 # check as prop:*; the two never overlap in the `data` prefix, so this block
 # is a self-contained addition that never touches prop:* handling below.
-_VID_RATINGS = {"implement": "IMPLEMENT", "learned": "LEARNED", "skip": "SKIP"}
+# COOL/MEH/SKIP measure immediate reaction (Daniel's ruling 2026-08-25);
+# implement/learned remain as LEGACY aliases so buttons on already-sent
+# messages keep working, mapped onto the new vocabulary.
+_VID_RATINGS = {
+    "cool": "COOL",
+    "meh": "MEH",
+    "skip": "SKIP",
+    "implement": "COOL",
+    "learned": "MEH",
+}
 
 
 def _set_rating(table, video_key: str, rating: str) -> bool:

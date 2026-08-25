@@ -485,10 +485,15 @@ def _run_explain_track(
         s3_client.upload_file(str(video_path), bucket, video_key)
 
         caption = f"{plan.one_line_claim}\n\n{plan.street_test_question}\n\n{digest_url}"
+        # Ratings measure Daniel's immediate reaction (Daniel's ruling
+        # 2026-08-25): COOL = more like this, MEH = fine but nothing
+        # special, SKIP = wasted my slot. "Implemented" is NOT a button:
+        # it is measured by reality, via the ledger cross-link when a
+        # paper's technique becomes an actual experiment.
         buttons = [
             [
-                ("IMPLEMENT", f"vid:{key}:implement"),
-                ("LEARNED", f"vid:{key}:learned"),
+                ("COOL", f"vid:{key}:cool"),
+                ("MEH", f"vid:{key}:meh"),
                 ("SKIP", f"vid:{key}:skip"),
             ]
         ]
