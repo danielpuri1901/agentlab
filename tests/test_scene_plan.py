@@ -23,24 +23,40 @@ from agentlab.scene_plan import (
 # for fenced code ever desyncs on a fence living inside a test fixture.
 FENCE = "`" * 3
 
+VALID_DIAGRAM_DICT = {
+    "nodes": [
+        {"id": "turns", "label": "Turns", "icon": "\U0001f4ac"},
+        {"id": "index", "label": "Retrieval index", "icon": "\U0001f4c7"},
+        {"id": "answer", "label": "Answer", "icon": "✅"},
+    ],
+    "edges": [
+        {"source": "turns", "target": "index", "label": "embeds"},
+        {"source": "index", "target": "answer", "label": "retrieves"},
+    ],
+}
+
 VALID_PLAN_DICT = {
     "title": "Retrieval memory beats longer context",
     "one_line_claim": "A small retrieval index beats raw context stuffing on long tasks.",
+    "diagram": VALID_DIAGRAM_DICT,
     "mechanism_steps": [
         {
             "label": "Chunk",
             "detail": "Split transcripts into turns.",
             "narration": "First, split the conversation into turns.",
+            "activates": ["turns"],
         },
         {
             "label": "Embed",
             "detail": "Embed each turn with a small model.",
             "narration": "Then embed each turn with a small model.",
+            "activates": ["turns", "index", "turns->index"],
         },
         {
             "label": "Retrieve",
             "detail": "Pull the top matching turns at query time.",
             "narration": "At query time, pull back the closest turns.",
+            "activates": ["index", "answer", "index->answer"],
         },
     ],
     "key_numbers": [
@@ -314,6 +330,7 @@ def test_deep_read_pins_citation_to_fetch_url(monkeypatch):
     valid_plan = {
         "title": "T",
         "one_line_claim": "C.",
+        "diagram": VALID_DIAGRAM_DICT,
         "mechanism_steps": [
             {"label": f"L{i}", "detail": "D.", "narration": "N."} for i in range(3)
         ],
@@ -351,11 +368,25 @@ def test_mechanism_step_kind_defaults_and_validates():
 def test_overlong_strings_clip_instead_of_failing():
     import json as _json
 
-    from agentlab.scene_plan import MAX_CLAIM, MAX_NARRATION, parse_scene_plan
+    from agentlab.scene_plan import (
+        MAX_CLAIM,
+        MAX_EDGE_LABEL,
+        MAX_NARRATION,
+        MAX_NODE_ICON,
+        MAX_NODE_LABEL,
+        parse_scene_plan,
+    )
 
     plan_dict = {
         "title": "T" * 500,
         "one_line_claim": "C" * 500,
+        "diagram": {
+            "nodes": [
+                {"id": "a", "label": "L" * 100, "icon": "X" * 50},
+                {"id": "b", "label": "M" * 100},
+            ],
+            "edges": [{"source": "a", "target": "b", "label": "E" * 100}],
+        },
         "mechanism_steps": [
             {"label": "L" * 100, "detail": "D" * 500, "narration": "N" * 500}
             for _ in range(3)
@@ -369,6 +400,9 @@ def test_overlong_strings_clip_instead_of_failing():
     assert plan is not None
     assert len(plan.one_line_claim) == MAX_CLAIM
     assert len(plan.mechanism_steps[0].narration) == MAX_NARRATION
+    assert len(plan.diagram.nodes[0].label) == MAX_NODE_LABEL
+    assert len(plan.diagram.nodes[0].icon) == MAX_NODE_ICON
+    assert len(plan.diagram.edges[0].label) == MAX_EDGE_LABEL
 
 
 def test_structural_violations_still_fail():
@@ -385,3 +419,123 @@ def test_structural_violations_still_fail():
         "citation_url": "u",
     }
     assert parse_scene_plan(_json.dumps(plan_dict)) is None
+
+
+# ---------------------------------------------------------------------------
+# Diagram: nodes/edges as the paper's own mechanism (Daniel's ruling
+# 2026-08-25), and MechanismStep.activates tying each step to it.
+# ---------------------------------------------------------------------------
+
+
+def test_diagram_node_count_bounds():
+    from agentlab.scene_plan import Diagram
+
+    one_node = {"nodes": [{"id": "a", "label": "A"}], "edges": []}
+    with pytest.raises(ValidationError):
+        Diagram(**one_node)
+
+    nine_nodes = {
+        "nodes": [{"id": f"n{i}", "label": f"N{i}"} for i in range(9)],
+        "edges": [{"source": "n0", "target": "n1"}],
+    }
+    with pytest.raises(ValidationError):
+        Diagram(**nine_nodes)
+
+
+def test_diagram_edge_count_bounds():
+    from agentlab.scene_plan import Diagram
+
+    no_edges = {"nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}], "edges": []}
+    with pytest.raises(ValidationError):
+        Diagram(**no_edges)
+
+    eleven_edges = {
+        "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "edges": [{"source": "a", "target": "b"} for _ in range(11)],
+    }
+    with pytest.raises(ValidationError):
+        Diagram(**eleven_edges)
+
+
+def test_diagram_edge_referencing_unknown_node_is_rejected():
+    from agentlab.scene_plan import Diagram
+
+    bad = {
+        "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "edges": [{"source": "a", "target": "nowhere"}],
+    }
+    with pytest.raises(ValidationError):
+        Diagram(**bad)
+
+
+def test_diagram_duplicate_node_ids_rejected():
+    from agentlab.scene_plan import Diagram
+
+    bad = {
+        "nodes": [{"id": "a", "label": "A"}, {"id": "a", "label": "Also A"}],
+        "edges": [{"source": "a", "target": "a"}],
+    }
+    with pytest.raises(ValidationError):
+        Diagram(**bad)
+
+
+def test_diagram_node_id_must_be_a_slug():
+    from agentlab.scene_plan import Diagram
+
+    bad = {
+        "nodes": [{"id": "Not A Slug", "label": "A"}, {"id": "b", "label": "B"}],
+        "edges": [{"source": "Not A Slug", "target": "b"}],
+    }
+    with pytest.raises(ValidationError):
+        Diagram(**bad)
+
+
+def test_scene_plan_activates_unknown_id_is_rejected():
+    bad_step = {
+        "label": "Chunk",
+        "detail": "Split transcripts into turns.",
+        "narration": "First, split the conversation into turns.",
+        "activates": ["not-a-real-node"],
+    }
+    steps = [bad_step] + VALID_PLAN_DICT["mechanism_steps"][1:]
+    with pytest.raises(ValidationError):
+        ScenePlan(**_plan_kwargs(mechanism_steps=steps))
+    # Unknown-id violations are structural, not clippable: parse must still
+    # reject them (ruling 2026-08-25 only clips length, not referential
+    # integrity).
+    assert parse_scene_plan(json.dumps(_plan_kwargs(mechanism_steps=steps))) is None
+
+
+def test_scene_plan_activates_unknown_edge_id_is_rejected():
+    # A node-pair that IS in the diagram but written the wrong direction
+    # (target->source instead of source->target) is still an unknown edge
+    # id -- edge ids are directional strings, not a set of endpoints.
+    steps = copy.deepcopy(VALID_PLAN_DICT["mechanism_steps"])
+    steps[1]["activates"] = ["index->turns"]
+    with pytest.raises(ValidationError):
+        ScenePlan(**_plan_kwargs(mechanism_steps=steps))
+
+
+def test_scene_plan_activates_empty_list_is_valid():
+    # A step naming nothing is a sparse plan, not a broken one; the
+    # template falls back to the diagram's own center (video_scenes.py).
+    steps = copy.deepcopy(VALID_PLAN_DICT["mechanism_steps"])
+    steps[0]["activates"] = []
+    plan = ScenePlan(**_plan_kwargs(mechanism_steps=steps))
+    assert plan.mechanism_steps[0].activates == []
+
+
+def test_diagram_node_label_max_length_enforced_directly():
+    from agentlab.scene_plan import MAX_NODE_LABEL, DiagramNode
+
+    DiagramNode(id="a", label="x" * MAX_NODE_LABEL)
+    with pytest.raises(ValidationError):
+        DiagramNode(id="a", label="x" * (MAX_NODE_LABEL + 1))
+
+
+def test_diagram_edge_label_max_length_enforced_directly():
+    from agentlab.scene_plan import MAX_EDGE_LABEL, DiagramEdge
+
+    DiagramEdge(source="a", target="b", label="x" * MAX_EDGE_LABEL)
+    with pytest.raises(ValidationError):
+        DiagramEdge(source="a", target="b", label="x" * (MAX_EDGE_LABEL + 1))

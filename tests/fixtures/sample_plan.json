@@ -1,30 +1,47 @@
 {
   "title": "Recursive Self-Improvement in AI",
   "one_line_claim": "Self-improvement is only as real as its verification: strength tracks a hierarchy from formal proofs down to a model's own confidence.",
+  "diagram": {
+    "nodes": [
+      {"id": "agent", "label": "Agent", "icon": "🤖"},
+      {"id": "evaluator", "label": "Evaluator", "icon": "📊"},
+      {"id": "gate", "label": "Verification gate", "icon": "🚦"},
+      {"id": "skill-library", "label": "Skill library", "icon": "📚"}
+    ],
+    "edges": [
+      {"source": "agent", "target": "evaluator", "label": "proposes"},
+      {"source": "evaluator", "target": "gate", "label": "scores"},
+      {"source": "gate", "target": "skill-library", "label": "confirms"}
+    ]
+  },
   "mechanism_steps": [
     {
       "label": "Bounded loop",
       "detail": "The system improves against a fixed external evaluator, not its own definition of better.",
       "narration": "Most self-improving systems run a bounded loop. They improve against a fixed external evaluator, not their own idea of what counts as better.",
-      "kind": "loop"
+      "kind": "loop",
+      "activates": ["agent", "evaluator", "agent->evaluator"]
     },
     {
       "label": "Evaluator",
       "detail": "Every loop is a claim that some signal can substitute for human judgment.",
       "narration": "Every loop rests on an evaluator. The system is only as good as whatever decides what counts as an improvement.",
-      "kind": "gate"
+      "kind": "gate",
+      "activates": ["evaluator", "gate", "evaluator->gate"]
     },
     {
       "label": "Hierarchy",
       "detail": "Signal reliability rises from a model's own confidence up to a formal proof.",
       "narration": "Evaluators sit on a hierarchy. Formal proofs are strongest, then tests, then learned judges, then the model's own confidence, weakest of all.",
-      "kind": "compare"
+      "kind": "compare",
+      "activates": ["gate", "skill-library", "gate->skill-library"]
     },
     {
       "label": "Failure modes",
       "detail": "Self-confirming loops, model collapse, and reward hacking follow from skipping a rung.",
       "narration": "Skip a rung and the loop breaks. Self-confirming loops, model collapse, and reward hacking all follow from that.",
-      "kind": "split"
+      "kind": "split",
+      "activates": ["evaluator", "gate"]
     }
   ],
   "key_numbers": [

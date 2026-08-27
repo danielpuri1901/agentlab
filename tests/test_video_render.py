@@ -399,6 +399,57 @@ def test_leading_number_returns_none_for_non_numeric_value():
     assert leading_number("~roughly") is None
 
 
+def test_topological_order_linear_chain():
+    from agentlab.video_scenes import topological_order
+
+    order = topological_order(
+        ["c", "a", "b"], [("a", "b"), ("b", "c")]
+    )
+    assert order == ["a", "b", "c"]
+
+
+def test_topological_order_deterministic_on_ties():
+    # Two independent sources (no edge between them): the order among ties
+    # is the input node order, not set/dict iteration order, so the same
+    # diagram always lays out the same way.
+    from agentlab.video_scenes import topological_order
+
+    order = topological_order(["z", "a", "b"], [("z", "b"), ("a", "b")])
+    assert order == ["z", "a", "b"]
+
+
+def test_topological_order_returns_none_on_a_cycle():
+    from agentlab.video_scenes import topological_order
+
+    assert topological_order(["a", "b"], [("a", "b"), ("b", "a")]) is None
+
+
+def test_topological_order_ignores_edges_to_unknown_nodes():
+    # Defensive: an edge naming a node id outside the diagram (should never
+    # happen once ScenePlan's own validator runs, but this function has no
+    # access to that context) must not crash the layout.
+    from agentlab.video_scenes import topological_order
+
+    assert topological_order(["a", "b"], [("a", "ghost")]) == ["a", "b"]
+
+
+def test_grid_dimensions_roughly_square():
+    from agentlab.video_scenes import grid_dimensions
+
+    assert grid_dimensions(1) == (1, 1)
+    assert grid_dimensions(4) == (2, 2)
+    assert grid_dimensions(8) == (3, 3)
+    assert grid_dimensions(0) == (0, 0)
+
+
+def test_grid_dimensions_covers_every_item():
+    from agentlab.video_scenes import grid_dimensions
+
+    for n in range(1, 9):
+        cols, rows = grid_dimensions(n)
+        assert cols * rows >= n
+
+
 def test_scene_spec_captions_feed_video_scenes_directly(sample_plan):
     # Round-trip: the exact strings render_scene_video writes into the spec
     # are what video_scenes.py's construct() would slice per segment and

@@ -578,21 +578,28 @@ def _make_scene_plan(url: str, title: str) -> ScenePlan:
     return ScenePlan(
         title=title[:70],
         one_line_claim=f"{title} shows something new.",
+        diagram={
+            "nodes": [{"id": "input", "label": "Input"}, {"id": "output", "label": "Output"}],
+            "edges": [{"source": "input", "target": "output"}],
+        },
         mechanism_steps=[
             {
                 "label": "Step 1",
                 "detail": "First mechanism detail.",
                 "narration": "First, this happens.",
+                "activates": ["input"],
             },
             {
                 "label": "Step 2",
                 "detail": "Second mechanism detail.",
                 "narration": "Then, this happens.",
+                "activates": ["input->output"],
             },
             {
                 "label": "Step 3",
                 "detail": "Third mechanism detail.",
                 "narration": "Finally, this happens.",
+                "activates": ["output"],
             },
         ],
         key_numbers=[],
