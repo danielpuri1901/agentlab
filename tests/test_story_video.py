@@ -41,6 +41,23 @@ def _timing(overruns=None):
     return {"beats": beats, "total": cursor}
 
 
+def _timing_with_raw_overruns(raw_overruns):
+    beats, cursor = [], 0.0
+    for index, raw_overrun in enumerate(raw_overruns, start=1):
+        length = 5.0 + raw_overrun
+        beats.append(
+            {
+                "beat": index,
+                "start": cursor,
+                "end": cursor + length,
+                "narration": 5.0,
+                "overrun": round(raw_overrun, 3),
+            }
+        )
+        cursor += length
+    return {"beats": beats, "total": cursor}
+
+
 def _judgement(score=8, fix_beat=None):
     beats = [
         BeatJudgement(beat=index, shows_visual=True, legible=True, clean=True)
@@ -230,6 +247,31 @@ def test_overrun_goes_back_to_the_coder(seams, tmp_path):
 
     assert result.attempts == 2
     assert "beat 2" in seams["coder"][1]
+
+
+def test_raw_per_beat_overrun_above_limit_goes_back_to_the_coder(seams, tmp_path):
+    seams["timings"] = [
+        _timing_with_raw_overruns([0.7504] + [0.0] * (N - 1)),
+        _timing(),
+    ]
+
+    result = _compose(tmp_path)
+
+    assert result.attempts == 2
+    assert "beat 1" in seams["coder"][1]
+
+
+def test_raw_total_overrun_above_limit_goes_back_to_the_coder(seams, tmp_path):
+    raw_overrun = 3.0002 / N
+    seams["timings"] = [
+        _timing_with_raw_overruns([raw_overrun] * N),
+        _timing(),
+    ]
+
+    result = _compose(tmp_path)
+
+    assert result.attempts == 2
+    assert "total overrun" in seams["coder"][1]
 
 
 def test_judge_fix_retries_and_best_score_ships(seams, tmp_path):

@@ -39,6 +39,7 @@ FINAL_RENDER_TIMEOUT = 900
 MAX_ATTEMPTS = 3
 STDERR_TAIL_LINES = 40
 TIMING_TOLERANCE = 0.001
+OVERRUN_LIMIT_TOLERANCE = 1e-9
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +183,25 @@ def _timing_feedback(timing: dict, durations: list[float]) -> str | None:
     error = _timing_error(timing, durations)
     if error:
         return f"The render timing is invalid: {error}. Fix the scene timing output."
-    return overrun_report(timing)
+    raw_timing = {
+        "beats": [
+            {
+                **beat,
+                "overrun": max(
+                    0.0,
+                    (beat["end"] - beat["start"]) - beat["narration"],
+                ),
+            }
+            for beat in timing["beats"]
+        ]
+    }
+    return overrun_report(
+        raw_timing,
+        per_beat_limit=(
+            story_scene.PER_BEAT_OVERRUN_LIMIT + OVERRUN_LIMIT_TOLERANCE
+        ),
+        total_limit=story_scene.TOTAL_OVERRUN_LIMIT + OVERRUN_LIMIT_TOLERANCE,
+    )
 
 
 def compose_story_video(
