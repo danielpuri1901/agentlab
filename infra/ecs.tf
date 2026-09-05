@@ -155,19 +155,15 @@ resource "aws_cloudwatch_log_group" "explain" {
   retention_in_days = 30
 }
 
-# 2 vCPU / 4 GB (Task 6 brief) - unlike the proposer, this task renders
-# video (Manim + ffmpeg) for all three daily-paper tracks in one run, which
-# is CPU-bound; the spec's ~10-minutes-per-video render budget is against
-# 1 vCPU, and this task renders up to three videos sequentially inside the
-# `worker explain` command (src/agentlab/worker.py's explain_command loops
-# EXPLAIN_TRACKS), so it gets more headroom than the proposer's single
-# LLM-call footprint.
+# The task now renders each video up to four times (low-quality attempts plus
+# the final medium render) through compose_story_video, so it gets 4 vCPU / 8 GB;
+# still ARM64 Fargate.
 resource "aws_ecs_task_definition" "explain" {
   family                   = "agentlab-explain"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "2048"
-  memory                   = "4096"
+  cpu                      = "4096"
+  memory                   = "8192"
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.explain_task.arn
 

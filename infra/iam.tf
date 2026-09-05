@@ -437,9 +437,11 @@ resource "aws_iam_role_policy" "explain_task" {
   # never receives that Update, but Get/Put/Update/Delete/Query/Scan is the
   # full CRUD surface the Task 6 brief specifies for the state table so the
   # role is not re-scoped every time a future explain-track helper adds one
-  # more access pattern), S3 read/write scoped to its own two prefixes
-  # (digests/ - the full-digest artifact; videos/ - the rendered mp4), and
-  # Polly (voice verification + narration synthesis).
+  # more access pattern), S3 read/write scoped to its own three prefixes
+  # (digests/ - the full-digest artifact; videos/ - the rendered mp4;
+  # stories/ - the storyboard, judgement, and generated scene source for
+  # each story-path video), and Polly (voice verification + narration
+  # synthesis).
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -483,6 +485,7 @@ resource "aws_iam_role_policy" "explain_task" {
         Resource = [
           "${aws_s3_bucket.results.arn}/digests/*",
           "${aws_s3_bucket.results.arn}/videos/*",
+          "${aws_s3_bucket.results.arn}/stories/*",
         ]
       },
       {

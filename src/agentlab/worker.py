@@ -42,7 +42,8 @@ from agentlab.scene_plan import (
 )
 from agentlab.sources import gather_exploit, gather_explore
 from agentlab.stats import paired_analysis, verdict
-from agentlab.video_render import narrate, render_video, verify_voice
+from agentlab.story_video import StoryFailed, compose_story_video
+from agentlab.video_render import narrate, render_video, scene_texts, verify_voice
 
 worker_app = typer.Typer()
 
@@ -344,8 +345,8 @@ def finalize_command() -> None:
 # (docs/specs/2026-08-23-daily-paper-videos.md). Three tracks - core
 # (exploit pool, ranked against docs/interests.md), classic (the next
 # unwatched entry in docs/classics.json), novel (explore pool, picked for
-# surprise) - each run fetch -> dedup -> pick -> deep-read -> render ->
-# deliver -> ledger, fully isolated from one another: a failure in one
+# surprise) - each run fetch -> dedup -> pick -> deep-read -> story (or
+# template) -> deliver -> ledger, fully isolated from one another: a failure in one
 # track pings a text fallback and the next track still runs.
 # ---------------------------------------------------------------------------
 
@@ -361,6 +362,22 @@ def _complete(model: str, messages: list[dict]) -> str:
     from agentlab.proposer import _complete as _proposer_complete
 
     return _proposer_complete(model, messages)
+
+
+def _complete_long(model: str, messages: list[dict]) -> str:
+    """The story path's model calls allow complete generated scene files.
+
+    A scene file does not fit the deep read's 3000-token budget, so this
+    completion allows 8000 output tokens and a 600 second timeout. The lazy
+    litellm import avoids the same circular import as `_complete`.
+    """
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    import litellm
+
+    response = litellm.completion(
+        model=model, messages=messages, max_tokens=8000, timeout=600
+    )
+    return response.choices[0].message.content
 
 
 def _load_classics() -> list[dict]:
@@ -429,6 +446,9 @@ def _run_explain_track(
     bucket: str,
     deep_read_model: str,
     pick_model: str,
+    story_model: str,
+    scene_model: str,
+    judge_model: str,
     partial: dict,
 ) -> str:
     """Run one explain track end to end. Returns "sent" or "empty" (no
@@ -473,16 +493,62 @@ def _run_explain_track(
     partial["digest_url"] = digest_url
 
     voice_id = verify_voice(polly_client)
+    today = datetime.now(UTC).strftime("%Y%m%d")
     with tempfile.TemporaryDirectory(prefix=f"agentlab-explain-{track}-") as tmp_dir:
         tmp_path = Path(tmp_dir)
-        clips = narrate(polly_client, plan, voice_id, tmp_path / "narration")
         video_path = tmp_path / "video.mp4"
-        render_video(plan, clips, video_path)
+        story = None
+        try:
+            story = compose_story_video(
+                digest,
+                plan,
+                polly_client,
+                voice_id,
+                _complete_long,
+                tmp_path / "story",
+                video_path,
+                story_model=story_model,
+                scene_model=scene_model,
+                judge_model=judge_model,
+            )
+        except StoryFailed as exc:
+            # The worst day equals the old video: log why, render the template.
+            transition(
+                table,
+                f"explain-{today}",
+                "STORY_FALLBACK",
+                track,
+                str(exc)[:200],
+            )
+            clips = narrate(
+                polly_client, scene_texts(plan), voice_id, tmp_path / "narration"
+            )
+            render_video(plan, clips, video_path)
 
         # Uploaded to S3 before notify so a quiet-hours queue can flush the
         # video later even though this tmp directory will be gone by then.
         video_key = f"videos/{key}.mp4"
         s3_client.upload_file(str(video_path), bucket, video_key)
+
+        story_key = None
+        if story is not None:
+            story_key = f"stories/{key}.json"
+            story_record = {
+                "storyboard": story.storyboard.model_dump(),
+                "judgement": story.judgement,
+                "attempts": story.attempts,
+                "timing": story.timing,
+            }
+            s3_client.put_object(
+                Bucket=bucket,
+                Key=story_key,
+                Body=json.dumps(story_record, indent=1).encode("utf-8"),
+            )
+            s3_client.put_object(
+                Bucket=bucket,
+                Key=f"stories/{key}.py",
+                Body=story.scene_source.encode("utf-8"),
+            )
 
         caption = f"{plan.one_line_claim}\n\n{plan.street_test_question}\n\n{digest_url}"
         # Ratings measure Daniel's immediate reaction (Daniel's ruling
@@ -519,6 +585,10 @@ def _run_explain_track(
             "sent_ts": sent_ts,
             "rating": None,
             "rating_ts": None,
+            "render_path": "story" if story is not None else "template",
+            "attempts": story.attempts if story is not None else None,
+            "judge_score": story.judge_score if story is not None else None,
+            "story_key": story_key,
         }
     )
     return "sent"
@@ -527,8 +597,9 @@ def _run_explain_track(
 @worker_app.command("explain")
 def explain_command() -> None:
     """Scheduled daily-paper-video run (10:30 Amsterdam): the CORE, CLASSIC,
-    and NOVEL tracks, each fetch -> dedup -> pick -> deep-read -> render ->
-    deliver -> ledger. Every track is isolated in its own try/except: a
+    and NOVEL tracks, each fetch -> dedup -> pick -> deep-read -> story (or
+    template) -> deliver -> ledger. Every track is isolated in its own
+    try/except: a
     failure pings a text fallback (the digest link if one was made, else
     the error, in STE style) and the run continues to the next track -
     silence must never mean broken.
@@ -538,6 +609,9 @@ def explain_command() -> None:
     track_env = os.environ.get("TRACK", "all").strip().lower()
     deep_read_model = os.environ.get("DEEP_READ_MODEL", DEFAULT_DEEP_READ_MODEL)
     pick_model = os.environ.get("PICK_MODEL", DEFAULT_PICK_MODEL)
+    story_model = os.environ.get("STORY_MODEL", deep_read_model)
+    scene_model = os.environ.get("SCENE_MODEL", deep_read_model)
+    judge_model = os.environ.get("JUDGE_MODEL", deep_read_model)
 
     tracks = list(EXPLAIN_TRACKS) if track_env == "all" else [track_env]
     if any(t not in EXPLAIN_TRACKS for t in tracks):
@@ -565,6 +639,9 @@ def explain_command() -> None:
                 results_bucket,
                 deep_read_model,
                 pick_model,
+                story_model,
+                scene_model,
+                judge_model,
                 partial,
             )
         except Exception as exc:  # noqa: BLE001 - one track's failure must not sink the others

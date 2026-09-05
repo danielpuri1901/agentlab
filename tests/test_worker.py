@@ -4,7 +4,9 @@ live AWS or makes a network call.
 """
 
 import asyncio
+import json
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +18,7 @@ from moto import mock_aws
 from typer.testing import CliRunner
 
 from agentlab import notify as notify_mod
+from agentlab import worker as worker_mod
 from agentlab.cli import app
 from agentlab.eval_runner import _run_arm
 from agentlab.notify import CHAT_ID_PARAM, TOKEN_PARAM, notify
@@ -23,6 +26,8 @@ from agentlab.results import extract_results, mean_score
 from agentlab.scene_plan import ScenePlan
 from agentlab.stats import paired_analysis
 from agentlab.stats import verdict as compute_verdict
+from agentlab.story_video import StoryFailed, StoryResult
+from agentlab.storyboard import Storyboard
 from agentlab.worker import _optional_int_env, transition, upload_log
 
 runner = CliRunner()
@@ -572,6 +577,11 @@ NOVEL_CANDIDATE = {
 }
 ATTENTION_URL = "https://arxiv.org/abs/1706.03762"
 COT_URL = "https://arxiv.org/abs/2201.11903"
+GOLDEN_BOARD = json.loads(
+    (Path(__file__).parent / "fixtures" / "storyboard_golden.json").read_text(
+        encoding="utf-8"
+    )
+)
 
 
 def _make_scene_plan(url: str, title: str) -> ScenePlan:
@@ -628,6 +638,30 @@ def _fake_render_video(plan, clips, out_path):
     return Path(out_path)
 
 
+def _fake_story_failed(*args, **kwargs):
+    raise StoryFailed("test: forced fallback")
+
+
+def _fake_story_success(
+    digest, plan, polly_client, voice_id, complete, work_dir, out_path, **kwargs
+):
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(b"story-mp4")
+    srt = out_path.with_suffix(".srt")
+    srt.write_text("1\n00:00:00,000 --> 00:00:05,000\nhi\n", encoding="utf-8")
+    return StoryResult(
+        video_path=out_path,
+        srt_path=srt,
+        storyboard=Storyboard(**GOLDEN_BOARD),
+        scene_source="class PaperStory: pass",
+        attempts=2,
+        judge_score=8,
+        judgement={"score": 8, "beats": [], "verdict": "pass", "note": None},
+        timing={"beats": [], "total": 25.0},
+    )
+
+
 def _set_explain_env(monkeypatch, track="all"):
     monkeypatch.setenv("STATE_TABLE", TABLE)
     monkeypatch.setenv("RESULTS_BUCKET", BUCKET)
@@ -640,19 +674,150 @@ def _set_daytime(monkeypatch):
     )
 
 
-def _patch_explain_render_stages(monkeypatch, fail_urls=frozenset()):
+def _patch_explain_render_stages(monkeypatch, fail_urls=frozenset(), story=None):
     monkeypatch.setattr("agentlab.worker.deep_read", _make_fake_deep_read(fail_urls))
     monkeypatch.setattr("agentlab.worker.verify_voice", lambda polly_client: "Joanna")
     monkeypatch.setattr(
-        "agentlab.worker.narrate", lambda polly_client, plan, voice_id, out_dir: ["clip"]
+        "agentlab.worker.narrate", lambda polly_client, texts, voice_id, out_dir: ["clip"]
     )
     monkeypatch.setattr("agentlab.worker.render_video", _fake_render_video)
+    monkeypatch.setattr("agentlab.worker.compose_story_video", story or _fake_story_failed)
 
 
 def _patch_explain_pools(monkeypatch):
     monkeypatch.setattr("agentlab.worker.gather_exploit", lambda: [CORE_CANDIDATE])
     monkeypatch.setattr("agentlab.worker.gather_explore", lambda: [NOVEL_CANDIDATE])
     monkeypatch.setattr("agentlab.worker.pick_paper", _fake_pick_paper)
+
+
+def test_complete_long_allows_story_output_budget_and_timeout(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="complete"))]
+        )
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    messages = [{"role": "user", "content": "Write the scene."}]
+    assert worker_mod._complete_long("bedrock/story-model", messages) == "complete"
+    assert calls == [
+        {
+            "model": "bedrock/story-model",
+            "messages": messages,
+            "max_tokens": 8000,
+            "timeout": 600,
+        }
+    ]
+
+
+def test_explain_story_path_ships_and_records_artifacts(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    _set_daytime(monkeypatch)
+    _set_explain_env(monkeypatch, track="core")
+    _patch_explain_pools(monkeypatch)
+    _patch_explain_render_stages(monkeypatch, story=_fake_story_success)
+
+    result = runner.invoke(app, ["worker", "explain"])
+    assert result.exit_code == 0, result.output
+    assert "explain: core=sent" in result.output
+
+    table = boto3.resource("dynamodb").Table(TABLE)
+    videos = [i for i in table.scan()["Items"] if i["experiment_id"].startswith("video#")]
+    assert len(videos) == 1
+    row = videos[0]
+    assert row["render_path"] == "story"
+    assert row["attempts"] == 2 and row["judge_score"] == 8
+    key = row["experiment_id"].removeprefix("video#")
+    assert row["story_key"] == f"stories/{key}.json"
+
+    s3 = boto3.client("s3")
+    keys = {o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET)["Contents"]}
+    assert f"stories/{key}.json" in keys and f"stories/{key}.py" in keys
+    with s3.get_object(Bucket=BUCKET, Key=f"stories/{key}.json")["Body"] as body:
+        story = json.loads(body.read())
+    assert story["storyboard"]["metaphor"].startswith("A house move")
+    assert story["judgement"]["score"] == 8
+
+    events = [i for i in table.scan()["Items"] if i["sk"].startswith("event#")]
+    assert not any(e["event"] == "STORY_FALLBACK" for e in events)
+
+
+def test_explain_story_failure_falls_back_to_template_and_logs(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    _set_daytime(monkeypatch)
+    _set_explain_env(monkeypatch, track="core")
+    _patch_explain_pools(monkeypatch)
+    _patch_explain_render_stages(monkeypatch)
+
+    result = runner.invoke(app, ["worker", "explain"])
+    assert result.exit_code == 0, result.output
+    assert "explain: core=sent" in result.output
+
+    table = boto3.resource("dynamodb").Table(TABLE)
+    items = table.scan()["Items"]
+    row = next(i for i in items if i["experiment_id"].startswith("video#"))
+    assert row["render_path"] == "template"
+    assert row["story_key"] is None
+    fallback = [
+        i
+        for i in items
+        if i["sk"].startswith("event#") and i["event"] == "STORY_FALLBACK"
+    ]
+    assert len(fallback) == 1
+    assert "forced fallback" in fallback[0]["detail"]
+    assert fallback[0]["arm"] == "core"
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        (
+            {"DEEP_READ_MODEL": "bedrock/deep-model"},
+            {
+                "story_model": "bedrock/deep-model",
+                "scene_model": "bedrock/deep-model",
+                "judge_model": "bedrock/deep-model",
+            },
+        ),
+        (
+            {
+                "DEEP_READ_MODEL": "bedrock/deep-model",
+                "STORY_MODEL": "bedrock/story-model",
+                "SCENE_MODEL": "bedrock/scene-model",
+                "JUDGE_MODEL": "bedrock/judge-model",
+            },
+            {
+                "story_model": "bedrock/story-model",
+                "scene_model": "bedrock/scene-model",
+                "judge_model": "bedrock/judge-model",
+            },
+        ),
+    ],
+)
+def test_explain_passes_story_model_defaults_and_overrides(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch, env, expected
+):
+    _set_daytime(monkeypatch)
+    _set_explain_env(monkeypatch, track="core")
+    _patch_explain_pools(monkeypatch)
+    captured = {}
+
+    def fake_story(*args, **kwargs):
+        captured.update(kwargs)
+        return _fake_story_success(*args, **kwargs)
+
+    _patch_explain_render_stages(monkeypatch, story=fake_story)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    result = runner.invoke(app, ["worker", "explain"])
+    assert result.exit_code == 0, result.output
+    assert captured == expected
 
 
 def test_explain_all_three_tracks_send_three_videos_and_mark_seen(
@@ -780,6 +945,7 @@ def test_explain_render_failure_includes_stderr_in_fallback_ping(
         )
 
     monkeypatch.setattr("agentlab.worker.render_video", fake_render_video_raises)
+    monkeypatch.setattr("agentlab.worker.compose_story_video", _fake_story_failed)
 
     result = runner.invoke(app, ["worker", "explain"])
     assert result.exit_code == 0, result.output
