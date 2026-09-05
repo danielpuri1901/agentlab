@@ -187,12 +187,15 @@ def _timing_feedback(timing: dict, durations: list[float]) -> str | None:
         "beats": [
             {
                 **beat,
+                "narration": expected_narration,
                 "overrun": max(
                     0.0,
-                    (beat["end"] - beat["start"]) - beat["narration"],
+                    (beat["end"] - beat["start"]) - expected_narration,
                 ),
             }
-            for beat in timing["beats"]
+            for beat, expected_narration in zip(
+                timing["beats"], durations, strict=True
+            )
         ]
     }
     return overrun_report(

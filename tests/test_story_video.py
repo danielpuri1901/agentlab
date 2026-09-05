@@ -261,6 +261,18 @@ def test_raw_per_beat_overrun_above_limit_goes_back_to_the_coder(seams, tmp_path
     assert "beat 1" in seams["coder"][1]
 
 
+def test_inflated_timing_narration_cannot_hide_clip_overrun(seams, tmp_path):
+    masked = _timing_with_raw_overruns([0.7504] + [0.0] * (N - 1))
+    masked["beats"][0]["narration"] = 5.0008
+    masked["beats"][0]["overrun"] = 0.75
+    seams["timings"] = [masked, _timing()]
+
+    result = _compose(tmp_path)
+
+    assert result.attempts == 2
+    assert "beat 1" in seams["coder"][1]
+
+
 def test_raw_total_overrun_above_limit_goes_back_to_the_coder(seams, tmp_path):
     raw_overrun = 3.0002 / N
     seams["timings"] = [
