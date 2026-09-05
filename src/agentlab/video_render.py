@@ -19,14 +19,18 @@ plus the matching narration texts (captions).
 Concat pattern: render the whole scene as ONE Manim video, timed segment by
 segment from `durations` (one per narration clip) so the video's total
 length matches the narration exactly; separately concat the per-clip mp3s
-into one narration track; mux that track onto the video with a plain
-video+audio mux (no ffmpeg video filter). Captions are burned in by
-video_scenes.py itself, not by ffmpeg: the target environment's ffmpeg build
-lacks libass (`ffmpeg -filters` has no `subtitles` entry), so the `-vf
-subtitles=...` approach fails there with "Filter not found". A plain .srt is
-still generated as a sidecar artifact (for future use, e.g. platform
-upload), but nothing in the render path depends on ffmpeg being able to
-render it.
+into one narration track, padding each clip with silence up to its target
+length first (never shorter than the clip itself) when the caller has a
+durations list that ran longer than the narration; mux that track onto the
+video with a plain video+audio mux (no ffmpeg video filter). The render
+subprocess runs in a clean environment (no AWS_* variables reach it, see
+RENDER_ENV_KEYS) with a hard timeout, since the scene file it renders may be
+model-written. Captions are burned in by video_scenes.py itself, not by
+ffmpeg: the target environment's ffmpeg build lacks libass (`ffmpeg
+-filters` has no `subtitles` entry), so the `-vf subtitles=...` approach
+fails there with "Filter not found". A plain .srt is still generated as a
+sidecar artifact (for future use, e.g. platform upload), but nothing in the
+render path depends on ffmpeg being able to render it.
 """
 
 import json
@@ -46,6 +50,13 @@ SCENE_CLASS = "PaperScene"
 PREFERRED_VOICE_LANGS = ("en-US", "en-GB")
 
 SRT_WRAP_WIDTH = 42
+
+DEFAULT_RENDER_TIMEOUT_SECONDS = 480
+# The render subprocess gets a fresh environment built from these keys only:
+# no AWS_* variable and no AWS_CONTAINER_CREDENTIALS_RELATIVE_URI reaches
+# manim, so model-written scene code (story_video.py) can never reach the
+# task role's credentials even if scene_code.py's guard missed something.
+RENDER_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
 
 
 @dataclass(frozen=True)
@@ -143,22 +154,22 @@ def ffprobe_duration(path: Path) -> float:
     return float(result.stdout.strip())
 
 
-def narrate(polly_client, plan: ScenePlan, voice_id: str, out_dir) -> list[NarrationClip]:
-    """Synthesize one mp3 per scene (title+claim, each mechanism step,
-    numbers, caveat, question) and measure its duration. `voice_id` is
-    expected to be neural-capable (verify_voice's job); Engine="neural" is
-    requested explicitly since Polly does not infer it from the voice."""
+def narrate(polly_client, texts: list[str], voice_id: str, out_dir) -> list[NarrationClip]:
+    """One mp3 per text, duration measured with ffprobe. The template path
+    passes scene_texts(plan); the story path passes each beat's narration.
+    `voice_id` is expected to be neural-capable (verify_voice's job);
+    Engine="neural" is requested explicitly since Polly does not infer it
+    from the voice."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     clips = []
-    for i, text in enumerate(scene_texts(plan)):
+    for i, text in enumerate(texts):
         response = polly_client.synthesize_speech(
             Text=text, OutputFormat="mp3", VoiceId=voice_id, Engine="neural"
         )
         audio_path = out_dir / f"clip_{i:02d}.mp3"
         audio_path.write_bytes(response["AudioStream"].read())
-        seconds = ffprobe_duration(audio_path)
-        clips.append(NarrationClip(path=audio_path, seconds=seconds, text=text))
+        clips.append(NarrationClip(path=audio_path, seconds=ffprobe_duration(audio_path), text=text))
     return clips
 
 
@@ -175,19 +186,21 @@ def _format_srt_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
 
 
-def build_srt(clips: list[NarrationClip]) -> str:
-    """One .srt from cumulative clip timings; exact, since these are the
-    same texts Polly spoke, not a transcription."""
+def build_srt(clips: list[NarrationClip], durations: list[float] | None = None) -> str:
+    """One .srt from cumulative timings; exact, since these are the same
+    texts Polly spoke, not a transcription. Pass `durations` (e.g. the
+    padded target_seconds also given to concat_audio) when the clips'
+    own seconds no longer match the final audio track's timing."""
+    lengths = durations if durations is not None else [c.seconds for c in clips]
+    if len(lengths) != len(clips):
+        raise ValueError(f"durations has {len(lengths)} entries, clips has {len(clips)}")
     entries = []
     cursor = 0.0
-    for i, clip in enumerate(clips, start=1):
-        start = cursor
-        end = cursor + clip.seconds
+    for i, (clip, length) in enumerate(zip(clips, lengths, strict=True), start=1):
+        start, end = cursor, cursor + length
         cursor = end
         wrapped = "\n".join(textwrap.wrap(clip.text, SRT_WRAP_WIDTH)) or clip.text
-        entries.append(
-            f"{i}\n{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n{wrapped}\n"
-        )
+        entries.append(f"{i}\n{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n{wrapped}\n")
     return "\n".join(entries)
 
 
@@ -214,66 +227,116 @@ def _manim_command() -> list[str]:
     return ["uvx", "--python", "3.12", "manim"]
 
 
-def _write_scene_spec(plan: ScenePlan, durations: list[float], captions: list[str]) -> Path:
-    spec = {"plan": plan.model_dump(), "durations": durations, "captions": captions}
+def render_env(scene_dir: Path, spec_path: Path, extra_env: dict | None = None) -> dict:
+    """A fresh environment for the render subprocess: only RENDER_ENV_KEYS
+    carried over from this process (so no AWS_* credential leaks through),
+    plus the scene's own directory put first on PYTHONPATH (so a scene file
+    can import sibling modules from wherever it lives) and the scene spec
+    path. `extra_env` (e.g. SCENE_TIMING_OUT) is applied last so callers can
+    override anything above."""
+    env = {key: os.environ[key] for key in RENDER_ENV_KEYS if key in os.environ}
+    python_path = str(scene_dir)
+    if os.environ.get("PYTHONPATH"):
+        python_path = f"{python_path}{os.pathsep}{os.environ['PYTHONPATH']}"
+    env["PYTHONPATH"] = python_path
+    env["SCENE_SPEC_JSON"] = str(spec_path)
+    if extra_env:
+        env.update(extra_env)
+    return env
+
+
+def _write_scene_spec(spec: dict) -> Path:
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", prefix="agentlab-scene-spec-", delete=False
     ) as handle:
         json.dump(spec, handle)
-        path = handle.name
-    return Path(path)
+        return Path(handle.name)
 
 
-def _find_rendered_video(out_dir: Path) -> Path:
-    matches = sorted(Path(out_dir).glob(f"videos/*/*/{SCENE_CLASS}.mp4"))
+def _find_rendered_video(out_dir: Path, scene_class: str) -> Path:
+    matches = sorted(Path(out_dir).glob(f"videos/*/*/{scene_class}.mp4"))
     if not matches:
-        raise FileNotFoundError(f"no rendered {SCENE_CLASS}.mp4 found under {out_dir}")
+        raise FileNotFoundError(f"no rendered {scene_class}.mp4 found under {out_dir}")
     return matches[-1]
 
 
 def render_scene_video(
-    plan: ScenePlan, durations: list[float], out_dir, quality: str = "l"
+    scene_file,
+    scene_class: str,
+    spec: dict,
+    out_dir,
+    quality: str = "l",
+    timeout_seconds: int = DEFAULT_RENDER_TIMEOUT_SECONDS,
+    extra_env: dict | None = None,
 ) -> Path:
-    """Render the Manim scene only (silent, captions burned in) for `plan`,
-    timed by `durations` (one entry per agentlab.video_render.scene_texts
-    entry). Captions are `scene_texts(plan)` itself, written into the spec
-    JSON alongside durations so video_scenes.py never has to re-derive
-    narration text from the plan structure.
+    """Render any Manim scene file through the one guarded subprocess seam:
+    fresh environment (render_env), hard timeout, spec handed over as a
+    JSON path in SCENE_SPEC_JSON. Raises subprocess.CalledProcessError on a
+    manim failure and subprocess.TimeoutExpired on a timeout.
     Shells out to `uvx --python 3.12 manim`; see module docstring for why
     that has to be a subprocess rather than an import."""
-    texts = scene_texts(plan)
-    expected = len(texts)
-    if len(durations) != expected:
-        raise ValueError(f"durations has {len(durations)} entries, plan needs {expected}")
+    scene_file = Path(scene_file)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    spec_path = _write_scene_spec(plan, durations, texts)
-    env = dict(os.environ)
-    env["SCENE_SPEC_JSON"] = str(spec_path)
+    spec_path = _write_scene_spec(spec)
+    env = render_env(scene_file.parent, spec_path, extra_env)
     cmd = _manim_command() + [
         "render",
         f"-q{quality}",
         "--media_dir",
         str(out_dir),
-        str(VIDEO_SCENES_FILE),
-        SCENE_CLASS,
+        str(scene_file),
+        scene_class,
     ]
-    run_subprocess(cmd, env=env)
-    return _find_rendered_video(out_dir)
+    run_subprocess(cmd, env=env, timeout=timeout_seconds)
+    return _find_rendered_video(out_dir, scene_class)
 
 
-def _concat_audio(clips: list[NarrationClip], out_path: Path) -> Path:
+def template_spec(plan: ScenePlan, durations: list[float]) -> dict:
+    """The scene spec for today's fixed PaperScene template: captions are
+    `scene_texts(plan)` itself, so video_scenes.py never has to re-derive
+    narration text from the plan structure."""
+    texts = scene_texts(plan)
+    if len(durations) != len(texts):
+        raise ValueError(f"durations has {len(durations)} entries, plan needs {len(texts)}")
+    return {"plan": plan.model_dump(), "durations": durations, "captions": texts}
+
+
+def render_template_video(
+    plan: ScenePlan, durations: list[float], out_dir, quality: str = "l"
+) -> Path:
+    """Today's fixed PaperScene template, through the general render seam."""
+    return render_scene_video(
+        VIDEO_SCENES_FILE, SCENE_CLASS, template_spec(plan, durations), out_dir, quality=quality
+    )
+
+
+def concat_audio(
+    clips: list[NarrationClip], out_path: Path, target_seconds: list[float] | None = None
+) -> Path:
+    """Concatenate narration clips; with target_seconds, first pad each clip
+    with silence to its target (never shorter than the clip itself), so the
+    audio lines up with beats that ran a little longer than their narration."""
+    if target_seconds is not None and len(target_seconds) != len(clips):
+        raise ValueError(f"target_seconds has {len(target_seconds)} entries, clips has {len(clips)}")
     inputs = []
     for clip in clips:
         inputs += ["-i", str(clip.path)]
     n = len(clips)
-    filter_str = "".join(f"[{i}:a]" for i in range(n)) + f"concat=n={n}:v=0:a=1[out]"
+    if target_seconds is None:
+        filter_str = "".join(f"[{i}:a]" for i in range(n)) + f"concat=n={n}:v=0:a=1[out]"
+    else:
+        pads = "".join(
+            f"[{i}:a]apad=whole_dur={max(target, clip.seconds):.3f}[a{i}];"
+            for i, (clip, target) in enumerate(zip(clips, target_seconds, strict=True))
+        )
+        filter_str = pads + "".join(f"[a{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[out]"
     cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", filter_str, "-map", "[out]", str(out_path)]
     run_subprocess(cmd)
     return out_path
 
 
-def _mux_final(video_path: Path, audio_path: Path, out_path: Path) -> Path:
+def mux_final(video_path: Path, audio_path: Path, out_path: Path) -> Path:
     """Plain video+audio mux, no filter graph: the silent video already has
     captions burned in by Manim, so nothing here needs to touch the video
     stream, and `-c:v copy` just repackages it (no re-encode, no libass
@@ -310,10 +373,10 @@ def render_video(plan: ScenePlan, clips: list[NarrationClip], out_path) -> tuple
     out_path = Path(out_path)
     work_dir = Path(tempfile.mkdtemp(prefix="agentlab-video-"))
     durations = [clip.seconds for clip in clips]
-    silent_video = render_scene_video(plan, durations, work_dir / "render", quality="m")
-    audio_path = _concat_audio(clips, work_dir / "narration.mp3")
+    silent_video = render_template_video(plan, durations, work_dir / "render", quality="m")
+    audio_path = concat_audio(clips, work_dir / "narration.mp3")
     srt_path = out_path.with_suffix(".srt")
     srt_path.parent.mkdir(parents=True, exist_ok=True)
     srt_path.write_text(build_srt(clips), encoding="utf-8")
-    video_path = _mux_final(silent_video, audio_path, out_path)
+    video_path = mux_final(silent_video, audio_path, out_path)
     return video_path, srt_path

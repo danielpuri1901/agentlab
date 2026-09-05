@@ -11,6 +11,7 @@ registered in pyproject.toml (`-m 'not render'`).
 """
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -146,7 +147,7 @@ def test_ffprobe_duration_parses_subprocess_stdout(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_narrate_returns_one_clip_per_scene_with_right_text_and_duration(
+def test_narrate_returns_one_clip_per_text_with_right_text_and_duration(
     sample_plan, tmp_path, monkeypatch
 ):
     monkeypatch.setattr(video_render, "ffprobe_duration", lambda path: 4.5)
@@ -154,26 +155,45 @@ def test_narrate_returns_one_clip_per_scene_with_right_text_and_duration(
         [{"Id": "Ivy", "LanguageCode": "en-US", "SupportedEngines": ["neural"]}],
         audio=b"fake-mp3-bytes",
     )
-    out_dir = tmp_path / "audio"
-    clips = video_render.narrate(polly, sample_plan, "Ivy", out_dir)
+    texts = video_render.scene_texts(sample_plan)
+    clips = video_render.narrate(polly, texts, "Ivy", tmp_path / "audio")
 
-    expected_texts = video_render.scene_texts(sample_plan)
-    assert [c.text for c in clips] == expected_texts
+    assert [c.text for c in clips] == texts
     assert all(c.seconds == 4.5 for c in clips)
     assert all(c.path.exists() and c.path.read_bytes() == b"fake-mp3-bytes" for c in clips)
-    assert len(polly.synthesize_calls) == len(expected_texts)
-    assert all(call["VoiceId"] == "Ivy" for call in polly.synthesize_calls)
-    assert all(call["Engine"] == "neural" for call in polly.synthesize_calls)
-    assert [call["Text"] for call in polly.synthesize_calls] == expected_texts
+    assert [call["Text"] for call in polly.synthesize_calls] == texts
+    assert all(call["VoiceId"] == "Ivy" and call["Engine"] == "neural" for call in polly.synthesize_calls)
 
 
-def test_narrate_creates_out_dir_if_missing(sample_plan, tmp_path, monkeypatch):
+def test_narrate_creates_out_dir_if_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(video_render, "ffprobe_duration", lambda path: 3.0)
     polly = FakePolly([{"Id": "Ivy", "LanguageCode": "en-US", "SupportedEngines": ["neural"]}])
     out_dir = tmp_path / "does" / "not" / "exist" / "yet"
-    assert not out_dir.exists()
-    video_render.narrate(polly, sample_plan, "Ivy", out_dir)
+    video_render.narrate(polly, ["one", "two"], "Ivy", out_dir)
     assert out_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# render_env
+# ---------------------------------------------------------------------------
+
+
+def test_render_env_has_no_aws_keys_and_puts_scene_dir_first_on_pythonpath(monkeypatch, tmp_path):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA-should-not-leak")
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/x")
+    monkeypatch.setenv("PYTHONPATH", "/elsewhere")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    scene_dir = tmp_path / "scene"
+    spec_path = tmp_path / "spec.json"
+
+    env = video_render.render_env(scene_dir, spec_path, extra_env={"SCENE_TIMING_OUT": "/t.json"})
+
+    assert not any(key.startswith("AWS_") for key in env)
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(scene_dir)
+    assert "/elsewhere" in env["PYTHONPATH"]
+    assert env["SCENE_SPEC_JSON"] == str(spec_path)
+    assert env["SCENE_TIMING_OUT"] == "/t.json"
+    assert env["PATH"] == "/usr/bin"
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +231,16 @@ def test_build_srt_wraps_long_text_at_wrap_width():
     assert srt.count("\n") >= expected_wrapped.count("\n") + 2  # index + timing lines too
 
 
+def test_build_srt_uses_given_durations_when_provided(tmp_path):
+    clips = [
+        NarrationClip(path=tmp_path / "a.mp3", seconds=1.0, text="first"),
+        NarrationClip(path=tmp_path / "b.mp3", seconds=1.0, text="second"),
+    ]
+    srt = video_render.build_srt(clips, durations=[2.5, 1.0])
+    assert "00:00:00,000 --> 00:00:02,500" in srt
+    assert "00:00:02,500 --> 00:00:03,500" in srt
+
+
 # ---------------------------------------------------------------------------
 # render_scene_video (the manim subprocess call)
 # ---------------------------------------------------------------------------
@@ -226,49 +256,100 @@ def _fake_manim_run(media_dir: Path):
     return fake_run
 
 
-def test_render_scene_video_builds_expected_manim_command(monkeypatch, tmp_path, sample_plan):
+def test_render_template_video_builds_expected_manim_command(monkeypatch, tmp_path, sample_plan):
     calls = []
     media_dir = tmp_path / "out"
 
     def fake_run(cmd, **kwargs):
-        calls.append((cmd, kwargs.get("env")))
+        calls.append((cmd, kwargs))
         return _fake_manim_run(media_dir)(cmd, **kwargs)
 
     monkeypatch.setattr(video_render, "run_subprocess", fake_run)
-    # Pin the environment branch so this test passes both on the laptop
-    # (no manim) and inside the video image's build gate (manim present).
-    monkeypatch.setattr(
-        video_render, "_manim_command", lambda: ["uvx", "--python", "3.12", "manim"]
-    )
+    monkeypatch.setattr(video_render, "_manim_command", lambda: ["uvx", "--python", "3.12", "manim"])
     durations = video_render.default_scene_durations(sample_plan)
 
-    result = video_render.render_scene_video(sample_plan, durations, media_dir, quality="l")
+    result = video_render.render_template_video(sample_plan, durations, media_dir, quality="l")
 
     assert result.name == "PaperScene.mp4"
-    assert len(calls) == 1
-    cmd, env = calls[0]
+    cmd, kwargs = calls[0]
     assert cmd[:4] == ["uvx", "--python", "3.12", "manim"]
     assert "-ql" in cmd
     assert str(video_render.VIDEO_SCENES_FILE) in cmd
     assert video_render.SCENE_CLASS in cmd
-    assert "--media_dir" in cmd
-    assert str(media_dir) in cmd
-    assert env is not None
-    spec_path = Path(env["SCENE_SPEC_JSON"])
-    assert spec_path.exists()
-    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    assert kwargs["timeout"] == video_render.DEFAULT_RENDER_TIMEOUT_SECONDS
+    spec = json.loads(Path(kwargs["env"]["SCENE_SPEC_JSON"]).read_text(encoding="utf-8"))
     assert spec["durations"] == durations
     assert spec["plan"]["title"] == sample_plan.title
-    assert spec["plan"]["citation_url"] == sample_plan.citation_url
-    # Captions are the narration text itself (scene_texts(plan)), so
-    # video_scenes.py can burn them in without re-deriving anything from
-    # the plan structure.
     assert spec["captions"] == video_render.scene_texts(sample_plan)
 
 
-def test_render_scene_video_raises_on_duration_count_mismatch(sample_plan, tmp_path):
+def test_render_scene_video_takes_any_scene_file_and_timeout(monkeypatch, tmp_path):
+    calls = []
+    media_dir = tmp_path / "out"
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        out_file = media_dir / "videos" / "paper_story" / "480p15" / "PaperStory.mp4"
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_bytes(b"fake-mp4")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(video_render, "run_subprocess", fake_run)
+    monkeypatch.setattr(video_render, "_manim_command", lambda: ["uvx", "--python", "3.12", "manim"])
+    scene_file = tmp_path / "scene" / "paper_story.py"
+    scene_file.parent.mkdir()
+    scene_file.write_text("# scene", encoding="utf-8")
+
+    result = video_render.render_scene_video(
+        scene_file, "PaperStory", {"storyboard": {}, "durations": [1.0], "captions": ["x"]},
+        media_dir, quality="l", timeout_seconds=42, extra_env={"SCENE_TIMING_OUT": "/t.json"},
+    )
+
+    assert result.name == "PaperStory.mp4"
+    cmd, kwargs = calls[0]
+    assert str(scene_file) in cmd and "PaperStory" in cmd
+    assert kwargs["timeout"] == 42
+    assert kwargs["env"]["SCENE_TIMING_OUT"] == "/t.json"
+    assert kwargs["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(scene_file.parent)
+
+
+def test_template_spec_raises_on_duration_count_mismatch(sample_plan):
     with pytest.raises(ValueError):
-        video_render.render_scene_video(sample_plan, [1.0], tmp_path)
+        video_render.template_spec(sample_plan, [1.0])
+
+
+# ---------------------------------------------------------------------------
+# concat_audio
+# ---------------------------------------------------------------------------
+
+
+def test_concat_audio_pads_each_clip_to_its_target(monkeypatch, tmp_path):
+    run_calls = []
+    monkeypatch.setattr(
+        video_render, "run_subprocess",
+        lambda cmd, **kwargs: run_calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", ""),
+    )
+    clips = [
+        NarrationClip(path=tmp_path / "a.mp3", seconds=3.0, text="a"),
+        NarrationClip(path=tmp_path / "b.mp3", seconds=2.0, text="b"),
+    ]
+    video_render.concat_audio(clips, tmp_path / "out.mp3", target_seconds=[3.4, 1.5])
+    filter_arg = run_calls[0][run_calls[0].index("-filter_complex") + 1]
+    assert "[0:a]apad=whole_dur=3.400[a0];" in filter_arg
+    assert "[1:a]apad=whole_dur=2.000[a1];" in filter_arg  # never shorter than the clip
+    assert filter_arg.endswith("[a0][a1]concat=n=2:v=0:a=1[out]")
+
+
+def test_concat_audio_without_targets_is_a_plain_concat(monkeypatch, tmp_path):
+    run_calls = []
+    monkeypatch.setattr(
+        video_render, "run_subprocess",
+        lambda cmd, **kwargs: run_calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", ""),
+    )
+    clips = [NarrationClip(path=tmp_path / "a.mp3", seconds=3.0, text="a")]
+    video_render.concat_audio(clips, tmp_path / "out.mp3")
+    filter_arg = run_calls[0][run_calls[0].index("-filter_complex") + 1]
+    assert filter_arg == "[0:a]concat=n=1:v=0:a=1[out]"
 
 
 # ---------------------------------------------------------------------------
@@ -289,11 +370,11 @@ def test_render_video_orchestrates_render_concat_mux(monkeypatch, tmp_path, samp
 
     render_calls = []
 
-    def fake_render_scene_video(plan, durations, out_dir, quality="m"):
+    def fake_render_template_video(plan, durations, out_dir, quality="m"):
         render_calls.append((plan, durations, out_dir, quality))
         return fake_silent_video
 
-    monkeypatch.setattr(video_render, "render_scene_video", fake_render_scene_video)
+    monkeypatch.setattr(video_render, "render_template_video", fake_render_template_video)
 
     run_calls = []
 
@@ -308,7 +389,7 @@ def test_render_video_orchestrates_render_concat_mux(monkeypatch, tmp_path, samp
 
     assert video_path == out_path
 
-    # render_scene_video was called with durations pulled straight from clips
+    # render_template_video was called with durations pulled straight from clips
     assert len(render_calls) == 1
     _, durations, _, quality = render_calls[0]
     assert durations == [c.seconds for c in clips]
@@ -478,11 +559,11 @@ def test_scene_spec_captions_feed_video_scenes_directly(sample_plan):
 
 
 @pytest.mark.render
-def test_render_scene_video_real_manim_output(tmp_path, sample_plan):
+def test_render_template_video_real_manim_output(tmp_path, sample_plan):
     durations = video_render.default_scene_durations(sample_plan)
     out_dir = tmp_path / "render"
 
-    video_path = video_render.render_scene_video(sample_plan, durations, out_dir, quality="l")
+    video_path = video_render.render_template_video(sample_plan, durations, out_dir, quality="l")
 
     assert video_path.exists()
     duration = video_render.ffprobe_duration(video_path)
