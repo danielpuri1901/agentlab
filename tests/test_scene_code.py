@@ -135,6 +135,16 @@ def test_prompt_includes_full_storyboard_json_with_rejected_metaphors():
         assert rejected in prompt
 
 
+def test_prompt_requires_scene_to_fit_below_completion_limit():
+    assert "under 7000 output tokens" in scene_code.SCENE_CODE_SYSTEM
+
+
+def test_prompt_forbids_invented_labels_and_dense_overlays():
+    system = scene_code.SCENE_CODE_SYSTEM
+    assert "Only draw on-screen text listed in the storyboard" in system
+    assert "one visual change per beat" in system
+
+
 @pytest.mark.parametrize(
     ("duration", "expected_budget"),
     [(0.3, None), (0.5, "0.2"), (0.79, "0.4"), (0.8, "0.5")],

@@ -265,7 +265,12 @@ Contract:
 - File starts with `from manim import (...)` naming only what you use, then `from \
 story_scene import StoryScene` plus any constants you use from it.
 - Exactly one class, `class PaperStory(StoryScene):`. Do not override construct.
+- Keep the complete file under 7000 output tokens. Import only names you use.
 - One method per beat, beat_1 to beat_n, n equal to the storyboard's beat count.
+- Show one visual change per beat. Reuse the central object. Do not add a second chart, \
+dashboard, panel, or legend beside it.
+- Only draw on-screen text listed in the storyboard. Do not invent headings, labels, \
+values, round numbers, or annotations. Keep each label clear of every shape and caption.
 - Each beat's animations (the sum of run_time values plus any self.hold) must end at \
 least 0.3 s before that beat's narration ends. The budget per beat is listed below. The \
 base class pads the rest.

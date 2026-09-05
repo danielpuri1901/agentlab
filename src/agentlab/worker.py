@@ -368,16 +368,21 @@ def _complete_long(model: str, messages: list[dict]) -> str:
     """The story path's model calls allow complete generated scene files.
 
     A scene file does not fit the deep read's 3000-token budget, so this
-    completion allows 8000 output tokens and a 600 second timeout. The lazy
+    completion allows 12000 output tokens and a 600 second timeout. The lazy
     litellm import avoids the same circular import as `_complete`.
     """
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     import litellm
 
     response = litellm.completion(
-        model=model, messages=messages, max_tokens=8000, timeout=600
+        model=model, messages=messages, max_tokens=12000, timeout=600
     )
-    return response.choices[0].message.content
+    choice = response.choices[0]
+    if getattr(choice, "finish_reason", None) in {"length", "max_tokens"}:
+        raise ValueError(
+            "model output hit the token limit; return a shorter complete response"
+        )
+    return choice.message.content
 
 
 def _load_classics() -> list[dict]:

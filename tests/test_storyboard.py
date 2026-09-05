@@ -123,3 +123,15 @@ def test_prompt_carries_digest_plan_and_the_hard_rules(plan):
     assert plan.street_test_question in prompt
     for rule in ("three candidate", "flowchart", "never", "street-test"):
         assert rule in sb.STORYBOARD_SYSTEM + prompt
+
+
+def test_prompt_rejects_literal_research_artifacts_and_limits_complexity():
+    system = sb.STORYBOARD_SYSTEM
+    assert "whiteboard" in system
+    assert "checklist" in system
+    assert "different physical domain" in system
+    assert "exactly 6 beats" in system
+    assert "one large central object" in system.lower()
+    assert "No separate chart" in system
+    assert "at most 12 repeated elements" in system
+    assert "Do not number every repeated element" in system

@@ -156,7 +156,7 @@ filling, a scale tipping), what it stands for, and what visible change on it sho
 paper's mechanism working. Then pick the one where cause and effect is most visible on \
 screen, and say why in one sentence. The two you did not pick go in "rejected".
 
-Then write the beats, 5 to 9 (five to nine). Each beat has:
+Then write exactly 6 beats. Each beat has:
 - narration: what the voice says, 1 to 3 short spoken sentences, at most 280 characters. \
 This text is also the caption.
 - visual: what is on screen and what changes during this beat, concrete enough that a \
@@ -171,14 +171,24 @@ Rules:
 not open with the paper title or a definition.
 - The middle beats show the mechanism as changes on the object. Before and after on the \
 same object beats a list of steps.
-- The paper's real numbers appear ON the metaphor: a bar grows to 41%, a counter climbs \
-to 1250, three of ten items turn red. Never a separate statistics slide.
+- The paper's real numbers appear ON the metaphor: a bucket fills to 41%, a tree keeps \
+4 of 27 branches, or three of ten objects turn red. No separate chart, comparison bars, \
+score gauge, statistics slide, or dashboard.
 - The second-to-last beat states the limits: what the paper does NOT claim, shown as a \
 boundary on the object.
 - The last beat asks the scene plan's street-test question, with the object still on \
 screen.
-- One metaphor for the whole video. Never a flowchart, never a row of labelled boxes \
-with arrows, never boxes lighting up in order, never a pipeline diagram.
+- One metaphor for the whole video. Choose a concrete object from a different physical \
+domain than research or software. One large central object stays on screen and changes.
+- A research artifact is literal, not a metaphor. Never use a whiteboard, checklist, \
+rubric sheet, report, paper, document, form, dashboard, screen, code window, or slide as \
+the central object. Reject any candidate that could appear in the real research workflow.
+- Never a flowchart, never a row of labelled boxes with arrows, never boxes lighting up \
+in order, never a pipeline diagram.
+- Keep the composition sparse. Use at most two short labels in each beat. Do not put \
+sentences inside the stage because the caption already carries the narration.
+- Show at most 12 repeated elements at once. Use a single large number to state a bigger \
+count. Do not number every repeated element.
 - No emoji, no images, no photos: everything must be drawable with simple shapes and \
 text.
 - Narration is plain spoken English: short sentences, one idea per sentence, never an \
@@ -222,9 +232,11 @@ def build_storyboard_prompt(digest: str, plan: ScenePlan) -> str:
         f"{plan.model_dump_json(indent=1)}\n"
         "</scene_plan>\n\n"
         "Reminder of the hard rules now that you have read the paper: one metaphor, the "
-        "mechanism as visible change on one object, real numbers on the object, the limits "
+        "mechanism as visible change on one large central object from a different physical "
+        "domain, real numbers on the object, the limits "
         "in the second-to-last beat, the street-test question in the last beat, never a "
-        "flowchart, only numbers the digest or scene plan states.\n\n"
+        "whiteboard, checklist, research artifact, or flowchart, exactly 6 beats, only numbers "
+        "the digest or scene plan states.\n\n"
         "List three candidate metaphors, choose one, then write the fenced json storyboard."
     )
 

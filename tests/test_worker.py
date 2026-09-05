@@ -707,10 +707,28 @@ def test_complete_long_allows_story_output_budget_and_timeout(monkeypatch):
         {
             "model": "bedrock/story-model",
             "messages": messages,
-            "max_tokens": 8000,
+            "max_tokens": 12000,
             "timeout": 600,
         }
     ]
+
+
+@pytest.mark.parametrize("finish_reason", ["length", "max_tokens"])
+def test_complete_long_rejects_truncated_output(monkeypatch, finish_reason):
+    def fake_completion(**kwargs):
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason=finish_reason,
+                    message=SimpleNamespace(content="```python\npartial"),
+                )
+            ]
+        )
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    with pytest.raises(ValueError, match="token limit"):
+        worker_mod._complete_long("bedrock/story-model", [])
 
 
 def test_explain_story_path_ships_and_records_artifacts(

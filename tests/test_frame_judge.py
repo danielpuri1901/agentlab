@@ -86,6 +86,14 @@ def test_parse_judgement_rejects_nonfinite_score():
     assert "score" in error
 
 
+def test_parse_judgement_recovers_score_appended_inside_beats():
+    malformed = {"beats": [*_beats(), {"score": 8}]}
+    judgement, error = frame_judge.parse_judgement(json.dumps(malformed))
+    assert error == ""
+    assert judgement.score == 8
+    assert len(judgement.beats) == 5
+
+
 def test_judge_frames_retries_bad_json_then_falls_back_to_pass(tmp_path):
     frame = tmp_path / "f.png"
     frame.write_bytes(b"\x89PNG fake")
@@ -175,6 +183,14 @@ def test_build_judge_messages_pairs_each_frame_with_its_beat(tmp_path):
     )
     for beat in BOARD.beats:
         assert beat.visual in texts
+        for label in beat.on_screen_text:
+            assert label in texts
+
+
+def test_judge_rejects_literal_documents_and_process_diagrams():
+    assert "literal document" in frame_judge.JUDGE_SYSTEM
+    assert "physical metaphor" in frame_judge.JUDGE_SYSTEM
+    assert "top-level sibling" in frame_judge.JUDGE_SYSTEM
 
 
 def test_sample_frames_calls_ffmpeg_once_per_time(monkeypatch, tmp_path):

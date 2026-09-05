@@ -56,6 +56,21 @@ def parse_judgement(raw: str) -> tuple[Judgement | None, str]:
     if not isinstance(data, dict):
         return None, "judgement must be a JSON object"
 
+    beats = data.get("beats")
+    if isinstance(beats, list) and beats:
+        trailing = beats[-1]
+        metadata_keys = {"score", "verdict", "note"}
+        if (
+            isinstance(trailing, dict)
+            and "beat" not in trailing
+            and "score" in trailing
+            and set(trailing) <= metadata_keys
+        ):
+            data["beats"] = beats[:-1]
+            for key in metadata_keys:
+                if key in trailing and key not in data:
+                    data[key] = trailing[key]
+
     score = data.get("score", FALLBACK_SCORE)
     try:
         numeric_score = float(score)
@@ -107,10 +122,14 @@ that point, roughly), legible (is every piece of text readable at this size, not
 tiny or garbled), clean (nothing overlaps another element, nothing is cut off at the \
 frame edge, nothing is drawn over the caption text in the bottom band). Put a short \
 concrete issue when something is wrong, else null. Then give an overall score from 0 \
-to 10 for how well the frames tell the storyboard's story. Be strict about overlap and \
-cut-off elements, lenient about artistic interpretation. Answer with ONLY a fenced json \
+to 10 for how well the frames tell the storyboard's story. A literal document, \
+whiteboard, checklist, dashboard, flowchart, or research-process diagram is not a \
+physical metaphor. Mark affected beats clean=false, name that issue, and score the video \
+at most 5. Be strict about overlap and cut-off elements, lenient about artistic \
+interpretation. Answer with ONLY a fenced json \
 object: {"beats": [{"beat": 1, "shows_visual": true, "legible": true, "clean": true, \
-"issue": null}, ...], "score": 7}."""
+"issue": null}, ...], "score": 7}. The score is a top-level sibling after the closed \
+beats array, never an item inside beats."""
 
 
 def _image_part(path: Path) -> dict:
@@ -129,7 +148,11 @@ def build_judge_messages(frames: list[Path], storyboard: Storyboard) -> list[dic
         content.append(
             {
                 "type": "text",
-                "text": f"Beat {index}. Narration: {beat.narration}\nVisual: {beat.visual}",
+                "text": (
+                    f"Beat {index}. Narration: {beat.narration}\n"
+                    f"Visual: {beat.visual}\n"
+                    f"Allowed on-screen text: {json.dumps(beat.on_screen_text)}"
+                ),
             }
         )
         content.append(_image_part(Path(frame)))
