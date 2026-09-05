@@ -3,6 +3,10 @@
 
 # Local experiment output - never needed to build or test the worker image.
 results/
+out/
+
+# Local render references and exported videos are not runtime inputs.
+scripts/videos/
 
 # Planning artifacts - not part of the runtime or test surface.
 .superpowers/
@@ -34,4 +38,3 @@ __pycache__/
 # Editor/OS cruft.
 .DS_Store
 media/
-scripts/videos/media/

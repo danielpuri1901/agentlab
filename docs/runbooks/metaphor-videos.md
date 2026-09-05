@@ -22,6 +22,11 @@ The Telegram message looks the same in either path.
 
 ## Run one paper locally
 
+The local runner requires Boto3 1.41.0 or later with AWS Common Runtime support in the same environment used by `uv run` so it can resolve credentials created by `aws login`.
+See the [Boto3 credential guide](https://docs.aws.amazon.com/boto3/latest/guide/credentials.html).
+The current locked Boto3 and Botocore 1.40.61 environment lacks `LoginProvider`, so another `aws login` alone does not make the runner work.
+Updating the SDK, adding its CRT dependency, and regenerating the lock remain pending setup work.
+
 ```bash
 aws login
 uv run python scripts/story_video_for_url.py https://arxiv.org/abs/<id> out/<name>
@@ -30,6 +35,13 @@ open out/<name>/video.mp4
 
 This uses Bedrock, Polly, `uvx manim`, and ffmpeg on your machine.
 It never touches DynamoDB or Telegram.
+
+## Generated-scene isolation
+
+The AST guard and filtered subprocess environment reduce accidental access to unsafe APIs and inherited AWS environment variables.
+They do not create a filesystem or network sandbox.
+The renderer still runs as the worker user with the worker filesystem and network available, so environment filtering cannot guarantee that credentials are unreachable.
+Credential-isolated rendering remains an unimplemented requirement pending a decision between stronger isolation and a trusted-generated-code boundary.
 
 ## Re-render a shipped story
 

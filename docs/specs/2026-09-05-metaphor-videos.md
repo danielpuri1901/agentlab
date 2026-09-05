@@ -118,6 +118,8 @@ Guard, `check_scene_code(source: str, beat_count: int) -> list[str]` (empty list
 
 - Parses with `ast`; a syntax error is one finding.
 - Imports outside the allowlist are findings.
+- NumPy submodule imports are findings.
+- Root NumPy access is limited to an explicit numeric surface, including arrays, vector operations, elementary functions, reductions, interpolation, and selected `numpy.linalg` operations.
 - Any `Name` or `Attribute` attr in the forbidden set is a finding: `open`, `exec`, `eval`, `compile`, `__import__`, `globals`, `locals`, `getattr`, `setattr`, `delattr`, `vars`, `breakpoint`, `input`, `os`, `sys`, `subprocess`, `socket`, `pathlib`, `shutil`, `importlib`, `builtins`, `__builtins__`, `__subclasses__`, `__globals__`, `__dict__`, `__class__`, `__mro__`, `Tex`, `MathTex`, `SingleStringMathTex`, `DecimalNumber`, `Integer`, `Variable`, `Title`, `BulletedList`, `Matrix`, `IntegerMatrix`, `DecimalMatrix`, `MobjectMatrix`, `Table`, `MathTable`, `IntegerTable`, `DecimalTable`, `MobjectTable`, `get_axis_labels`, `get_x_axis_label`, `get_y_axis_label`, `add_coordinates`, `ImageMobject`, `SVGMobject`, `Code`, `add_sound`, `interactive_embed`.
 - A keyword argument `include_numbers=True` anywhere is a finding.
 - Exactly one class named `PaperStory` whose bases include `StoryScene`; a `construct` method on it is a finding.
@@ -168,7 +170,10 @@ def render_scene_video(scene_file: Path, scene_class: str, spec: dict, out_dir, 
 ```
 
 - The spec dict is written to a temp JSON file and passed as `SCENE_SPEC_JSON`.
-- The subprocess environment is built from scratch: `PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `PYTHONPATH` (the scene file's directory prepended), plus `SCENE_SPEC_JSON` and any `extra_env`. No `AWS_*` variable and no `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` reaches the render, so generated code cannot reach the task role's credentials even if the guard missed something.
+- The subprocess environment is built from `PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `PYTHONPATH` (the scene file's directory prepended), plus `SCENE_SPEC_JSON` and any `extra_env`.
+- Filtering inherited AWS environment variables reduces direct exposure, but it is not a filesystem, user, network, or credential-isolation boundary.
+- The render subprocess retains the worker filesystem, worker user identity, and network access.
+- Credential-isolated rendering remains required but unimplemented pending a decision between stronger isolation and an explicitly trusted-generated-code boundary.
 - `timeout_seconds` is passed to `subprocess.run`; a timeout is a render failure.
 - The template path keeps a thin wrapper, `render_template_video(plan, durations, out_dir, quality)`, that calls the general function with video_scenes.py and `PaperScene`.
 

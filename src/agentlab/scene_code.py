@@ -1,14 +1,13 @@
 """Scene code: the coder prompt and the guard for model-written Manim
 scenes (docs/specs/2026-09-05-metaphor-videos.md, section 3).
 
-The guard is an AST allowlist, not a sandbox: it keeps honest generated
-code inside manim + a few pure stdlib modules, and refuses everything that
-needs LaTeX (the video image has none) or touches files, processes, the
-network, or Python's introspection escape hatches. The render itself runs
-in a credential-free, time-limited subprocess (video_render.render_env),
-which is the real containment; the guard is there so a bad file fails in
-milliseconds with a message the model can act on, instead of minutes into
-a render.
+The guard is a best-effort AST validator, not a sandbox.
+It keeps normal generated code inside Manim, a few stdlib modules, and a
+narrow numeric NumPy surface, while rejecting known file, process, network,
+native-library, and introspection entry points.
+The render subprocess retains the worker's filesystem, user identity, and
+network access, so this check only reduces accidental misuse.
+It also makes bad files fail quickly with feedback the model can act on.
 """
 
 import ast
@@ -27,6 +26,92 @@ BEAT_MARGIN_SECONDS = 0.3
 ALLOWED_IMPORTS = frozenset(
     {"manim", "story_scene", "math", "random", "itertools", "functools", "numpy", "dataclasses", "typing", "colorsys"}
 )
+
+ALLOWED_NUMPY_MEMBERS = frozenset(
+    {
+        "abs",
+        "absolute",
+        "allclose",
+        "arange",
+        "arccos",
+        "arcsin",
+        "arctan",
+        "arctan2",
+        "argmax",
+        "argmin",
+        "argsort",
+        "array",
+        "asarray",
+        "bool_",
+        "ceil",
+        "clip",
+        "column_stack",
+        "concatenate",
+        "cos",
+        "cross",
+        "cumprod",
+        "cumsum",
+        "degrees",
+        "diff",
+        "dot",
+        "e",
+        "empty",
+        "exp",
+        "float32",
+        "float64",
+        "floor",
+        "full",
+        "geomspace",
+        "gradient",
+        "hstack",
+        "inf",
+        "int32",
+        "int64",
+        "interp",
+        "isclose",
+        "isfinite",
+        "isnan",
+        "linspace",
+        "log",
+        "log10",
+        "logspace",
+        "matmul",
+        "max",
+        "maximum",
+        "mean",
+        "median",
+        "min",
+        "minimum",
+        "nan",
+        "ndarray",
+        "newaxis",
+        "ones",
+        "outer",
+        "pi",
+        "power",
+        "prod",
+        "radians",
+        "round",
+        "sign",
+        "sin",
+        "sort",
+        "sqrt",
+        "square",
+        "stack",
+        "std",
+        "sum",
+        "tan",
+        "unique",
+        "var",
+        "vstack",
+        "where",
+        "zeros",
+    }
+)
+
+ALLOWED_NUMPY_NAMESPACES = {
+    "linalg": frozenset({"det", "eig", "eigh", "inv", "norm", "solve"}),
+}
 
 FORBIDDEN_NAMES = frozenset(
     {
@@ -48,29 +133,66 @@ FORBIDDEN_NAMES = frozenset(
 _BEAT_RE = re.compile(r"^beat_(\d+)$")
 
 
+def _attribute_path(node: ast.Attribute) -> tuple[str, ...] | None:
+    parts = []
+    current: ast.expr = node
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if not isinstance(current, ast.Name):
+        return None
+    return (current.id, *reversed(parts))
+
+
+def _numpy_attribute_allowed(path: tuple[str, ...]) -> bool:
+    members = path[1:]
+    if len(members) == 1:
+        return members[0] in ALLOWED_NUMPY_MEMBERS or members[0] in ALLOWED_NUMPY_NAMESPACES
+    if len(members) == 2:
+        return members[1] in ALLOWED_NUMPY_NAMESPACES.get(members[0], ())
+    return False
+
+
 def check_scene_code(source: str, beat_count: int) -> list[str]:
-    """Findings (empty means clean). Order preserved, duplicates removed."""
+    """Return best-effort validation findings, preserving order without duplicates."""
     try:
         tree = ast.parse(source)
     except SyntaxError as exc:
         return [f"syntax error: line {exc.lineno}: {exc.msg}"]
     findings: list[str] = []
+    numpy_aliases = {
+        alias.asname or "numpy"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "numpy"
+    }
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name.split(".")[0] not in ALLOWED_IMPORTS:
                     findings.append(f"import not allowed: {alias.name}")
+                elif alias.name.startswith("numpy."):
+                    findings.append(f"numpy submodule import not allowed: {alias.name}")
         elif isinstance(node, ast.ImportFrom):
             root = (node.module or "").split(".")[0]
             if node.level or root not in ALLOWED_IMPORTS:
                 findings.append(f"import not allowed: from {node.module or '.'}")
+            elif root == "numpy" and node.module != "numpy":
+                findings.append(f"numpy submodule import not allowed: {node.module}")
             for alias in node.names:
                 if alias.name in FORBIDDEN_NAMES:
                     findings.append(f"forbidden name imported: {alias.name}")
+                if node.module == "numpy" and alias.name not in ALLOWED_NUMPY_MEMBERS:
+                    findings.append(f"numpy import not allowed: {alias.name}")
         elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
             findings.append(f"forbidden name: {node.id}")
-        elif isinstance(node, ast.Attribute) and node.attr in FORBIDDEN_NAMES:
-            findings.append(f"forbidden attribute: {node.attr}")
+        elif isinstance(node, ast.Attribute):
+            if node.attr in FORBIDDEN_NAMES:
+                findings.append(f"forbidden attribute: {node.attr}")
+            path = _attribute_path(node)
+            if path and path[0] in numpy_aliases and not _numpy_attribute_allowed(path):
+                findings.append(f"numpy attribute not allowed: {'.'.join(path)}")
         elif (
             isinstance(node, ast.keyword)
             and node.arg == "include_numbers"

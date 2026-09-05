@@ -80,7 +80,7 @@ def ungrounded_numbers(data: dict, digest: str, plan: ScenePlan) -> list[str]:
     the digest nor in the scene plan (which the deep read already grounded).
     Percentages and any 3+ digit run count; commas are ignored so 1,250
     matches 1250."""
-    haystack = _normalise(digest + "\n" + plan.model_dump_json())
+    grounded = set(_NUMBER_RE.findall(_normalise(digest + "\n" + plan.model_dump_json())))
     found: list[str] = []
     for beat in data.get("beats") or []:
         if not isinstance(beat, dict):
@@ -90,7 +90,7 @@ def ungrounded_numbers(data: dict, digest: str, plan: ScenePlan) -> list[str]:
             if not isinstance(text, str):
                 continue
             for token in _NUMBER_RE.findall(_normalise(text)):
-                if token not in haystack and token not in found:
+                if token not in grounded and token not in found:
                     found.append(token)
     return found
 

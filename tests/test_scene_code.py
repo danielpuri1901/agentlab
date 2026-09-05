@@ -37,6 +37,41 @@ def test_guard_flags_forbidden_things(snippet, needle):
     assert any(needle in f for f in findings), findings
 
 
+@pytest.mark.parametrize(
+    ("snippet", "needle"),
+    [
+        ("import numpy as np\nvalues = np.fromfile('/etc/passwd')\n", "fromfile"),
+        (
+            "import numpy as np\nsource = np.DataSource()\nexists = source.exists('https://example.com/data')\n",
+            "DataSource",
+        ),
+        ("from numpy import fromfile\n", "fromfile"),
+        ("from numpy import DataSource\n", "DataSource"),
+        ("import numpy.ctypeslib as npct\n", "numpy.ctypeslib"),
+        ("from numpy.ctypeslib import load_library\n", "numpy.ctypeslib"),
+        ("import numpy.lib.npyio as npio\n", "numpy.lib.npyio"),
+    ],
+)
+def test_guard_flags_numpy_file_network_native_library_and_submodule_access(snippet, needle):
+    findings = scene_code.check_scene_code(snippet + GOLDEN_SCENE, BEATS)
+    assert any(needle in finding for finding in findings), findings
+
+
+def test_guard_allows_narrow_numeric_numpy_surface():
+    source = """import numpy as np
+from numpy import array, cos
+
+""" + GOLDEN_SCENE.replace(
+        "self.hold(0.6)",
+        "points = array([[0.0, 1.0], [2.0, 3.0]]); "
+        "weights = np.linspace(0.0, 1.0, 2); "
+        "length = np.linalg.norm(points[1] - points[0]); "
+        "wave = cos(weights) + np.sin(weights); "
+        "self.hold(0.6)",
+    )
+    assert scene_code.check_scene_code(source, BEATS) == []
+
+
 def test_guard_flags_include_numbers_true():
     source = GOLDEN_SCENE.replace(
         "self.hold(0.6)", "self.axes = Axes(x_range=[0, 1], axis_config={'include_numbers': True}); self.hold(0.6)"

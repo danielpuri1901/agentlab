@@ -30,7 +30,6 @@ main venv without manim, and story_video.py uses them.
 
 import json
 import os
-import re
 import textwrap
 from pathlib import Path
 
@@ -59,9 +58,6 @@ CAPTION_SWAP_SECONDS = 0.25
 PER_BEAT_OVERRUN_LIMIT = 0.75
 TOTAL_OVERRUN_LIMIT = 3.0
 FRAME_TIME_TOLERANCE = 1e-6
-
-_BEAT_METHOD_RE = re.compile(r"^beat_(\d+)$")
-
 
 def load_spec() -> dict:
     path = os.environ.get(SPEC_ENV)

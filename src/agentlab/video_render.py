@@ -23,9 +23,12 @@ into one narration track, padding each clip with silence up to its target
 length first (never shorter than the clip itself) when the caller has a
 durations list that ran longer than the narration; mux that track onto the
 video with a plain video+audio mux (no ffmpeg video filter). The render
-subprocess runs in a clean environment (no AWS_* variables reach it, see
-RENDER_ENV_KEYS) with a hard timeout, since the scene file it renders may be
-model-written. Captions are burned in by video_scenes.py itself, not by
+subprocess receives a filtered environment and a hard timeout, since the
+scene file it renders may be model-written. Filtering out inherited AWS
+environment variables reduces direct exposure, but the subprocess retains
+the worker's filesystem, user identity, and network access. It is not a
+sandbox or a credential-isolation boundary. Captions are burned in by
+video_scenes.py itself, not by
 ffmpeg: the target environment's ffmpeg build lacks libass (`ffmpeg
 -filters` has no `subtitles` entry), so the `-vf subtitles=...` approach
 fails there with "Filter not found". A plain .srt is still generated as a
@@ -52,10 +55,9 @@ PREFERRED_VOICE_LANGS = ("en-US", "en-GB")
 SRT_WRAP_WIDTH = 42
 
 DEFAULT_RENDER_TIMEOUT_SECONDS = 480
-# The render subprocess gets a fresh environment built from these keys only:
-# no AWS_* variable and no AWS_CONTAINER_CREDENTIALS_RELATIVE_URI reaches
-# manim, so model-written scene code (story_video.py) can never reach the
-# task role's credentials even if scene_code.py's guard missed something.
+# Only these parent environment keys are copied into the render subprocess.
+# This reduces direct credential exposure, but does not isolate the subprocess
+# from the worker filesystem, user identity, or network.
 RENDER_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
 
 
@@ -228,12 +230,13 @@ def _manim_command() -> list[str]:
 
 
 def render_env(scene_dir: Path, spec_path: Path, extra_env: dict | None = None) -> dict:
-    """A fresh environment for the render subprocess: only RENDER_ENV_KEYS
-    carried over from this process (so no AWS_* credential leaks through),
-    plus the scene's own directory put first on PYTHONPATH (so a scene file
-    can import sibling modules from wherever it lives) and the scene spec
-    path. `extra_env` (e.g. SCENE_TIMING_OUT) is applied last so callers can
-    override anything above."""
+    """Build the filtered render environment.
+
+    Only RENDER_ENV_KEYS are copied from the parent, then the scene directory,
+    spec path, and extra values are added. This filtering reduces inherited
+    secret exposure but does not provide filesystem, identity, network, or
+    credential isolation.
+    """
     env = {key: os.environ[key] for key in RENDER_ENV_KEYS if key in os.environ}
     python_path = str(scene_dir)
     if os.environ.get("PYTHONPATH"):
@@ -269,9 +272,10 @@ def render_scene_video(
     timeout_seconds: int = DEFAULT_RENDER_TIMEOUT_SECONDS,
     extra_env: dict | None = None,
 ) -> Path:
-    """Render any Manim scene file through the one guarded subprocess seam:
-    fresh environment (render_env), hard timeout, spec handed over as a
-    JSON path in SCENE_SPEC_JSON. Raises subprocess.CalledProcessError on a
+    """Render a Manim scene through the subprocess seam.
+
+    The subprocess gets a filtered environment, a hard timeout, and the spec
+    as a JSON path in SCENE_SPEC_JSON. Raises subprocess.CalledProcessError on a
     manim failure and subprocess.TimeoutExpired on a timeout.
     Shells out to `uvx --python 3.12 manim`; see module docstring for why
     that has to be a subprocess rather than an import."""

@@ -81,6 +81,12 @@ def test_ungrounded_numbers_accepts_numbers_from_the_plan(golden, plan):
     assert sb.ungrounded_numbers(golden, DIGEST, plan) == []
 
 
+def test_ungrounded_numbers_compares_complete_numeric_tokens(golden, plan):
+    # The plan grounds 1250 and 74%, but neither token grounds a shorter number.
+    golden["beats"][3]["narration"] = "The survey covers 125 papers and retains 4%."
+    assert sb.ungrounded_numbers(golden, DIGEST, plan) == ["125", "4%"]
+
+
 def test_parse_storyboard_treats_ungrounded_number_as_validation_error(golden, plan):
     golden["beats"][3]["narration"] = "Codes first keeps 91%."
     board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
