@@ -71,7 +71,8 @@ def test_ungrounded_numbers_flags_invented_numbers_only(golden, plan):
     golden["beats"][3]["narration"] = "A plain summary keeps 0% of the codes. Codes first keeps 91%."
     golden["beats"][1]["on_screen_text"] = ["1,999 items"]
     # 1,999 normalises to 1999 (commas ignored) and is nowhere in the digest or plan.
-    assert sb.ungrounded_numbers(golden, DIGEST, plan) == ["91%", "1999"]
+    # Order is incidental (which beat comes first), so compare as a set.
+    assert sorted(sb.ungrounded_numbers(golden, DIGEST, plan)) == ["1999", "91%"]
 
 
 def test_ungrounded_numbers_accepts_numbers_from_the_plan(golden, plan):

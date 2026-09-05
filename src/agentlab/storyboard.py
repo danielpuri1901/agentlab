@@ -75,29 +75,23 @@ def _normalise(text: str) -> str:
     return text.replace(",", "").replace(" %", "%")
 
 
-def _collect_ungrounded(text: object, haystack: str, found: list[str]) -> None:
-    if not isinstance(text, str):
-        return
-    for token in _NUMBER_RE.findall(_normalise(text)):
-        if token not in haystack and token not in found:
-            found.append(token)
-
-
 def ungrounded_numbers(data: dict, digest: str, plan: ScenePlan) -> list[str]:
     """Numbers in beat narration or on-screen text that appear neither in
     the digest nor in the scene plan (which the deep read already grounded).
     Percentages and any 3+ digit run count; commas are ignored so 1,250
-    matches 1250. Narration is scanned across all beats first, then
-    on-screen text across all beats, so the narration's numbers (the
-    voiceover's claims) surface before label text in the returned order."""
+    matches 1250."""
     haystack = _normalise(digest + "\n" + plan.model_dump_json())
-    beats = [beat for beat in (data.get("beats") or []) if isinstance(beat, dict)]
     found: list[str] = []
-    for beat in beats:
-        _collect_ungrounded(beat.get("narration", ""), haystack, found)
-    for beat in beats:
-        for text in beat.get("on_screen_text") or []:
-            _collect_ungrounded(text, haystack, found)
+    for beat in data.get("beats") or []:
+        if not isinstance(beat, dict):
+            continue
+        texts = [beat.get("narration", "")] + list(beat.get("on_screen_text") or [])
+        for text in texts:
+            if not isinstance(text, str):
+                continue
+            for token in _NUMBER_RE.findall(_normalise(text)):
+                if token not in haystack and token not in found:
+                    found.append(token)
     return found
 
 
