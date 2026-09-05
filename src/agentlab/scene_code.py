@@ -12,8 +12,10 @@ a render.
 """
 
 import ast
+import math
 import re
 from collections.abc import Callable
+from decimal import ROUND_DOWN, Decimal
 
 from agentlab.storyboard import Storyboard
 
@@ -83,14 +85,13 @@ def check_scene_code(source: str, beat_count: int) -> list[str]:
                     and isinstance(value, ast.Constant) and value.value is True
                 ):
                     findings.append("include_numbers=True needs LaTeX, which the render image does not have")
-    classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == SCENE_CLASS]
-    if len(classes) != 1:
+    classes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
+    if len(classes) != 1 or classes[0].name != SCENE_CLASS:
         findings.append(f"exactly one top-level class named {SCENE_CLASS} is required")
         return _dedup(findings)
     cls = classes[0]
-    bases = [b.id if isinstance(b, ast.Name) else b.attr if isinstance(b, ast.Attribute) else "" for b in cls.bases]
-    if BASE_CLASS not in bases:
-        findings.append(f"{SCENE_CLASS} must subclass {BASE_CLASS}")
+    if len(cls.bases) != 1 or not isinstance(cls.bases[0], ast.Name) or cls.bases[0].id != BASE_CLASS:
+        findings.append(f"{SCENE_CLASS} must have exactly one direct base named {BASE_CLASS}")
     methods = {n.name for n in cls.body if isinstance(n, ast.FunctionDef)}
     if "construct" in methods:
         findings.append(f"{SCENE_CLASS} must not override construct; the base class owns it")
@@ -174,15 +175,20 @@ else outside it."""
 def build_scene_code_prompt(
     storyboard: Storyboard, durations: list[float], feedback: str | None, previous_source: str | None
 ) -> str:
+    _validate_durations(storyboard, durations)
     beat_lines = []
     for i, (beat, seconds) in enumerate(zip(storyboard.beats, durations, strict=True), start=1):
-        budget = max(seconds - BEAT_MARGIN_SECONDS, 0.5)
+        budget = _format_permitted_budget(seconds)
         labels = f" On-screen text: {', '.join(beat.on_screen_text)}." if beat.on_screen_text else ""
         beat_lines.append(
             f"beat_{i}: narration lasts {seconds:.1f} s, so your animations must total at most "
-            f"{budget:.1f} s.\n  Narration: {beat.narration}\n  Visual: {beat.visual}{labels}"
+            f"{budget} s.\n  Narration: {beat.narration}\n  Visual: {beat.visual}{labels}"
         )
+    storyboard_json = storyboard.model_dump_json(indent=2)
     prompt = (
+        "<storyboard_json>\n"
+        f"{storyboard_json}\n"
+        "</storyboard_json>\n\n"
         f"Metaphor: {storyboard.metaphor}\nWhy: {storyboard.why_this_metaphor}\n"
         "Mapping:\n"
         + "\n".join(f"- {m.paper_term} = {m.visual}" for m in storyboard.mapping)
@@ -200,6 +206,27 @@ def build_scene_code_prompt(
         )
     prompt += "\n\nWrite the complete file now, in one fenced python block."
     return prompt
+
+
+def _validate_durations(storyboard: Storyboard, durations: list[float]) -> None:
+    expected = len(storyboard.beats)
+    if len(durations) != expected:
+        raise ValueError(f"durations must contain one duration per beat ({expected} required, got {len(durations)})")
+    for index, seconds in enumerate(durations, start=1):
+        try:
+            finite = math.isfinite(seconds)
+        except (TypeError, ValueError):
+            finite = False
+        if not finite:
+            raise ValueError(f"duration for beat_{index} must be finite")
+        if seconds <= BEAT_MARGIN_SECONDS:
+            raise ValueError(f"duration for beat_{index} must be greater than {BEAT_MARGIN_SECONDS} seconds")
+
+
+def _format_permitted_budget(seconds: float) -> str:
+    permitted = Decimal(str(seconds)) - Decimal(str(BEAT_MARGIN_SECONDS))
+    conservative = permitted.quantize(Decimal("0.1"), rounding=ROUND_DOWN)
+    return f"{conservative:.1f}"
 
 
 _FENCE_RE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)

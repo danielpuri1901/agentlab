@@ -91,6 +91,60 @@ def test_prompt_lists_each_beat_with_its_duration_and_budget():
     assert board.beats[0].visual in prompt
 
 
+def test_prompt_includes_full_storyboard_json_with_rejected_metaphors():
+    board = Storyboard(**GOLDEN_BOARD)
+    prompt = scene_code.build_scene_code_prompt(board, [6.0] * BEATS, None, None)
+    storyboard_json = board.model_dump_json(indent=2)
+    assert storyboard_json in prompt
+    for rejected in board.rejected:
+        assert rejected in prompt
+
+
+@pytest.mark.parametrize(
+    ("duration", "expected_budget"),
+    [(0.3, None), (0.5, "0.2"), (0.79, "0.4"), (0.8, "0.5")],
+)
+def test_prompt_validates_duration_margin_boundaries(duration, expected_budget):
+    board = Storyboard(**GOLDEN_BOARD)
+    if duration <= scene_code.BEAT_MARGIN_SECONDS:
+        with pytest.raises(ValueError, match="greater than 0.3"):
+            scene_code.build_scene_code_prompt(board, [duration] * BEATS, None, None)
+    else:
+        prompt = scene_code.build_scene_code_prompt(board, [duration] * BEATS, None, None)
+        displayed = next(line for line in prompt.splitlines() if line.startswith("beat_1:"))
+        assert f"at most {expected_budget} s" in displayed
+
+
+@pytest.mark.parametrize("duration", [float("nan"), float("inf"), float("-inf")])
+def test_prompt_rejects_non_finite_durations(duration):
+    board = Storyboard(**GOLDEN_BOARD)
+    with pytest.raises(ValueError, match="finite"):
+        scene_code.build_scene_code_prompt(board, [duration] * BEATS, None, None)
+
+
+def test_prompt_rejects_duration_count_mismatch():
+    board = Storyboard(**GOLDEN_BOARD)
+    with pytest.raises(ValueError, match="one duration per beat"):
+        scene_code.build_scene_code_prompt(board, [6.0] * (BEATS - 1), None, None)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "needle"),
+    [
+        ("class Helper:\n    pass\n", "exactly one top-level class named PaperStory"),
+        (
+            "class PaperStory(StoryScene):\n    pass\n\nclass Helper:\n    pass\n",
+            "exactly one top-level class named PaperStory",
+        ),
+        ("class PaperStory(other.StoryScene):\n    pass\n", "exactly one direct base named StoryScene"),
+        ("class PaperStory(StoryScene, Helper):\n    pass\n", "exactly one direct base named StoryScene"),
+    ],
+)
+def test_guard_requires_exactly_one_paper_story_class_shape(declaration, needle):
+    findings = scene_code.check_scene_code(declaration, BEATS)
+    assert any(needle in finding for finding in findings)
+
+
 def test_write_scene_code_fix_round_includes_previous_source_and_feedback():
     board = Storyboard(**GOLDEN_BOARD)
     seen = []
