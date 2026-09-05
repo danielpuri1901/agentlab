@@ -1,6 +1,8 @@
 # Daily paper videos: design spec
 
 Status: designed with Daniel 2026-08-23 (deterministic fetch + dedup DB, two tracks, JSON scene plan, fixed Manim template, outcome-based feedback); this spec is the binding authority for the implementation plan.
+Update 2026-09-05: stage 5 (RENDER) is superseded by `docs/specs/2026-09-05-metaphor-videos.md` (a generated Manim scene per paper, guarded, with the fixed template kept as the fallback).
+The sentence "the model never writes animation code" below no longer holds; it is the reason every video looked the same.
 
 ## The product
 
