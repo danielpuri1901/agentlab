@@ -323,7 +323,7 @@ def split_digest_and_plan(raw: str) -> tuple[str, str]:
     return digest, plan_raw.strip()
 
 
-def _extract_json_object(raw: str) -> str:
+def extract_json_object(raw: str) -> str:
     """Pull a JSON object out of possibly fenced, possibly dirty text."""
     text = raw.strip()
     if "```" in text:
@@ -340,6 +340,9 @@ def _extract_json_object(raw: str) -> str:
         if start != -1 and end != -1 and end > start:
             text = text[start : end + 1]
     return text
+
+
+_extract_json_object = extract_json_object
 
 
 _CLIP_LIMITS = {

@@ -1,0 +1,18 @@
+{
+  "metaphor": "A house move with one small suitcase: the house is the whole chat, the suitcase is the token budget, and a gold passport is the one code the agent must not lose.",
+  "why_this_metaphor": "Compaction is choosing what to pack; the viewer sees the passport left on a shelf or packed first, and that is the entire mechanism.",
+  "rejected": ["A river with a dam that lets only some water through", "A librarian shelving books into one small box"],
+  "mapping": [
+    {"paper_term": "chat history", "visual": "a house full of grey furniture"},
+    {"paper_term": "token budget", "visual": "one small suitcase"},
+    {"paper_term": "exact identifier", "visual": "a gold passport"},
+    {"paper_term": "compaction prompt", "visual": "the packing list pinned above the door"}
+  ],
+  "beats": [
+    {"narration": "This house is an agent's whole chat. You must move today, and only one small suitcase comes with you.", "visual": "A large grey rectangle labelled house on the left fills with nine small grey furniture blocks. A small gold-outlined suitcase appears on the right. A gold passport sits among the furniture.", "on_screen_text": ["house = the chat", "suitcase = the budget"]},
+    {"narration": "The first packing list says: summarize concisely. The mover grabs the sofa and leaves the passport on the shelf.", "visual": "A label 'packing list: summarize concisely' appears above the door. One furniture block shrinks and slides into the suitcase. The passport stays behind and dims. A red cross appears next to the suitcase.", "on_screen_text": ["summarize concisely"]},
+    {"narration": "The second list says: list every code first. Same mover, same suitcase. Now the passport goes in before anything else.", "visual": "The label changes to 'packing list: list every code first'. The passport slides into the suitcase first and glows. A green check replaces the red cross.", "on_screen_text": ["list every code first"]},
+    {"narration": "Measured on a weak model, a plain summary keeps zero percent of the codes. Codes first keeps 44%.", "visual": "Two bars grow from the suitcase: a short red bar labelled 0% and a tall gold bar counting up to 44%.", "on_screen_text": ["0%", "44%"]},
+    {"narration": "The paper does not test lists longer than 50 items. So here is the street test: does your compaction prompt name the codes first?", "visual": "A dashed boundary line appears at the edge of the house labelled '50 items tested'. The suitcase stays centred with the question text below it.", "on_screen_text": ["50 items tested"]}
+  ]
+}
