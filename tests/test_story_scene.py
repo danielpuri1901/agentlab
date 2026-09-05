@@ -89,3 +89,35 @@ def test_golden_scene_renders_and_writes_timing(tmp_path):
     assert all(b["overrun"] < 0.05 for b in timing["beats"])
     assert abs(timing["total"] - sum(durations)) < 0.2
     assert abs(video_render.ffprobe_duration(video) - sum(durations)) < 0.5
+
+
+@pytest.mark.render
+def test_fractional_narration_durations_are_padded_to_whole_frames(tmp_path):
+    import shutil
+
+    from agentlab import video_render
+
+    board = json.loads(GOLDEN_BOARD.read_text(encoding="utf-8"))
+    scene_dir = tmp_path / "scene"
+    scene_dir.mkdir()
+    shutil.copy(GOLDEN_SCENE, scene_dir / "paper_story.py")
+    shutil.copy(Path(story_scene.__file__), scene_dir / "story_scene.py")
+    durations = [6.013, 7.021, 7.039, 6.077, 8.111]
+    captions = [beat["narration"] for beat in board["beats"]]
+    timing_path = tmp_path / "beat_times.json"
+
+    video_render.render_scene_video(
+        scene_dir / "paper_story.py",
+        "PaperStory",
+        {"storyboard": board, "durations": durations, "captions": captions},
+        tmp_path / "media",
+        quality="l",
+        extra_env={"SCENE_TIMING_OUT": str(timing_path)},
+    )
+
+    timing = json.loads(timing_path.read_text(encoding="utf-8"))
+    frame_seconds = 1 / 15
+    for beat, narration_seconds in zip(timing["beats"], durations, strict=True):
+        actual_seconds = beat["end"] - beat["start"]
+        assert actual_seconds >= narration_seconds - 1e-6
+        assert actual_seconds < narration_seconds + frame_seconds + 1e-6

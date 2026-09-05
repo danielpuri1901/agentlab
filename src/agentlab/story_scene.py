@@ -19,8 +19,9 @@ length, so the audio muxed later lines up). The generated class owns
 everything the viewer watches: one method per beat, beat_1 .. beat_n.
 
 Scene.time is manim's renderer clock (Manim Community 0.21: Scene.time
-returns renderer.time, advanced by every play and wait), which is what
-makes per-beat padding exact.
+returns renderer.time, advanced by every play and wait).
+Final holds are rounded up by one frame when Manim truncates a fractional
+static wait, so a visual beat never ends before its narration.
 
 The pure helpers above the manim import (beat_record, overrun_report,
 beat_midpoints, beat_lengths, wrap_text, load_spec) are importable from the
@@ -57,6 +58,7 @@ CAPTION_SWAP_SECONDS = 0.25
 
 PER_BEAT_OVERRUN_LIMIT = 0.75
 TOTAL_OVERRUN_LIMIT = 3.0
+FRAME_TIME_TOLERANCE = 1e-6
 
 _BEAT_METHOD_RE = re.compile(r"^beat_(\d+)$")
 
@@ -160,6 +162,13 @@ if _MANIM_AVAILABLE:
                 remaining = durations[i] - (self.time - start)
                 if remaining > 0:
                     self.wait(remaining)
+                shortfall = durations[i] - (self.time - start)
+                if shortfall > FRAME_TIME_TOLERANCE:
+                    frame_seconds = 1 / self.renderer.camera.frame_rate
+                    self.wait(
+                        frame_seconds + FRAME_TIME_TOLERANCE,
+                        frozen_frame=True,
+                    )
                 self._timing.append(beat_record(i + 1, start, self.time, durations[i]))
             self._write_timing()
 
