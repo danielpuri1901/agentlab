@@ -83,8 +83,8 @@ class PaperStory(StoryScene):
         boundary_label = self.label("50 items tested", size=18, color=GREY_B).next_to(boundary, RIGHT, buff=0.1)
         self.play(Create(boundary), FadeIn(boundary_label), run_time=1.2)
         question = self.label("Does your compaction prompt name the codes first?", size=26, color=WHITE, width=40)
-        # y = -1.9: inside the stage, above the caption band at STAGE_BOTTOM.
-        question.move_to(self.case.get_center() + DOWN * 2.2)
-        self.fit(question, max_w=6.0)
+        # Place the question below the house, above the caption band, clear of the result bars.
+        question.move_to(LEFT * 3.2 + DOWN * 1.85)
+        self.fit(question, max_w=5.8, max_h=0.65)
         self.play(FadeIn(question), self.case.animate.set_stroke(ACCENT, width=4), run_time=1.4)
         self.hold(0.6)
