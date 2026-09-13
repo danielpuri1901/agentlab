@@ -121,18 +121,17 @@ def test_cheat_sheet_names_every_public_story_scene_method():
 
 def test_prompt_lists_each_beat_with_its_duration_and_budget():
     board = Storyboard(**GOLDEN_BOARD)
-    prompt = scene_code.build_scene_code_prompt(board, [6.0, 7.0, 7.0, 6.0, 8.0], None, None)
+    prompt = scene_code.build_scene_code_prompt(board, [6.0] * BEATS, None, None)
     assert "beat_1" in prompt and "6.0 s" in prompt and "5.7 s" in prompt
     assert board.beats[0].visual in prompt
 
 
-def test_prompt_includes_full_storyboard_json_with_rejected_metaphors():
+def test_prompt_includes_full_storyboard_and_visual_focus():
     board = Storyboard(**GOLDEN_BOARD)
     prompt = scene_code.build_scene_code_prompt(board, [6.0] * BEATS, None, None)
     storyboard_json = board.model_dump_json(indent=2)
     assert storyboard_json in prompt
-    for rejected in board.rejected:
-        assert rejected in prompt
+    assert board.visual_focus in prompt
 
 
 def test_prompt_requires_scene_to_fit_below_completion_limit():

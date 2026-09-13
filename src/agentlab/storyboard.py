@@ -1,40 +1,32 @@
-"""Storyboard: the visual-choice step of the metaphor videos
-(docs/specs/2026-09-05-metaphor-videos.md, section 1).
+"""Turn a grounded paper plan into a simple visual explanation.
 
-One creative model call turns the deep read (digest + grounded ScenePlan)
-into a Storyboard: one metaphor, a paper-term-to-visual mapping, and 5 to
-9 beats of narration plus a concrete visual description. The coder
-(scene_code.py) draws from this; the judge (frame_judge.py) checks against
-it. Same parse discipline as scene_plan.py: fences and prose tolerated,
-over-long strings clipped, structure and grounding fatal (one retry, then
-StoryboardInvalid so the worker falls back to the template).
-
-Temperature: litellm sends no temperature unless asked, and the Anthropic
-API's default is 1.0, which is the high-ambiguity setting this step wants.
+The storyboard shows the paper's real parts and mechanism. It starts with
+the paper title and a plain definition. It does not invent an analogy.
 """
 
 import json
 import re
 from collections.abc import Callable
+from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from agentlab.scene_plan import ScenePlan, extract_json_object
 
-MAX_METAPHOR = 200
-MAX_WHY = 300
-MAX_REJECTED = 3
-MAX_REJECTED_LEN = 200
+MAX_TITLE = 70
+MAX_DEFINITION = 180
+MAX_VISUAL_FOCUS = 240
 MIN_MAPPING = 2
-MAX_MAPPING = 6
+MAX_MAPPING = 8
 MAX_TERM = 40
-MAX_MAPPING_VISUAL = 60
-MIN_BEATS = 5
+MAX_MAPPING_VISUAL = 80
+MIN_BEATS = 7
 MAX_BEATS = 9
-MAX_NARRATION = 280
+MAX_NARRATION = 240
 MAX_VISUAL = 500
-MAX_ON_SCREEN = 3
-MAX_ON_SCREEN_LEN = 40
+MAX_ON_SCREEN = 2
+MAX_ON_SCREEN_LEN = 70
+MAX_SENTENCE_WORDS = 22
 
 
 class Mapping(BaseModel):
@@ -43,6 +35,7 @@ class Mapping(BaseModel):
 
 
 class Beat(BaseModel):
+    role: Literal["title", "problem", "mechanism", "result", "limit", "question"]
     narration: str = Field(min_length=1, max_length=MAX_NARRATION)
     visual: str = Field(min_length=1, max_length=MAX_VISUAL)
     on_screen_text: list[str] = Field(default_factory=list, max_length=MAX_ON_SCREEN)
@@ -52,35 +45,43 @@ class Beat(BaseModel):
     def _labels_short(cls, labels: list[str]) -> list[str]:
         for label in labels:
             if not label or len(label) > MAX_ON_SCREEN_LEN:
-                raise ValueError(f"on_screen_text entries must be 1 to {MAX_ON_SCREEN_LEN} characters")
+                raise ValueError(
+                    f"on_screen_text entries must be 1 to {MAX_ON_SCREEN_LEN} characters"
+                )
         return labels
 
 
 class Storyboard(BaseModel):
-    metaphor: str = Field(min_length=1, max_length=MAX_METAPHOR)
-    why_this_metaphor: str = Field(min_length=1, max_length=MAX_WHY)
-    rejected: list[str] = Field(default_factory=list, max_length=MAX_REJECTED)
+    title: str = Field(min_length=1, max_length=MAX_TITLE)
+    simple_definition: str = Field(min_length=1, max_length=MAX_DEFINITION)
+    visual_focus: str = Field(min_length=1, max_length=MAX_VISUAL_FOCUS)
     mapping: list[Mapping] = Field(min_length=MIN_MAPPING, max_length=MAX_MAPPING)
     beats: list[Beat] = Field(min_length=MIN_BEATS, max_length=MAX_BEATS)
 
 
 class StoryboardInvalid(ValueError):
-    """No valid storyboard after the retry; the caller falls back to the template."""
+    """No valid storyboard was produced after one correction attempt."""
 
 
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?%|\d{3,}")
+_ANALOGY_OPEN_RE = re.compile(
+    r"\b(imagine|picture this|think of|it is like|it's like|as if)\b", re.IGNORECASE
+)
 
 
 def _normalise(text: str) -> str:
     return text.replace(",", "").replace(" %", "%")
 
 
+def _plain(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+
+
 def ungrounded_numbers(data: dict, digest: str, plan: ScenePlan) -> list[str]:
-    """Numbers in beat narration or on-screen text that appear neither in
-    the digest nor in the scene plan (which the deep read already grounded).
-    Percentages and any 3+ digit run count; commas are ignored so 1,250
-    matches 1250."""
-    grounded = set(_NUMBER_RE.findall(_normalise(digest + "\n" + plan.model_dump_json())))
+    """Find numbers in beats that do not occur in the source material."""
+    grounded = set(
+        _NUMBER_RE.findall(_normalise(digest + "\n" + plan.model_dump_json()))
+    )
     found: list[str] = []
     for beat in data.get("beats") or []:
         if not isinstance(beat, dict):
@@ -96,15 +97,20 @@ def ungrounded_numbers(data: dict, digest: str, plan: ScenePlan) -> list[str]:
 
 
 def _clip(data: dict) -> dict:
-    for key, limit in (("metaphor", MAX_METAPHOR), ("why_this_metaphor", MAX_WHY)):
+    for key, limit in (
+        ("title", MAX_TITLE),
+        ("simple_definition", MAX_DEFINITION),
+        ("visual_focus", MAX_VISUAL_FOCUS),
+    ):
         if isinstance(data.get(key), str):
             data[key] = data[key][:limit]
-    if isinstance(data.get("rejected"), list):
-        data["rejected"] = [r[:MAX_REJECTED_LEN] for r in data["rejected"] if isinstance(r, str)][:MAX_REJECTED]
     if isinstance(data.get("mapping"), list):
         for item in data["mapping"]:
             if isinstance(item, dict):
-                for key, limit in (("paper_term", MAX_TERM), ("visual", MAX_MAPPING_VISUAL)):
+                for key, limit in (
+                    ("paper_term", MAX_TERM),
+                    ("visual", MAX_MAPPING_VISUAL),
+                ):
                     if isinstance(item.get(key), str):
                         item[key] = item[key][:limit]
     if isinstance(data.get("beats"), list):
@@ -115,9 +121,65 @@ def _clip(data: dict) -> dict:
                         beat[key] = beat[key][:limit]
                 if isinstance(beat.get("on_screen_text"), list):
                     beat["on_screen_text"] = [
-                        t[:MAX_ON_SCREEN_LEN] for t in beat["on_screen_text"] if isinstance(t, str) and t
+                        value[:MAX_ON_SCREEN_LEN]
+                        for value in beat["on_screen_text"]
+                        if isinstance(value, str) and value
                     ][:MAX_ON_SCREEN]
     return data
+
+
+def _structure_error(board: Storyboard, plan: ScenePlan) -> str:
+    if board.title != plan.title:
+        return "storyboard title must match the scene plan title exactly"
+    roles = [beat.role for beat in board.beats]
+    if roles[:2] != ["title", "problem"]:
+        return "beats 1 and 2 must have roles title and problem"
+    if roles[-3:] != ["result", "limit", "question"]:
+        return "the final three beats must have roles result, limit, and question"
+    if any(role != "mechanism" for role in roles[2:-3]):
+        return "all beats between problem and result must have role mechanism"
+    first = board.beats[0]
+    if board.title not in first.on_screen_text:
+        return "beat 1 on_screen_text must contain the storyboard title exactly"
+    if _ANALOGY_OPEN_RE.search(first.narration):
+        return "beat 1 must start directly; do not open with an analogy"
+    required_start = f"{board.title}. {board.simple_definition}"
+    if not first.narration.startswith(required_start):
+        return "beat 1 narration must start with title, then simple_definition"
+    if _plain(board.beats[-1].narration) != _plain(plan.street_test_question):
+        return "the question beat must use the scene plan street-test question exactly"
+    if plan.key_numbers:
+        result_text = board.beats[-3].narration + " " + " ".join(
+            board.beats[-3].on_screen_text
+        )
+        if not any(number.value in result_text for number in plan.key_numbers):
+            return "the result beat must use at least one grounded key number"
+    if "—" in board.model_dump_json():
+        return "use a plain hyphen or period instead of an em dash"
+    for index, beat in enumerate(board.beats, start=1):
+        sentences = [
+            part.strip()
+            for part in re.split(r"[.!?]+", beat.narration)
+            if part.strip()
+        ]
+        for sentence in sentences:
+            if len(sentence.split()) > MAX_SENTENCE_WORDS:
+                return (
+                    f"beat {index} has a sentence longer than "
+                    f"{MAX_SENTENCE_WORDS} words"
+                )
+
+    allowed_terms = {_plain(node.label) for node in plan.diagram.nodes} | {
+        _plain(step.label) for step in plan.mechanism_steps
+    }
+    unknown = [
+        item.paper_term
+        for item in board.mapping
+        if _plain(item.paper_term) not in allowed_terms
+    ]
+    if unknown:
+        return "mapping uses terms outside the scene plan: " + ", ".join(unknown)
+    return ""
 
 
 def parse_storyboard(raw: str, digest: str, plan: ScenePlan) -> tuple[Storyboard | None, str]:
@@ -133,6 +195,9 @@ def parse_storyboard(raw: str, digest: str, plan: ScenePlan) -> tuple[Storyboard
         board = Storyboard(**data)
     except ValidationError as exc:
         return None, str(exc)
+    error = _structure_error(board, plan)
+    if error:
+        return None, error
     missing = ungrounded_numbers(data, digest, plan)
     if missing:
         return None, (
@@ -143,84 +208,40 @@ def parse_storyboard(raw: str, digest: str, plan: ScenePlan) -> tuple[Storyboard
     return board, ""
 
 
-STORYBOARD_SYSTEM = """You design the visual story for a 90-second explainer video \
-about one research paper, in the style of 3Blue1Brown: one metaphor, one object the \
-viewer watches change, and the change IS the explanation. You are given the paper's \
-digest and a grounded scene plan (claim, mechanism, numbers, limits, street-test \
-question).
+STORYBOARD_SYSTEM = """You make a 90-second visual explanation of one research paper.
+Use the paper's real mechanism. Do not invent an analogy, metaphor, mascot, or unrelated physical scene.
 
-Work in two parts. First, list three candidate metaphors, one line each. A candidate \
-names a concrete physical object or scene the viewer can watch (a suitcase being packed, \
-a tree being pruned, a wall of dials, a queue at a gate, a map with routes, a bucket \
-filling, a scale tipping), what it stands for, and what visible change on it shows the \
-paper's mechanism working. Then pick the one where cause and effect is most visible on \
-screen, and say why in one sentence. The two you did not pick go in "rejected".
+Start with the exact paper title and one simple definition of the main idea.
+Then show a concrete input or problem from the paper.
+Show the mechanism by moving data through the real components in the scene plan.
+Show cause and effect. Keep the same component positions between beats.
+Then show one grounded result, one limit, and the street-test question.
 
-Then write exactly 6 beats. Each beat has:
-- narration: what the voice says, 1 to 3 short spoken sentences, at most 280 characters. \
-This text is also the caption.
-- visual: what is on screen and what changes during this beat, concrete enough that a \
-programmer can draw it with circles, rectangles, lines, dots, arrows, plain text and \
-simple bars. Say what appears, where (left, right, centre, above), what moves, what \
-changes colour or size, and what that change proves. At most 500 characters.
-- on_screen_text: up to three short labels (at most 40 characters each) that should be \
-drawn as text. Optional.
+Write 7 to 9 beats with this exact role order:
+1. title
+2. problem
+3. two to four mechanism beats
+4. result
+5. limit
+6. question
 
-Rules:
-- Beat 1 is the hook: the object appears and the viewer learns what it stands for. Do \
-not open with the paper title or a definition.
-- The middle beats show the mechanism as changes on the object. Before and after on the \
-same object beats a list of steps.
-- The paper's real numbers appear ON the metaphor: a bucket fills to 41%, a tree keeps \
-4 of 27 branches, or three of ten objects turn red. No separate chart, comparison bars, \
-score gauge, statistics slide, or dashboard.
-- The second-to-last beat states the limits: what the paper does NOT claim, shown as a \
-boundary on the object.
-- The last beat asks the scene plan's street-test question, with the object still on \
-screen.
-- One metaphor for the whole video. Choose a concrete object from a different physical \
-domain than research or software. One large central object stays on screen and changes.
-- A research artifact is literal, not a metaphor. Never use a whiteboard, checklist, \
-rubric sheet, report, paper, document, form, dashboard, screen, code window, or slide as \
-the central object. Reject any candidate that could appear in the real research workflow.
-- Never a flowchart, never a row of labelled boxes with arrows, never boxes lighting up \
-in order, never a pipeline diagram.
-- Keep the composition sparse. Use at most two short labels in each beat. Do not put \
-sentences inside the stage because the caption already carries the narration.
-- Show at most 12 repeated elements at once. Use a single large number to state a bigger \
-count. Do not number every repeated element.
-- No emoji, no images, no photos: everything must be drawable with simple shapes and \
-text.
-- Narration is plain spoken English: short sentences, one idea per sentence, never an \
-em dash (use a comma or a period).
-- Every number in narration or on-screen text must appear in the digest or the scene \
-plan, written the same way (44%, 1250). Never attribute to the paper anything it does \
-not say.
+Each beat has role, narration, visual, and on_screen_text.
+Narration has one or two short sentences. Each sentence has at most 22 words.
+Use common words. Define a necessary technical term before using it.
+Never open with "imagine", "picture this", "think of", "it is like", or "as if".
+Never use an em dash.
 
-Three exemplars, given only to show the level of concreteness. They are for other \
-papers; never reuse them.
+The first beat's on_screen_text must contain the exact storyboard title.
+The first beat's narration must contain simple_definition exactly.
+Use at most two short on-screen labels per beat.
+Only use paper terms that occur as diagram node labels or mechanism step labels.
+Every number must occur in the digest or scene plan.
+Show at most 12 repeated elements.
+Everything must be drawable with plain text and simple Manim shapes.
 
-1. Compaction (a house move): "This house is an agent's whole chat. You must move today \
-with one small suitcase." Visual: a grey house full of furniture blocks on the left, a \
-gold-outlined suitcase on the right, a gold passport among the furniture. Next beat: the \
-packing list says "summarize concisely", a sofa slides into the suitcase, the passport \
-stays on the shelf and dims, a red cross appears. Next beat: the list says "list every \
-code first", the passport slides in first and glows, a green check replaces the cross.
-
-2. Tree of Thoughts (a growing tree): a single trunk labelled "prompt" grows three \
-branches; each branch grows three twigs; a grey gardener's blade cuts the twigs whose \
-small score circle is below 0.5, they fall away dim; the one surviving path glows and \
-its leaf becomes the answer. Numbers: the survivor count shows "4 of 27 kept".
-
-3. RLHF (a wall of dials): a grid of 40 small dials all pointing in random directions; \
-two candidate answers appear as cards; a hand-shaped cursor taps the better card; a wave \
-sweeps across the wall and every dial nudges a few degrees toward the same direction; \
-after three taps the wall is almost aligned, and the alignment bar reads the paper's \
-win rate.
-
-Output: after your candidate list and choice, output exactly one fenced ```json block \
-with keys metaphor, why_this_metaphor, rejected, mapping (list of {paper_term, \
-visual}), beats (list of {narration, visual, on_screen_text}). Nothing after the block."""
+Output exactly one fenced json block with keys title, simple_definition, visual_focus,
+mapping (a list of paper_term and visual objects), and beats.
+Nothing can follow the json block."""
 
 
 def build_storyboard_prompt(digest: str, plan: ScenePlan) -> str:
@@ -231,13 +252,9 @@ def build_storyboard_prompt(digest: str, plan: ScenePlan) -> str:
         "<scene_plan>\n"
         f"{plan.model_dump_json(indent=1)}\n"
         "</scene_plan>\n\n"
-        "Reminder of the hard rules now that you have read the paper: one metaphor, the "
-        "mechanism as visible change on one large central object from a different physical "
-        "domain, real numbers on the object, the limits "
-        "in the second-to-last beat, the street-test question in the last beat, never a "
-        "whiteboard, checklist, research artifact, or flowchart, exactly 6 beats, only numbers "
-        "the digest or scene plan states.\n\n"
-        "List three candidate metaphors, choose one, then write the fenced json storyboard."
+        "Explain this paper directly. Show its real components and relationships. "
+        "Start with the title and a simple definition. End with the result, limit, "
+        "and street-test question. Return the fenced json storyboard."
     )
 
 
@@ -256,9 +273,8 @@ def design_storyboard(
             {
                 "role": "user",
                 "content": (
-                    "Your storyboard JSON was invalid. Validation error: "
-                    f"{error}\nSend the corrected fenced json storyboard again, "
-                    "fixing only what the error names, keeping the same metaphor."
+                    "The storyboard was invalid. Fix this validation error: "
+                    f"{error}\nReturn the complete corrected fenced json storyboard."
                 ),
             },
         ]

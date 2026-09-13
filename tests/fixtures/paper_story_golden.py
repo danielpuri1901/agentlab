@@ -88,3 +88,9 @@ class PaperStory(StoryScene):
         self.fit(question, max_w=5.8, max_h=0.65)
         self.play(FadeIn(question), self.case.animate.set_stroke(ACCENT, width=4), run_time=1.4)
         self.hold(0.6)
+
+    def beat_6(self):
+        self.hold(0.6)
+
+    def beat_7(self):
+        self.hold(0.6)

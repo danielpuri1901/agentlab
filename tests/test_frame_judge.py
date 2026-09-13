@@ -6,11 +6,20 @@ from pathlib import Path
 import pytest
 
 from agentlab import frame_judge, video_render
+from agentlab.scene_plan import ScenePlan
 from agentlab.storyboard import Storyboard
 
 BOARD = Storyboard(
     **json.loads(
         (Path(__file__).parent / "fixtures" / "storyboard_golden.json").read_text(
+            encoding="utf-8"
+        )
+    )
+)
+N = len(BOARD.beats)
+PLAN = ScenePlan(
+    **json.loads(
+        (Path(__file__).parent / "fixtures" / "sample_plan.json").read_text(
             encoding="utf-8"
         )
     )
@@ -21,12 +30,13 @@ def _beats(**overrides):
     base = [
         {
             "beat": i,
+            "grounded": True,
             "shows_visual": True,
             "legible": True,
             "clean": True,
             "issue": None,
         }
-        for i in range(1, 6)
+        for i in range(1, N + 1)
     ]
     for idx, fields in overrides.items():
         base[int(idx) - 1].update(fields)
@@ -49,18 +59,28 @@ def test_verdict_fix_on_any_unclean_or_illegible_beat():
         for b in _beats(**{"3": {"clean": False, "issue": "text overlaps bar"}})
     ]
     assert frame_judge.verdict_from_beats(beats) == "fix"
+
+
+def test_verdict_fix_on_ungrounded_beat_or_low_score():
+    beats = [
+        frame_judge.BeatJudgement(**b)
+        for b in _beats(**{"2": {"grounded": False}})
+    ]
+    assert frame_judge.verdict_from_beats(beats, score=10) == "fix"
+    clean = [frame_judge.BeatJudgement(**b) for b in _beats()]
+    assert frame_judge.verdict_from_beats(clean, score=0) == "fix"
     beats = [
         frame_judge.BeatJudgement(**b) for b in _beats(**{"2": {"legible": False}})
     ]
     assert frame_judge.verdict_from_beats(beats) == "fix"
 
 
-def test_verdict_tolerates_one_missing_visual_but_not_two():
+def test_verdict_rejects_any_missing_visual():
     one = [
         frame_judge.BeatJudgement(**b)
         for b in _beats(**{"2": {"shows_visual": False}})
     ]
-    assert frame_judge.verdict_from_beats(one) == "pass"
+    assert frame_judge.verdict_from_beats(one) == "fix"
     two = [
         frame_judge.BeatJudgement(**b)
         for b in _beats(
@@ -91,17 +111,17 @@ def test_parse_judgement_recovers_score_appended_inside_beats():
     judgement, error = frame_judge.parse_judgement(json.dumps(malformed))
     assert error == ""
     assert judgement.score == 8
-    assert len(judgement.beats) == 5
+    assert len(judgement.beats) == N
 
 
-def test_judge_frames_retries_bad_json_then_falls_back_to_pass(tmp_path):
+def test_judge_frames_retries_bad_json_then_falls_back_to_fix(tmp_path):
     frame = tmp_path / "f.png"
     frame.write_bytes(b"\x89PNG fake")
     replies = iter(["garbage", "still garbage"])
     judgement = frame_judge.judge_frames(
-        [frame] * 5, BOARD, lambda model, messages: next(replies), model="m"
+        [frame] * N, BOARD, PLAN, lambda model, messages: next(replies), model="m"
     )
-    assert judgement.verdict == "pass"
+    assert judgement.verdict == "fix"
     assert judgement.score == frame_judge.FALLBACK_SCORE
     assert "judge unavailable" in judgement.note
 
@@ -113,8 +133,8 @@ def test_judge_frames_survives_a_model_exception(tmp_path):
     def boom(model, messages):
         raise RuntimeError("bedrock down")
 
-    judgement = frame_judge.judge_frames([frame] * 5, BOARD, boom, model="m")
-    assert judgement.verdict == "pass" and judgement.score == frame_judge.FALLBACK_SCORE
+    judgement = frame_judge.judge_frames([frame] * N, BOARD, PLAN, boom, model="m")
+    assert judgement.verdict == "fix" and judgement.score == frame_judge.FALLBACK_SCORE
 
 
 def test_judge_frames_retries_incomplete_judgement_then_accepts_complete(tmp_path):
@@ -122,7 +142,7 @@ def test_judge_frames_retries_incomplete_judgement_then_accepts_complete(tmp_pat
     frame.write_bytes(b"\x89PNG fake")
     replies = iter([_judgement_json(_beats()[:-1]), _judgement_json()])
     judgement = frame_judge.judge_frames(
-        [frame] * 5, BOARD, lambda model, messages: next(replies), model="m"
+        [frame] * N, BOARD, PLAN, lambda model, messages: next(replies), model="m"
     )
     assert len(judgement.beats) == len(BOARD.beats)
     assert judgement.note is None
@@ -132,7 +152,7 @@ def test_judge_frames_retries_incomplete_judgement_then_accepts_complete(tmp_pat
     "beats",
     [
         _beats(**{"1": {"beat": 2}}),
-        _beats(**{"5": {"beat": 6}}),
+        _beats(**{str(N): {"beat": N + 1}}),
         _beats(**{"2": {"beat": 1}}),
     ],
 )
@@ -141,7 +161,7 @@ def test_judge_frames_falls_back_after_misnumbered_or_duplicate_judgements(tmp_p
     frame.write_bytes(b"\x89PNG fake")
     replies = iter([_judgement_json(beats), _judgement_json(beats)])
     judgement = frame_judge.judge_frames(
-        [frame] * 5, BOARD, lambda model, messages: next(replies), model="m"
+        [frame] * N, BOARD, PLAN, lambda model, messages: next(replies), model="m"
     )
     assert judgement.score == frame_judge.FALLBACK_SCORE
     assert "judge unavailable" in judgement.note
@@ -151,7 +171,7 @@ def test_build_judge_messages_rejects_frame_count_mismatch(tmp_path):
     frame = tmp_path / "frame.png"
     frame.write_bytes(b"png")
     with pytest.raises(ValueError, match="frames.*beats"):
-        frame_judge.build_judge_messages([frame] * 4, BOARD)
+        frame_judge.build_judge_messages([frame] * 4, BOARD, PLAN)
 
 
 def test_judge_frames_logs_unavailable_judge(tmp_path, caplog):
@@ -159,8 +179,9 @@ def test_judge_frames_logs_unavailable_judge(tmp_path, caplog):
     frame.write_bytes(b"\x89PNG fake")
     with caplog.at_level(logging.WARNING, logger="agentlab.frame_judge"):
         frame_judge.judge_frames(
-            [frame] * 5,
+            [frame] * N,
             BOARD,
+            PLAN,
             lambda model, messages: "garbage",
             model="m",
         )
@@ -169,15 +190,15 @@ def test_judge_frames_logs_unavailable_judge(tmp_path, caplog):
 
 def test_build_judge_messages_pairs_each_frame_with_its_beat(tmp_path):
     frames = []
-    for i in range(5):
+    for i in range(N):
         p = tmp_path / f"frame_{i}.png"
         p.write_bytes(b"png" + bytes([i]))
         frames.append(p)
-    messages = frame_judge.build_judge_messages(frames, BOARD)
+    messages = frame_judge.build_judge_messages(frames, BOARD, PLAN)
     content = messages[-1]["content"]
     images = [part for part in content if part.get("type") == "image_url"]
     texts = " ".join(part["text"] for part in content if part.get("type") == "text")
-    assert len(images) == 5
+    assert len(images) == N
     assert all(
         part["image_url"]["url"].startswith("data:image/png;base64,") for part in images
     )
@@ -185,11 +206,13 @@ def test_build_judge_messages_pairs_each_frame_with_its_beat(tmp_path):
         assert beat.visual in texts
         for label in beat.on_screen_text:
             assert label in texts
+    assert PLAN.one_line_claim in texts
 
 
-def test_judge_rejects_literal_documents_and_process_diagrams():
-    assert "literal document" in frame_judge.JUDGE_SYSTEM
-    assert "physical metaphor" in frame_judge.JUDGE_SYSTEM
+def test_judge_requires_title_real_mechanism_and_simple_terms():
+    assert "Beat 1 must show the title" in frame_judge.JUDGE_SYSTEM
+    assert "real mechanism" in frame_judge.JUDGE_SYSTEM
+    assert "unexplained technical term" in frame_judge.JUDGE_SYSTEM
     assert "top-level sibling" in frame_judge.JUDGE_SYSTEM
 
 

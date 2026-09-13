@@ -633,6 +633,12 @@ def _fake_pick_paper(candidates, interests_text, complete, mode="core", model=No
     return candidates[0]
 
 
+def _fake_rank_papers(
+    candidates, interests_text, complete, mode="core", model=None, limit=3
+):
+    return candidates[:limit]
+
+
 def _fake_render_video(plan, clips, out_path):
     Path(out_path).write_bytes(b"fake-mp4-bytes")
     return Path(out_path)
@@ -688,6 +694,7 @@ def _patch_explain_pools(monkeypatch):
     monkeypatch.setattr("agentlab.worker.gather_exploit", lambda: [CORE_CANDIDATE])
     monkeypatch.setattr("agentlab.worker.gather_explore", lambda: [NOVEL_CANDIDATE])
     monkeypatch.setattr("agentlab.worker.pick_paper", _fake_pick_paper)
+    monkeypatch.setattr("agentlab.worker.rank_papers", _fake_rank_papers)
 
 
 def test_complete_long_allows_story_output_budget_and_timeout(monkeypatch):
@@ -757,7 +764,7 @@ def test_explain_story_path_ships_and_records_artifacts(
     assert f"stories/{key}.json" in keys and f"stories/{key}.py" in keys
     with s3.get_object(Bucket=BUCKET, Key=f"stories/{key}.json")["Body"] as body:
         story = json.loads(body.read())
-    assert story["storyboard"]["metaphor"].startswith("A house move")
+    assert story["storyboard"]["title"] == "Recursive Self-Improvement in AI"
     assert story["judgement"]["score"] == 8
 
     events = [i for i in table.scan()["Items"] if i["sk"].startswith("event#")]
@@ -876,6 +883,7 @@ def test_explain_track_core_runs_only_core(moto_fabric_with_ssm, telegram_calls,
         lambda: novel_pool_calls.append(1) or [NOVEL_CANDIDATE],
     )
     monkeypatch.setattr("agentlab.worker.pick_paper", _fake_pick_paper)
+    monkeypatch.setattr("agentlab.worker.rank_papers", _fake_rank_papers)
     _patch_explain_render_stages(monkeypatch)
 
     result = runner.invoke(app, ["worker", "explain"])
@@ -890,6 +898,72 @@ def test_explain_track_core_runs_only_core(moto_fabric_with_ssm, telegram_calls,
     assert video_items[0]["track"] == "core"
 
     assert result.output.strip().endswith("explain: core=sent")
+
+
+def test_explain_uses_gated_feedback_and_collects_clarity(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    _set_explain_env(monkeypatch, track="core")
+    _set_daytime(monkeypatch)
+    monkeypatch.setattr("agentlab.worker.gather_exploit", lambda: [CORE_CANDIDATE])
+    monkeypatch.setattr(
+        "agentlab.worker.load_preference_context",
+        lambda table_arg, path: "Preference evidence (topic-feedback-v1).",
+    )
+    captured = {"calls": []}
+
+    def rank(candidates, interests_text, complete, mode="core", model=None, limit=3):
+        captured["calls"].append(list(candidates))
+        return candidates[:limit]
+
+    def pick(candidates, interests_text, complete, mode="core", model=None):
+        captured["calls"].append(list(candidates))
+        captured["interests"] = interests_text
+        return candidates[0]
+
+    monkeypatch.setattr("agentlab.worker.pick_paper", pick)
+    monkeypatch.setattr("agentlab.worker.rank_papers", rank)
+    _patch_explain_render_stages(monkeypatch, story=_fake_story_success)
+    real_notify = worker_mod.notify
+
+    def notify_after_ledger(*args, **kwargs):
+        assert any(item.get("sk") == "video" for item in table.scan()["Items"])
+        return real_notify(*args, **kwargs)
+
+    monkeypatch.setattr("agentlab.worker.notify", notify_after_ledger)
+
+    result = runner.invoke(app, ["worker", "explain"])
+
+    assert result.exit_code == 0, result.output
+    assert "Preference evidence (topic-feedback-v1)." in captured["interests"]
+    assert len(captured["calls"]) == 2
+    assert len(captured["calls"][1]) <= 3
+    _url, kwargs = next(call for call in telegram_calls if call[0].endswith("/sendVideo"))
+    assert kwargs["data"]["caption"].startswith("[CORE] Core Candidate Paper\n")
+    keyboard = json.loads(kwargs["data"]["reply_markup"])["inline_keyboard"]
+    assert [button["text"] for button in keyboard[0]] == ["COOL", "MEH", "SKIP"]
+    assert [button["text"] for button in keyboard[1]] == ["CLEAR", "UNCLEAR"]
+    row = next(item for item in table.scan()["Items"] if item.get("sk") == "video")
+    assert row["topics"]
+    assert row["selection_policy"] == "topic-feedback-v1"
+    assert row["candidate_set"] == [
+        {
+            "baseline_rank": 1,
+            "pool": "exploit",
+            "source": "arxiv",
+            "source_rank": 1,
+            "title": "Core Candidate Paper",
+            "topics": ["other"],
+            "url": CORE_CANDIDATE["url"],
+        }
+    ]
+    assert row["baseline_rank"] == 1
+    assert row["baseline_selection"] == row["candidate_set"][0]
+    assert row["feedback_status"] == "bounded-tiebreak"
+    assert row["exploration_status"] == "none"
+    assert row["selection_probability"] is None
+    assert row["clarity"] is None
 
 
 def test_explain_core_deep_read_failure_pings_fallback_novel_still_sends(
@@ -951,6 +1025,7 @@ def test_explain_render_failure_includes_stderr_in_fallback_ping(
     monkeypatch.setattr("agentlab.worker.gather_exploit", lambda: [CORE_CANDIDATE])
     monkeypatch.setattr("agentlab.worker.gather_explore", lambda: [NOVEL_CANDIDATE])
     monkeypatch.setattr("agentlab.worker.pick_paper", _fake_pick_paper)
+    monkeypatch.setattr("agentlab.worker.rank_papers", _fake_rank_papers)
     monkeypatch.setattr("agentlab.worker.deep_read", _make_fake_deep_read())
     monkeypatch.setattr("agentlab.worker.verify_voice", lambda polly_client: "Joanna")
     monkeypatch.setattr(

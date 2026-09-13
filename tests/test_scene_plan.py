@@ -314,6 +314,26 @@ def test_pick_paper_empty_candidates_returns_none_without_calling_complete():
     assert pick_paper([], "agents", exploding_complete) is None
 
 
+def test_rank_papers_returns_model_ordered_shortlist():
+    from agentlab.scene_plan import rank_papers
+
+    ranked = rank_papers(
+        CANDIDATES,
+        "agents, evals",
+        lambda model, messages: "[2, 1, 3]",
+        mode="core",
+        limit=3,
+    )
+    assert ranked == [CANDIDATES[1], CANDIDATES[0], CANDIDATES[2]]
+
+
+def test_rank_papers_rejects_duplicate_or_incomplete_order():
+    from agentlab.scene_plan import rank_papers
+
+    assert rank_papers(CANDIDATES, "agents", lambda model, messages: "[1, 1, 2]") == []
+    assert rank_papers(CANDIDATES, "agents", lambda model, messages: "[1, 2]") == []
+
+
 def test_pick_prompt_prefers_papers_over_hn_in_both_modes():
     from agentlab.scene_plan import build_pick_prompt
 

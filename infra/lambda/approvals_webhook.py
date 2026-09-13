@@ -134,6 +134,10 @@ _VID_RATINGS = {
     "implement": "COOL",
     "learned": "MEH",
 }
+_VID_CLARITY = {
+    "clear": "CLEAR",
+    "unclear": "UNCLEAR",
+}
 
 
 def _set_rating(table, video_key: str, rating: str) -> bool:
@@ -156,22 +160,44 @@ def _set_rating(table, video_key: str, rating: str) -> bool:
         raise
 
 
-def _strip_vid_buttons(markup: dict, video_key: str) -> list:
-    prefix = f"vid:{video_key}:"
+def _set_clarity(table, video_key: str, clarity: str) -> bool:
+    try:
+        table.update_item(
+            Key={"experiment_id": f"video#{video_key}", "sk": "video"},
+            UpdateExpression="SET clarity = :value, clarity_ts = :ts",
+            ConditionExpression="attribute_exists(experiment_id)",
+            ExpressionAttributeValues={":value": clarity, ":ts": _now()},
+        )
+        return True
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+def _strip_vid_buttons(markup: dict, video_key: str, actions: set[str]) -> list:
+    callbacks = {f"vid:{video_key}:{action}" for action in actions}
     rows = markup.get("inline_keyboard") or []
     return [
         row
         for row in rows
         if not any(
-            str(button.get("callback_data", "")).startswith(prefix) for button in row
+            str(button.get("callback_data", "")) in callbacks for button in row
         )
     ]
 
 
 def _handle_vid(callback, table, video_key: str, action: str) -> dict:
-    rating = _VID_RATINGS[action]
-    known = _set_rating(table, video_key, rating)
-    toast = f"Rated: {rating}" if known else "unknown video"
+    if action in _VID_RATINGS:
+        value = _VID_RATINGS[action]
+        known = _set_rating(table, video_key, value)
+        toast = f"Rated: {value}" if known else "unknown video"
+        actions = set(_VID_RATINGS)
+    else:
+        value = _VID_CLARITY[action]
+        known = _set_clarity(table, video_key, value)
+        toast = f"Clarity: {value}" if known else "unknown video"
+        actions = set(_VID_CLARITY)
 
     try:
         _telegram(
@@ -185,13 +211,14 @@ def _handle_vid(callback, table, video_key: str, action: str) -> dict:
             # always sent explicitly (even when empty) rather than only on
             # a truthy check - otherwise Telegram would leave the rated
             # video's buttons showing.
-            rows = _strip_vid_buttons(message.get("reply_markup") or {}, video_key)
+            rows = _strip_vid_buttons(
+                message.get("reply_markup") or {}, video_key, actions
+            )
             _telegram(
-                "editMessageText",
+                "editMessageReplyMarkup",
                 {
                     "chat_id": message["chat"]["id"],
                     "message_id": message["message_id"],
-                    "text": message.get("text") or "",
                     "reply_markup": {"inline_keyboard": rows},
                 },
             )
@@ -223,7 +250,8 @@ def handler(event, context):
 
     parts = (callback.get("data") or "").split(":")
 
-    if len(parts) == 3 and parts[0] == "vid" and parts[2] in _VID_RATINGS:
+    video_actions = _VID_RATINGS | _VID_CLARITY
+    if len(parts) == 3 and parts[0] == "vid" and parts[2] in video_actions:
         table = boto3.resource("dynamodb").Table(os.environ["STATE_TABLE"])
         return _handle_vid(callback, table, parts[1], parts[2])
 

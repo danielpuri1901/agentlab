@@ -137,6 +137,7 @@ resource "aws_ecs_task_definition" "proposer" {
         { name = "AWS_DEFAULT_REGION", value = var.aws_region },
         { name = "STATE_TABLE", value = aws_dynamodb_table.state.name },
         { name = "RESULTS_BUCKET", value = aws_s3_bucket.results.id },
+        { name = "PROPOSER_MODEL", value = "bedrock/arn:aws:bedrock:eu-west-1:891377302765:application-inference-profile/kpbqsnaqf2ti" },
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -183,6 +184,8 @@ resource "aws_ecs_task_definition" "explain" {
         { name = "AWS_DEFAULT_REGION", value = var.aws_region },
         { name = "STATE_TABLE", value = aws_dynamodb_table.state.name },
         { name = "RESULTS_BUCKET", value = aws_s3_bucket.results.id },
+        { name = "DEEP_READ_MODEL", value = "bedrock/arn:aws:bedrock:eu-west-1:891377302765:application-inference-profile/mfzwa25maf8z" },
+        { name = "PICK_MODEL", value = "bedrock/arn:aws:bedrock:eu-west-1:891377302765:application-inference-profile/kpbqsnaqf2ti" },
       ]
       logConfiguration = {
         logDriver = "awslogs"

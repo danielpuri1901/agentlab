@@ -340,7 +340,7 @@ def _compose(
             scene_file.parent / "frames",
         )
         judgement = judge_frames(
-            frames, storyboard, complete, model=judge_model
+            frames, storyboard, plan, complete, model=judge_model
         )
         candidates.append(
             _Candidate(attempt, source, scene_file, video, timing, judgement)
@@ -354,7 +354,12 @@ def _compose(
             f"no renderable scene in {attempts} attempts: " + "; ".join(failures)
         )
 
-    best = max(candidates, key=lambda candidate: (candidate.judgement.score, candidate.attempt))
+    passed = [candidate for candidate in candidates if candidate.judgement.verdict == "pass"]
+    if not passed:
+        scores = ", ".join(str(candidate.judgement.score) for candidate in candidates)
+        raise StoryFailed(f"no scene passed the frame judge in {attempts} attempts; scores: {scores}")
+
+    best = max(passed, key=lambda candidate: (candidate.judgement.score, candidate.attempt))
     try:
         final_video, timing = _render(
             best.scene_file, spec, "m", FINAL_RENDER_TIMEOUT

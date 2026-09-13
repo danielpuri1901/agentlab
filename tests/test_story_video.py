@@ -10,6 +10,7 @@ import pytest
 from agentlab import story_video
 from agentlab.frame_judge import BeatJudgement, Judgement
 from agentlab.scene_plan import ScenePlan
+from agentlab.story_video import StoryFailed
 from agentlab.storyboard import Storyboard, StoryboardInvalid
 from agentlab.video_render import NarrationClip
 
@@ -60,12 +61,15 @@ def _timing_with_raw_overruns(raw_overruns):
 
 def _judgement(score=8, fix_beat=None):
     beats = [
-        BeatJudgement(beat=index, shows_visual=True, legible=True, clean=True)
+        BeatJudgement(
+            beat=index, grounded=True, shows_visual=True, legible=True, clean=True
+        )
         for index in range(1, N + 1)
     ]
     if fix_beat:
         beats[fix_beat - 1] = BeatJudgement(
             beat=fix_beat,
+            grounded=True,
             shows_visual=True,
             legible=True,
             clean=False,
@@ -155,7 +159,7 @@ def seams(monkeypatch):
     monkeypatch.setattr(
         story_video,
         "judge_frames",
-        lambda frames, storyboard, complete, model: (
+        lambda frames, storyboard, plan, complete, model: (
             state["judgements"].pop(0)
             if state["judgements"]
             else _judgement()
@@ -241,7 +245,7 @@ def test_render_traceback_is_logged_and_goes_back_to_the_coder(
 
 
 def test_overrun_goes_back_to_the_coder(seams, tmp_path):
-    seams["timings"] = [_timing([0.0, 2.0, 0.0, 0.0, 0.0])]
+    seams["timings"] = [_timing([0.0, 2.0] + [0.0] * (N - 2))]
 
     result = _compose(tmp_path)
 
@@ -286,17 +290,16 @@ def test_raw_total_overrun_above_limit_goes_back_to_the_coder(seams, tmp_path):
     assert "total overrun" in seams["coder"][1]
 
 
-def test_judge_fix_retries_and_best_score_ships(seams, tmp_path):
+def test_judge_fix_retries_and_refuses_to_ship(seams, tmp_path):
     seams["judgements"] = [
         _judgement(score=7, fix_beat=2),
         _judgement(score=4, fix_beat=3),
         _judgement(score=6, fix_beat=1),
     ]
 
-    result = _compose(tmp_path)
+    with pytest.raises(StoryFailed, match="no scene passed"):
+        _compose(tmp_path)
 
-    assert result.attempts == 3
-    assert result.judge_score == 7
     assert "beat 2" in seams["coder"][1]
 
 
@@ -314,16 +317,14 @@ def test_latest_candidate_wins_a_score_tie(seams, tmp_path):
     assert result.scene_source == latest_source
 
 
-def test_later_coder_failure_keeps_an_existing_candidate(seams, tmp_path):
+def test_later_coder_failure_does_not_ship_a_failed_candidate(seams, tmp_path):
     seams["codes"] = [GOLDEN_SCENE, RuntimeError("coder unavailable")]
     seams["judgements"] = [_judgement(score=7, fix_beat=2)]
 
-    result = _compose(tmp_path)
+    with pytest.raises(StoryFailed, match="no scene passed"):
+        _compose(tmp_path)
 
-    assert result.attempts == 2
-    assert result.judge_score == 7
-    assert result.scene_source == GOLDEN_SCENE
-    assert [quality for quality, _ in seams["renders"]] == ["l", "m"]
+    assert [quality for quality, _ in seams["renders"]] == ["l"]
 
 
 def test_max_attempts_is_capped_at_three(seams, tmp_path):
@@ -431,7 +432,7 @@ def test_three_failures_raise_story_failed(seams, tmp_path):
 
 def test_storyboard_invalid_becomes_story_failed(seams, monkeypatch, tmp_path):
     def bad_storyboard(digest, plan, complete, model):
-        raise StoryboardInvalid("no metaphor")
+        raise StoryboardInvalid("missing mechanism")
 
     monkeypatch.setattr(story_video, "design_storyboard", bad_storyboard)
 
@@ -459,7 +460,7 @@ def test_final_render_exception_logs_and_falls_back_to_preview(
 def test_final_render_overrun_falls_back_to_preview(seams, tmp_path, caplog):
     seams["timings"] = [
         _timing(),
-        _timing([0.0, 2.0, 0.0, 0.0, 0.0]),
+        _timing([0.0, 2.0] + [0.0] * (N - 2)),
     ]
 
     with caplog.at_level(logging.WARNING, logger="agentlab.story_video"):

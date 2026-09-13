@@ -32,6 +32,11 @@ from agentlab.charts import verdict_chart_png
 from agentlab.eval_runner import _run_arm, hypothesis_for
 from agentlab.notify import flush_pending, notify
 from agentlab.papers_db import is_seen, mark_seen, paper_identity, recent_seen_titles
+from agentlab.preferences import (
+    POLICY_VERSION,
+    candidate_topics,
+    load_preference_context,
+)
 from agentlab.report import render_report
 from agentlab.results import extract_results, mean_score, total_cost, total_tokens
 from agentlab.scene_plan import (
@@ -39,6 +44,7 @@ from agentlab.scene_plan import (
     DEFAULT_PICK_MODEL,
     deep_read,
     pick_paper,
+    rank_papers,
 )
 from agentlab.sources import gather_exploit, gather_explore
 from agentlab.stats import paired_analysis, verdict
@@ -55,6 +61,7 @@ worker_app = typer.Typer()
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 CLASSICS_PATH = _REPO_ROOT / "docs" / "classics.json"
 INTERESTS_PATH = _REPO_ROOT / "docs" / "interests.md"
+GOLDEN_PAPERS_PATH = _REPO_ROOT / "docs" / "golden-papers.jsonl"
 
 _ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5})")
 EXPLAIN_TRACKS = ("core", "classic", "novel")
@@ -442,6 +449,21 @@ def _generate_video_key(track: str) -> str:
     return f"{track}-{ts}-{secrets.token_hex(2)}"
 
 
+def _candidate_record(
+    candidate: dict, source_rank: int, baseline_rank: int | None = None
+) -> dict:
+    """Keep the choice set small enough for one DynamoDB ledger item."""
+    return {
+        "pool": str(candidate.get("pool", "")),
+        "baseline_rank": baseline_rank,
+        "source": str(candidate.get("source", "")),
+        "source_rank": source_rank,
+        "title": str(candidate.get("title", "")),
+        "topics": candidate_topics(candidate),
+        "url": str(candidate.get("url", "")),
+    }
+
+
 def _run_explain_track(
     track: str,
     table,
@@ -464,15 +486,55 @@ def _run_explain_track(
         candidate = _next_unseen_classic(table)
         if candidate is None:
             return "empty"
+        candidate_set = [_candidate_record(candidate, 1, 1)]
+        baseline_rank = 1
+        baseline_selection = candidate_set[0]
+        exploration_status = "none"
+        feedback_status = "fixed-classic"
+        selection_probability = 1
     else:
         pool = gather_exploit() if track == "core" else gather_explore()
         fresh = _fresh_candidates(pool, table)
         if not fresh:
             return "empty"
         mode = "novel" if track == "novel" else "core"
-        candidate = pick_paper(fresh, _load_interests(), _complete, mode=mode, model=pick_model)
-        if candidate is None:
+        interests = _load_interests()
+        preference_context = load_preference_context(table, GOLDEN_PAPERS_PATH)
+        baseline_ranking = rank_papers(
+            fresh, interests, _complete, mode=mode, model=pick_model, limit=len(fresh)
+        )
+        if not baseline_ranking:
             return "empty"
+        baseline_candidate = baseline_ranking[0]
+        candidate = baseline_candidate
+        feedback_status = "baseline"
+        if preference_context:
+            guided = pick_paper(
+                baseline_ranking[:3],
+                f"{interests}\n\n{preference_context}",
+                _complete,
+                mode=mode,
+                model=pick_model,
+            )
+            if guided is not None:
+                candidate = guided
+            feedback_status = "bounded-tiebreak"
+        candidate_set = [
+            _candidate_record(
+                item,
+                source_rank,
+                baseline_ranking.index(item) + 1 if item in baseline_ranking else None,
+            )
+            for source_rank, item in enumerate(fresh, start=1)
+        ]
+        baseline_selection = next(
+            record for record in candidate_set if record["baseline_rank"] == 1
+        )
+        baseline_rank = baseline_ranking.index(candidate) + 1
+        exploration_status = "none"
+        # The model ranker does not expose a calibrated choice probability.
+        # Store that fact explicitly instead of inventing a propensity.
+        selection_probability = None
 
     url = candidate["url"]
     title = candidate.get("title", "")
@@ -555,7 +617,12 @@ def _run_explain_track(
                 Body=story.scene_source.encode("utf-8"),
             )
 
-        caption = f"{plan.one_line_claim}\n\n{plan.street_test_question}\n\n{digest_url}"
+        caption = (
+            f"[{track.upper()}] {title}\n\n"
+            f"{plan.one_line_claim}\n\n"
+            f"{plan.street_test_question}\n\n"
+            f"{digest_url}"
+        )
         # Ratings measure Daniel's immediate reaction (Daniel's ruling
         # 2026-08-25): COOL = more like this, MEH = fine but nothing
         # special, SKIP = wasted my slot. "Implemented" is NOT a button:
@@ -566,8 +633,44 @@ def _run_explain_track(
                 ("COOL", f"vid:{key}:cool"),
                 ("MEH", f"vid:{key}:meh"),
                 ("SKIP", f"vid:{key}:skip"),
-            ]
+            ],
+            [
+                ("CLEAR", f"vid:{key}:clear"),
+                ("UNCLEAR", f"vid:{key}:unclear"),
+            ],
         ]
+        sent_ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        # Create the ledger item before Telegram exposes its buttons. A fast
+        # tap can otherwise arrive before the existence-guarded callback has
+        # anything to update, which loses the rating as "unknown video".
+        table.put_item(
+            Item={
+                "experiment_id": f"video#{key}",
+                "sk": "video",
+                "track": track,
+                "url": url,
+                "title": title,
+                "digest_key": digest_key,
+                "video_key": video_key,
+                "sent_ts": sent_ts,
+                "rating": None,
+                "rating_ts": None,
+                "clarity": None,
+                "clarity_ts": None,
+                "topics": candidate_topics(candidate),
+                "selection_policy": POLICY_VERSION,
+                "candidate_set": candidate_set,
+                "baseline_rank": baseline_rank,
+                "exploration_status": exploration_status,
+                "feedback_status": feedback_status,
+                "baseline_selection": baseline_selection,
+                "selection_probability": selection_probability,
+                "render_path": "story" if story is not None else "template",
+                "attempts": story.attempts if story is not None else None,
+                "judge_score": story.judge_score if story is not None else None,
+                "story_key": story_key,
+            }
+        )
         notify(
             table,
             ssm_client,
@@ -576,26 +679,6 @@ def _run_explain_track(
             video_path=str(video_path),
             video_s3_key=video_key,
         )
-
-    sent_ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    table.put_item(
-        Item={
-            "experiment_id": f"video#{key}",
-            "sk": "video",
-            "track": track,
-            "url": url,
-            "title": title,
-            "digest_key": digest_key,
-            "video_key": video_key,
-            "sent_ts": sent_ts,
-            "rating": None,
-            "rating_ts": None,
-            "render_path": "story" if story is not None else "template",
-            "attempts": story.attempts if story is not None else None,
-            "judge_score": story.judge_score if story is not None else None,
-            "story_key": story_key,
-        }
-    )
     return "sent"
 
 

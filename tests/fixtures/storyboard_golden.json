@@ -1,18 +1,20 @@
 {
-  "metaphor": "A house move with one small suitcase: the house is the whole chat, the suitcase is the token budget, and a gold passport is the one code the agent must not lose.",
-  "why_this_metaphor": "Compaction is choosing what to pack; the viewer sees the passport left on a shelf or packed first, and that is the entire mechanism.",
-  "rejected": ["A river with a dam that lets only some water through", "A librarian shelving books into one small box"],
+  "title": "Recursive Self-Improvement in AI",
+  "simple_definition": "A system improves only when an external check confirms that its change is better.",
+  "visual_focus": "Keep the agent, evaluator, verification gate, and skill library visible while a proposed change moves through them.",
   "mapping": [
-    {"paper_term": "chat history", "visual": "a house full of grey furniture"},
-    {"paper_term": "token budget", "visual": "one small suitcase"},
-    {"paper_term": "exact identifier", "visual": "a gold passport"},
-    {"paper_term": "compaction prompt", "visual": "the packing list pinned above the door"}
+    {"paper_term": "Agent", "visual": "a blue circle on the left"},
+    {"paper_term": "Evaluator", "visual": "a score dial in the centre"},
+    {"paper_term": "Verification gate", "visual": "a red or green gate after the evaluator"},
+    {"paper_term": "Skill library", "visual": "a stack of saved cards on the right"}
   ],
   "beats": [
-    {"narration": "This house is an agent's whole chat. You must move today, and only one small suitcase comes with you.", "visual": "A large grey rectangle labelled house on the left fills with nine small grey furniture blocks. A small gold-outlined suitcase appears on the right. A gold passport sits among the furniture.", "on_screen_text": ["house = the chat", "suitcase = the budget"]},
-    {"narration": "The first packing list says: summarize concisely. The mover grabs the sofa and leaves the passport on the shelf.", "visual": "A label 'packing list: summarize concisely' appears above the door. One furniture block shrinks and slides into the suitcase. The passport stays behind and dims. A red cross appears next to the suitcase.", "on_screen_text": ["summarize concisely"]},
-    {"narration": "The second list says: list every code first. Same mover, same suitcase. Now the passport goes in before anything else.", "visual": "The label changes to 'packing list: list every code first'. The passport slides into the suitcase first and glows. A green check replaces the red cross.", "on_screen_text": ["list every code first"]},
-    {"narration": "Measured on a weak model, a plain summary keeps zero percent of the codes. Codes first keeps 44%.", "visual": "Two bars grow from the suitcase: a short red bar labelled 0% and a tall gold bar counting up to 44%.", "on_screen_text": ["0%", "44%"]},
-    {"narration": "The paper does not test lists longer than 50 items. So here is the street test: does your compaction prompt name the codes first?", "visual": "A dashed boundary line appears at the edge of the house labelled '50 items tested'. The suitcase stays centred, and the question text appears below the house on the left.", "on_screen_text": ["50 items tested"]}
+    {"role": "title", "narration": "Recursive Self-Improvement in AI. A system improves only when an external check confirms that its change is better.", "visual": "Show the title above four connected components: agent, evaluator, verification gate, and skill library.", "on_screen_text": ["Recursive Self-Improvement in AI"]},
+    {"role": "problem", "narration": "An agent can call any change an improvement. Its own confidence does not prove the change works.", "visual": "The agent sends a change directly toward the skill library. The verification gate turns red and blocks it.", "on_screen_text": ["claim", "blocked"]},
+    {"role": "mechanism", "narration": "The bounded loop sends each proposed change to an external evaluator.", "visual": "A proposal dot moves from the agent to the evaluator along the existing arrow.", "on_screen_text": ["proposal"]},
+    {"role": "mechanism", "narration": "The evaluator scores the change against a fixed test. The verification gate opens only when that test passes.", "visual": "The evaluator dial moves, then the gate changes from red to green.", "on_screen_text": ["fixed test", "pass"]},
+    {"role": "result", "narration": "The survey covers 1250 papers. It finds that 74% of deployment-time self-evolution papers were posted in 2026.", "visual": "Keep the mechanism visible. Show 1250 above the evaluator and 74% beside the open gate.", "on_screen_text": ["1250 papers", "74%"]},
+    {"role": "limit", "narration": "The paper does not claim that frontier labs already run recursive self-improvement.", "visual": "Draw a boundary after the skill library and dim everything beyond it.", "on_screen_text": ["not observed"]},
+    {"role": "question", "narration": "Does your last self-improving pipeline climb the verification hierarchy, or does it just trust its own confidence?", "visual": "Return focus to the evaluator and verification gate. Pulse the gate once while the question remains in the caption.", "on_screen_text": ["external check?"]}
   ]
 }

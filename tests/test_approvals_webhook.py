@@ -495,7 +495,7 @@ def test_vid_rating_happy_path(fabric, recorder):
 
     assert [method for method, _payload in recorder] == [
         "answerCallbackQuery",
-        "editMessageText",
+        "editMessageReplyMarkup",
     ]
     _toast_method, toast_payload = recorder[0]
     assert toast_payload["text"] == "Rated: COOL"
@@ -503,7 +503,7 @@ def test_vid_rating_happy_path(fabric, recorder):
     # The video's own buttons are stripped entirely (single-video message,
     # so the row list goes to empty, sent explicitly).
     assert edit["reply_markup"]["inline_keyboard"] == []
-    assert edit["text"] == "video caption"
+    assert "text" not in edit
 
 
 def test_vid_unknown_key_ignored(fabric, recorder):
@@ -513,7 +513,7 @@ def test_vid_unknown_key_ignored(fabric, recorder):
 
     assert response["statusCode"] == 200
     assert _get_video(table, "no-such-key") is None
-    # Only the toast fires; no editMessageText for an unknown key.
+    # Only the toast fires; no button edit for an unknown key.
     assert [method for method, _payload in recorder] == ["answerCallbackQuery"]
     _method, payload = recorder[0]
     assert payload["text"] == "unknown video"
@@ -552,6 +552,70 @@ def test_vid_second_rating_overwrites(fabric, recorder):
     # prop:'s first-tap-wins conditional.
     toasts = [p["text"] for m, p in recorder if m == "answerCallbackQuery"]
     assert toasts == ["Rated: SKIP"]
+
+
+def test_vid_clarity_is_collected_separately_from_topic_rating(fabric, recorder):
+    table, _sqs, _queue_url = fabric
+    key = "core-20260824T103000Z-clear"
+    _file_video(table, key)
+    keyboard = [
+        [
+            {"text": "COOL", "callback_data": f"vid:{key}:cool"},
+            {"text": "MEH", "callback_data": f"vid:{key}:meh"},
+            {"text": "SKIP", "callback_data": f"vid:{key}:skip"},
+        ],
+        [
+            {"text": "CLEAR", "callback_data": f"vid:{key}:clear"},
+            {"text": "UNCLEAR", "callback_data": f"vid:{key}:unclear"},
+        ],
+    ]
+
+    response = webhook.handler(
+        make_event(data=f"vid:{key}:unclear", keyboard=keyboard),
+        None,
+    )
+
+    assert response["statusCode"] == 200
+    item = _get_video(table, key)
+    assert item["clarity"] == "UNCLEAR"
+    assert item["clarity_ts"] is not None
+    edit = next(
+        payload for method, payload in recorder if method == "editMessageReplyMarkup"
+    )
+    remaining = edit["reply_markup"]["inline_keyboard"]
+    assert remaining == keyboard[:1]
+
+
+def test_vid_topic_rating_preserves_clarity_buttons(fabric, recorder):
+    table, _sqs, _queue_url = fabric
+    key = "core-20260824T103000Z-topic"
+    _file_video(table, key)
+    keyboard = [
+        [
+            {"text": "COOL", "callback_data": f"vid:{key}:cool"},
+            {"text": "MEH", "callback_data": f"vid:{key}:meh"},
+            {"text": "SKIP", "callback_data": f"vid:{key}:skip"},
+        ],
+        [
+            {"text": "CLEAR", "callback_data": f"vid:{key}:clear"},
+            {"text": "UNCLEAR", "callback_data": f"vid:{key}:unclear"},
+        ],
+    ]
+
+    response = webhook.handler(
+        make_event(data=f"vid:{key}:cool", keyboard=keyboard),
+        None,
+    )
+
+    assert response["statusCode"] == 200
+    item = _get_video(table, key)
+    assert item["rating"] == "COOL"
+    assert "clarity" not in item
+    edit = next(
+        payload for method, payload in recorder if method == "editMessageReplyMarkup"
+    )
+    remaining = edit["reply_markup"]["inline_keyboard"]
+    assert remaining == keyboard[1:]
 
 
 def test_vid_foreign_user_ignored(fabric, recorder):

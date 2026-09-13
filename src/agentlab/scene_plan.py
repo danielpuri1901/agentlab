@@ -474,6 +474,9 @@ PICK_SYSTEM = """You are picking ONE candidate from a numbered list for \
 Daniel to watch a video about today. Answer with ONLY the number of your \
 pick, nothing else: no words, no punctuation, just the number."""
 
+RANK_SYSTEM = """Rank the best candidates from a numbered list for Daniel to watch.
+Answer with only a JSON array of candidate numbers in best-to-worst order."""
+
 _NOVEL_INSTRUCTION = (
     "Pick the candidate Daniel is LEAST likely to already know about, the "
     "one that sounds the coolest and most frontier-opening. Ignore "
@@ -556,3 +559,47 @@ def pick_paper(
     if index is None:
         return None
     return candidates[index - 1]
+
+
+def rank_papers(
+    candidates: list[dict],
+    interests_text: str,
+    complete: Callable[[str, list[dict]], str],
+    mode: str = "core",
+    model: str = DEFAULT_PICK_MODEL,
+    limit: int = 3,
+) -> list[dict]:
+    """Return a small baseline ranking before preference feedback is applied."""
+    count = min(max(limit, 1), len(candidates))
+    if not candidates:
+        return []
+    prompt = build_pick_prompt(candidates, interests_text, mode).rsplit(
+        "Answer with ONLY the number, nothing else.", 1
+    )[0]
+    prompt += (
+        f"Rank the best {count} candidates. Return exactly {count} unique numbers "
+        "as a JSON array, best first."
+    )
+    raw = complete(
+        model,
+        [
+            {"role": "system", "content": RANK_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    match = re.search(r"\[[^\]]*\]", raw or "")
+    if not match:
+        return []
+    try:
+        indices = json.loads(match.group())
+    except json.JSONDecodeError:
+        return []
+    if (
+        not isinstance(indices, list)
+        or len(indices) != count
+        or any(type(index) is not int for index in indices)
+        or len(set(indices)) != count
+        or any(index < 1 or index > len(candidates) for index in indices)
+    ):
+        return []
+    return [candidates[index - 1] for index in indices]

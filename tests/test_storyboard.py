@@ -33,26 +33,27 @@ def _fenced(data: dict) -> str:
 
 def test_golden_storyboard_validates(golden):
     board = sb.Storyboard(**golden)
-    assert len(board.beats) == 5
-    assert board.beats[0].on_screen_text == ["house = the chat", "suitcase = the budget"]
+    assert len(board.beats) == 7
+    assert board.beats[0].role == "title"
+    assert board.beats[0].on_screen_text == ["Recursive Self-Improvement in AI"]
 
 
 def test_parse_storyboard_tolerates_fences_and_prose(golden, plan):
     board, error = sb.parse_storyboard(_fenced(golden), DIGEST, plan)
     assert error == ""
-    assert board.metaphor.startswith("A house move")
+    assert board.visual_focus.startswith("Keep the agent")
 
 
 def test_parse_storyboard_clips_long_strings_instead_of_failing(golden, plan):
-    golden["metaphor"] = "x" * 500
+    golden["visual_focus"] = "x" * 500
     golden["beats"][0]["visual"] = "y" * 900
     board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
     assert error == ""
-    assert len(board.metaphor) == sb.MAX_METAPHOR
+    assert len(board.visual_focus) == sb.MAX_VISUAL_FOCUS
     assert len(board.beats[0].visual) == sb.MAX_VISUAL
 
 
-@pytest.mark.parametrize("beat_count", [4, 10])
+@pytest.mark.parametrize("beat_count", [6, 10])
 def test_parse_storyboard_rejects_bad_beat_counts(golden, plan, beat_count):
     beat = golden["beats"][0]
     golden["beats"] = [beat] * beat_count
@@ -107,7 +108,7 @@ def test_design_storyboard_retries_once_with_the_error_then_succeeds(golden, pla
     board = sb.design_storyboard(DIGEST, plan, complete, model="m")
     assert len(calls) == 2
     assert "beats" in calls[1][-1]["content"]
-    assert len(board.beats) == 5
+    assert len(board.beats) == 7
 
 
 def test_design_storyboard_raises_after_second_failure(golden, plan):
@@ -121,17 +122,61 @@ def test_prompt_carries_digest_plan_and_the_hard_rules(plan):
     prompt = sb.build_storyboard_prompt(DIGEST, plan)
     assert DIGEST in prompt
     assert plan.street_test_question in prompt
-    for rule in ("three candidate", "flowchart", "never", "street-test"):
+    for rule in ("real mechanism", "Do not invent an analogy", "title", "street-test"):
         assert rule in sb.STORYBOARD_SYSTEM + prompt
 
 
-def test_prompt_rejects_literal_research_artifacts_and_limits_complexity():
+def test_prompt_requires_direct_simple_explanation():
     system = sb.STORYBOARD_SYSTEM
-    assert "whiteboard" in system
-    assert "checklist" in system
-    assert "different physical domain" in system
-    assert "exactly 6 beats" in system
-    assert "one large central object" in system.lower()
-    assert "No separate chart" in system
+    assert "simple definition" in system
+    assert "Do not invent an analogy" in system
+    assert "7 to 9 beats" in system
+    assert "at most 22 words" in system
     assert "at most 12 repeated elements" in system
-    assert "Do not number every repeated element" in system
+
+
+def test_parse_storyboard_rejects_analogy_opening(golden, plan):
+    golden["beats"][0]["narration"] = "Imagine a gate. " + golden["simple_definition"]
+    board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
+    assert board is None
+    assert "analogy" in error
+
+
+def test_parse_storyboard_rejects_terms_outside_scene_plan(golden, plan):
+    golden["mapping"][0]["paper_term"] = "magic suitcase"
+    board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
+    assert board is None
+    assert "outside the scene plan" in error
+
+
+def test_parse_storyboard_requires_the_scene_plan_title(golden, plan):
+    golden["title"] = "A clever gate story"
+    golden["beats"][0]["on_screen_text"] = [golden["title"]]
+    board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
+    assert board is None
+    assert "scene plan title" in error
+
+
+def test_parse_storyboard_requires_title_and_definition_at_the_start(golden, plan):
+    golden["beats"][0]["narration"] = (
+        "Here is the big idea. "
+        f"{golden['title']}. {golden['simple_definition']}"
+    )
+    board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
+    assert board is None
+    assert "start with title" in error
+
+
+def test_parse_storyboard_requires_exact_grounded_question(golden, plan):
+    golden["beats"][-1]["narration"] = "Would this work for you?"
+    board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
+    assert board is None
+    assert "street-test question" in error
+
+
+def test_parse_storyboard_result_uses_a_grounded_key_number(golden, plan):
+    golden["beats"][-3]["narration"] = "The system gets a useful result."
+    golden["beats"][-3]["on_screen_text"] = ["result"]
+    board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
+    assert board is None
+    assert "key number" in error

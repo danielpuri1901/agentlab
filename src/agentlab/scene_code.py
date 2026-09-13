@@ -1,5 +1,4 @@
-"""Scene code: the coder prompt and the guard for model-written Manim
-scenes (docs/specs/2026-09-05-metaphor-videos.md, section 3).
+"""Scene code: the coder prompt and guard for model-written Manim scenes.
 
 The guard is a best-effort AST validator, not a sandbox.
 It keeps normal generated code inside Manim, a few stdlib modules, and a
@@ -248,18 +247,18 @@ Methods:
 - self.label(text, size=28, color=WHITE, width=44, bold=False): a wrapped, fitted Text. Place it with next_to / move_to / to_edge.
 - self.counter(start, end, suffix="", size=44, color=ACCENT, decimals=0): returns (mobject, animation). Place the mobject, then self.play(animation, run_time=...) to count it up. Call self.freeze(mobject) afterwards, before any FadeOut or Transform that includes it.
 - self.freeze(mobject): stop a counter updating.
-- self.clear_stage(run_time=0.4): fade out everything except the caption. Use it when the metaphor changes view.
+- self.clear_stage(run_time=0.4): fade out everything except the caption. Use it when the mechanism changes view.
 - self.hold(seconds): wait, to let a change sink in.
 
 The base class already: sets the dark background, draws the caption for each beat in the bottom band, and pads each beat so it lasts exactly its narration. You only write beat_1 .. beat_n."""
 
 
 SCENE_CODE_SYSTEM = """You write one Manim Community v0.21 scene file that animates a \
-storyboard for a short paper-explainer video. The storyboard names one metaphor and a \
+storyboard for a short paper-explainer video. The storyboard names one real mechanism and a \
 list of beats; each beat has narration (already recorded, its duration is given) and a \
 visual description. Your job is to draw exactly that visual, beat by beat, with clean \
 motion, in the style of 3Blue1Brown: simple shapes, one accent colour, the change on the \
-object is the explanation.
+paper's real components is the explanation.
 
 Contract:
 - File starts with `from manim import (...)` naming only what you use, then `from \
@@ -274,7 +273,7 @@ values, round numbers, or annotations. Keep each label clear of every shape and 
 - Each beat's animations (the sum of run_time values plus any self.hold) must end at \
 least 0.3 s before that beat's narration ends. The budget per beat is listed below. The \
 base class pads the rest.
-- Objects that persist across beats live on self (self.house, self.case, ...). Later \
+- Objects that persist across beats live on self (self.agent, self.evaluator, ...). Later \
 beats move, recolour, or transform them; that continuity is the whole point.
 - Everything stays inside the stage: x from -6.4 to 6.4, y from -2.3 to 3.6. The band \
 below y = -2.3 is the caption's; never draw there. Call self.fit on every text block and \
@@ -316,7 +315,8 @@ def build_scene_code_prompt(
         "<storyboard_json>\n"
         f"{storyboard_json}\n"
         "</storyboard_json>\n\n"
-        f"Metaphor: {storyboard.metaphor}\nWhy: {storyboard.why_this_metaphor}\n"
+        f"Title: {storyboard.title}\nSimple definition: {storyboard.simple_definition}\n"
+        f"Visual focus: {storyboard.visual_focus}\n"
         "Mapping:\n"
         + "\n".join(f"- {m.paper_term} = {m.visual}" for m in storyboard.mapping)
         + "\n\nBeats:\n"

@@ -11,18 +11,20 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError
 
 from agentlab import video_render
-from agentlab.scene_plan import extract_json_object
+from agentlab.scene_plan import ScenePlan, extract_json_object
 from agentlab.storyboard import Storyboard
 
 FALLBACK_SCORE = 5
 FRAME_WIDTH = 960
-MAX_MISSING_VISUALS = 1
+MAX_MISSING_VISUALS = 0
+MIN_PASS_SCORE = 7
 
 logger = logging.getLogger(__name__)
 
 
 class BeatJudgement(BaseModel):
     beat: int
+    grounded: bool
     shows_visual: bool
     legible: bool
     clean: bool
@@ -36,8 +38,10 @@ class Judgement(BaseModel):
     note: str | None = None
 
 
-def verdict_from_beats(beats: list[BeatJudgement]) -> str:
-    if any(not beat.clean or not beat.legible for beat in beats):
+def verdict_from_beats(beats: list[BeatJudgement], score: int = 10) -> str:
+    if score < MIN_PASS_SCORE:
+        return "fix"
+    if any(not beat.grounded or not beat.clean or not beat.legible for beat in beats):
         return "fix"
     if sum(1 for beat in beats if not beat.shows_visual) > MAX_MISSING_VISUALS:
         return "fix"
@@ -84,7 +88,7 @@ def parse_judgement(raw: str) -> tuple[Judgement | None, str]:
         judgement = Judgement(**data)
     except ValidationError as exc:
         return None, str(exc)
-    judgement.verdict = verdict_from_beats(judgement.beats)
+    judgement.verdict = verdict_from_beats(judgement.beats, judgement.score)
     return judgement, ""
 
 
@@ -116,18 +120,21 @@ def sample_frames(video_path, times: list[float], out_dir) -> list[Path]:
 
 
 JUDGE_SYSTEM = """You check rendered frames of a short explainer video against its \
-storyboard. Each frame is the middle of one beat. For each frame decide: shows_visual \
+storyboard. The video must explain the paper directly with its real components. Each \
+frame is the middle of one beat. Compare every narration claim with the grounded scene \
+plan. For each frame decide: grounded (does the narration stay within the scene plan), shows_visual \
 (does the frame show what the beat's visual description says should be on screen at \
 that point, roughly), legible (is every piece of text readable at this size, nothing \
 tiny or garbled), clean (nothing overlaps another element, nothing is cut off at the \
 frame edge, nothing is drawn over the caption text in the bottom band). Put a short \
 concrete issue when something is wrong, else null. Then give an overall score from 0 \
-to 10 for how well the frames tell the storyboard's story. A literal document, \
-whiteboard, checklist, dashboard, flowchart, or research-process diagram is not a \
-physical metaphor. Mark affected beats clean=false, name that issue, and score the video \
-at most 5. Be strict about overlap and cut-off elements, lenient about artistic \
-interpretation. Answer with ONLY a fenced json \
-object: {"beats": [{"beat": 1, "shows_visual": true, "legible": true, "clean": true, \
+to 10 for how well the frames explain the real mechanism. Beat 1 must show the title. \
+The mechanism beats must show the named paper components and their cause-and-effect \
+changes. Reject an unrelated analogy, decorative metaphor, unexplained technical term, \
+or generic row of boxes. Mark the affected beat shows_visual=false and score the video \
+at most 5. Be strict about overlap, cut-off elements, and missing mechanism details. \
+Answer with ONLY a fenced json \
+object: {"beats": [{"beat": 1, "grounded": true, "shows_visual": true, "legible": true, "clean": true, \
 "issue": null}, ...], "score": 7}. The score is a top-level sibling after the closed \
 beats array, never an item inside beats."""
 
@@ -137,13 +144,29 @@ def _image_part(path: Path) -> dict:
     return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}}
 
 
-def build_judge_messages(frames: list[Path], storyboard: Storyboard) -> list[dict]:
+def build_judge_messages(
+    frames: list[Path], storyboard: Storyboard, plan: ScenePlan
+) -> list[dict]:
     expected = len(storyboard.beats)
     if len(frames) != expected:
         raise ValueError(
             f"frames count {len(frames)} must equal storyboard beats count {expected}"
         )
-    content: list[dict] = [{"type": "text", "text": f"Metaphor: {storyboard.metaphor}"}]
+    mapping = ", ".join(
+        f"{item.paper_term} = {item.visual}" for item in storyboard.mapping
+    )
+    content: list[dict] = [
+        {
+            "type": "text",
+            "text": (
+                f"Title: {storyboard.title}\n"
+                f"Simple definition: {storyboard.simple_definition}\n"
+                f"Visual focus: {storyboard.visual_focus}\n"
+                f"Required paper components: {mapping}\n"
+                f"Grounded scene plan: {plan.model_dump_json()}"
+            ),
+        }
+    ]
     for index, (frame, beat) in enumerate(zip(frames, storyboard.beats, strict=True), start=1):
         content.append(
             {
@@ -176,9 +199,13 @@ def _completeness_error(judgement: Judgement, expected: int) -> str:
 
 
 def judge_frames(
-    frames: list[Path], storyboard: Storyboard, complete: Callable[[str, list[dict]], str], model: str
+    frames: list[Path],
+    storyboard: Storyboard,
+    plan: ScenePlan,
+    complete: Callable[[str, list[dict]], str],
+    model: str,
 ) -> Judgement:
-    messages = build_judge_messages(frames, storyboard)
+    messages = build_judge_messages(frames, storyboard, plan)
     error = ""
     expected = len(storyboard.beats)
     for _attempt in range(2):
@@ -199,7 +226,7 @@ def judge_frames(
             error = completeness_error
     logger.warning("judge unavailable: %s", error)
     return Judgement(
-        beats=[], score=FALLBACK_SCORE, verdict="pass", note=f"judge unavailable: {error}"
+        beats=[], score=FALLBACK_SCORE, verdict="fix", note=f"judge unavailable: {error}"
     )
 
 
@@ -213,6 +240,8 @@ def judgement_feedback(judgement: Judgement) -> str:
             problems.append("text not legible")
         if not beat.shows_visual:
             problems.append("does not show the described visual")
+        if not beat.grounded:
+            problems.append("claim is not grounded in the scene plan")
         if problems:
             detail = f" ({beat.issue})" if beat.issue else ""
             lines.append(f"beat {beat.beat}: {', '.join(problems)}{detail}")
