@@ -171,11 +171,14 @@ def test_parse_storyboard_builds_title_beat_from_known_fields(golden, plan):
     assert board.beats[0].on_screen_text == [plan.title]
 
 
-def test_parse_storyboard_requires_exact_grounded_question(golden, plan):
+def test_parse_storyboard_builds_question_beat_from_scene_plan(golden, plan):
     golden["beats"][-1]["narration"] = "Would this work for you?"
+
     board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
-    assert board is None
-    assert "street-test question" in error
+
+    assert error == ""
+    assert board is not None
+    assert board.beats[-1].narration == plan.street_test_question
 
 
 def test_parse_storyboard_result_uses_a_grounded_key_number(golden, plan):

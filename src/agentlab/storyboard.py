@@ -201,6 +201,8 @@ def parse_storyboard(raw: str, digest: str, plan: ScenePlan) -> tuple[Storyboard
             return None, "title and simple_definition exceed the narration limit"
         board.beats[0].narration = title_narration
         board.beats[0].on_screen_text = [board.title]
+    if board.beats and board.beats[-1].role == "question":
+        board.beats[-1].narration = plan.street_test_question
     error = _structure_error(board, plan)
     if error:
         return None, error
