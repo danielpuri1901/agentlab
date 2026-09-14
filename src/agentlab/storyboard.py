@@ -169,7 +169,11 @@ def _structure_error(board: Storyboard, plan: ScenePlan) -> str:
                     f"{MAX_SENTENCE_WORDS} words"
                 )
 
-    allowed_terms = {_plain(node.label) for node in plan.diagram.nodes} | {
+    allowed_terms = {
+        _plain(value)
+        for node in plan.diagram.nodes
+        for value in (node.id, node.label)
+    } | {
         _plain(step.label) for step in plan.mechanism_steps
     }
     unknown = [

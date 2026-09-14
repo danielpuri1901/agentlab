@@ -150,6 +150,15 @@ def test_parse_storyboard_rejects_terms_outside_scene_plan(golden, plan):
     assert "outside the scene plan" in error
 
 
+def test_parse_storyboard_accepts_normalised_scene_plan_node_ids(golden, plan):
+    golden["mapping"][0]["paper_term"] = "gate"
+
+    board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
+
+    assert error == ""
+    assert board is not None
+
+
 def test_parse_storyboard_requires_the_scene_plan_title(golden, plan):
     golden["title"] = "A clever gate story"
     golden["beats"][0]["on_screen_text"] = [golden["title"]]
