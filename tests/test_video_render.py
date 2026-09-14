@@ -514,6 +514,46 @@ def test_topological_order_ignores_edges_to_unknown_nodes():
     assert topological_order(["a", "b"], [("a", "ghost")]) == ["a", "b"]
 
 
+def test_layered_columns_keep_branches_in_separate_rows():
+    """A branched six-node mechanism must not become one tiny horizontal row."""
+    from agentlab import video_scenes
+
+    nodes = ["pretrain", "rl", "align", "goals", "hacking", "conflict"]
+    edges = [
+        ("pretrain", "rl"),
+        ("pretrain", "align"),
+        ("rl", "goals"),
+        ("rl", "hacking"),
+        ("align", "hacking"),
+        ("hacking", "conflict"),
+    ]
+
+    assert video_scenes.layered_columns(nodes, edges) == [
+        ["pretrain"],
+        ["rl", "align"],
+        ["goals", "hacking"],
+        ["conflict"],
+    ]
+
+
+def test_layered_columns_returns_none_for_cycle():
+    """Cyclic mechanisms must retain the existing grid fallback."""
+    from agentlab import video_scenes
+
+    assert video_scenes.layered_columns(["a", "b"], [("a", "b"), ("b", "a")]) is None
+
+
+def test_primary_edge_label_limits_dense_step_to_one_label():
+    """One step with two active edges must not draw overlapping edge labels."""
+    from agentlab import video_scenes
+
+    assert video_scenes.primary_edge_id(
+        ["rl", "rl->hacking", "align->hacking", "hacking"],
+        {"rl->hacking", "align->hacking"},
+    ) == "rl->hacking"
+    assert video_scenes.primary_edge_id(["rl", "hacking"], {"rl->hacking"}) is None
+
+
 def test_grid_dimensions_roughly_square():
     from agentlab.video_scenes import grid_dimensions
 

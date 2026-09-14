@@ -135,11 +135,12 @@ def test_prompt_requires_direct_simple_explanation():
     assert "at most 12 repeated elements" in system
 
 
-def test_parse_storyboard_rejects_analogy_opening(golden, plan):
+def test_parse_storyboard_removes_analogy_opening(golden, plan):
     golden["beats"][0]["narration"] = "Imagine a gate. " + golden["simple_definition"]
     board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
-    assert board is None
-    assert "analogy" in error
+    assert error == ""
+    assert board is not None
+    assert board.beats[0].narration == f"{plan.title}. {board.simple_definition}"
 
 
 def test_parse_storyboard_rejects_terms_outside_scene_plan(golden, plan):
@@ -157,14 +158,17 @@ def test_parse_storyboard_requires_the_scene_plan_title(golden, plan):
     assert "scene plan title" in error
 
 
-def test_parse_storyboard_requires_title_and_definition_at_the_start(golden, plan):
-    golden["beats"][0]["narration"] = (
-        "Here is the big idea. "
-        f"{golden['title']}. {golden['simple_definition']}"
-    )
+def test_parse_storyboard_builds_title_beat_from_known_fields(golden, plan):
+    """Changing model prose must not reject an otherwise valid storyboard."""
+    golden["beats"][0]["narration"] = "Here is the big idea."
+    golden["beats"][0]["on_screen_text"] = ["Main idea"]
+
     board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
-    assert board is None
-    assert "start with title" in error
+
+    assert error == ""
+    assert board is not None
+    assert board.beats[0].narration == f"{plan.title}. {board.simple_definition}"
+    assert board.beats[0].on_screen_text == [plan.title]
 
 
 def test_parse_storyboard_requires_exact_grounded_question(golden, plan):

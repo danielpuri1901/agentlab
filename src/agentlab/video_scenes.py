@@ -170,6 +170,33 @@ def topological_order(node_ids: list[str], edges: list[tuple[str, str]]) -> list
     return order if len(order) == len(node_ids) else None
 
 
+def layered_columns(
+    node_ids: list[str], edges: list[tuple[str, str]]
+) -> list[list[str]] | None:
+    """Group a DAG by longest-path depth so branches use vertical space."""
+    order = topological_order(node_ids, edges)
+    if order is None:
+        return None
+    known = set(node_ids)
+    outgoing: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
+    for source, target in edges:
+        if source in known and target in known:
+            outgoing[source].append(target)
+    depth = {node_id: 0 for node_id in node_ids}
+    for source in order:
+        for target in outgoing[source]:
+            depth[target] = max(depth[target], depth[source] + 1)
+    columns = [[] for _ in range(max(depth.values(), default=0) + 1)]
+    for node_id in order:
+        columns[depth[node_id]].append(node_id)
+    return columns
+
+
+def primary_edge_id(activates: list[str], edge_ids: set[str]) -> str | None:
+    """Return at most one active edge label, preserving mechanism order."""
+    return next((item for item in activates if item in edge_ids), None)
+
+
 def grid_dimensions(n: int) -> tuple[int, int]:
     """(columns, rows) for a roughly square grid holding n items -- the
     cyclic-diagram fallback layout. Pure, directly testable."""
@@ -387,10 +414,15 @@ if _MANIM_AVAILABLE:
             node_ids = [n["id"] for n in node_specs]
             edge_pairs = [(e["source"], e["target"]) for e in edge_specs]
 
-            order = topological_order(node_ids, edge_pairs)
-            acyclic = order is not None
-            order = order or node_ids
-            index_of = {nid: i for i, nid in enumerate(order)}
+            columns = layered_columns(node_ids, edge_pairs)
+            acyclic = columns is not None
+            columns = columns or []
+            order = [nid for column in columns for nid in column] if acyclic else node_ids
+            column_of = {
+                nid: column_index
+                for column_index, column in enumerate(columns)
+                for nid in column
+            }
 
             node_groups: dict[str, VGroup] = {}
             boxes: dict[str, RoundedRectangle] = {}
@@ -409,7 +441,7 @@ if _MANIM_AVAILABLE:
                 icon = _make_icon(spec.get("icon"), GREY_B)
                 icon.move_to(box.get_top() + DOWN * 0.3)
                 label = fit(
-                    Text(spec["label"], font_size=15, color=GREY_C, weight=BOLD),
+                    Text(spec["label"], font_size=15, color=GREY_B, weight=BOLD),
                     max_w=NODE_W - 0.2,
                     max_h=0.34,
                 )
@@ -418,10 +450,19 @@ if _MANIM_AVAILABLE:
                 node_groups[nid] = group
                 boxes[nid] = box
 
-            placed = VGroup(*[node_groups[nid] for nid in order])
             if acyclic:
-                placed.arrange(RIGHT, buff=0.55)
+                column_groups = VGroup(
+                    *[
+                        VGroup(*[node_groups[nid] for nid in column]).arrange(
+                            DOWN, buff=0.45
+                        )
+                        for column in columns
+                    ]
+                )
+                column_groups.arrange(RIGHT, buff=0.75)
+                placed = column_groups
             else:
+                placed = VGroup(*[node_groups[nid] for nid in order])
                 cols, _rows = grid_dimensions(len(order))
                 placed.arrange_in_grid(cols=cols, buff=0.55)
             fit(placed, max_w=DIAGRAM_MAX_W, max_h=DIAGRAM_MAX_H)
@@ -444,10 +485,9 @@ if _MANIM_AVAILABLE:
                 direction = dst_box.get_center() - src_box.get_center()
                 start = src_box.get_boundary_point(direction)
                 end = dst_box.get_boundary_point(-direction)
-                skips = acyclic and abs(index_of[dst_id] - index_of[src_id]) != 1
+                skips = acyclic and abs(column_of[dst_id] - column_of[src_id]) != 1
                 if skips:
-                    bend = PI / 3.5 if index_of[dst_id] > index_of[src_id] else -PI / 3.5
-                    arrow = CurvedArrow(start, end, angle=bend, color=GREY_D, stroke_width=2)
+                    arrow = CurvedArrow(start, end, angle=PI / 3.5, color=GREY_D, stroke_width=2)
                 else:
                     arrow = Arrow(
                         start,
@@ -460,7 +500,8 @@ if _MANIM_AVAILABLE:
                 parts = [arrow]
                 if spec.get("label"):
                     tag = fit(Text(spec["label"], font_size=13, color=GREY_D), max_w=1.7, max_h=0.3)
-                    tag.next_to(arrow.get_center(), UP, buff=0.08)
+                    tag.move_to(arrow.point_from_proportion(0.5) + UP * 0.16)
+                    tag.set_opacity(0)
                     parts.append(tag)
                 edge_mobs[eid] = VGroup(*parts)
 
@@ -497,7 +538,8 @@ if _MANIM_AVAILABLE:
                 if current_caption is not None:
                     highlight_anims.append(FadeOut(current_caption))
 
-                wanted = set(step.get("activates") or []) & known_ids
+                activated = step.get("activates") or []
+                wanted = set(activated) & known_ids
                 newly = wanted - active
                 released = active - wanted
                 flourishes = []
@@ -508,15 +550,24 @@ if _MANIM_AVAILABLE:
                     highlight_anims.append(label.animate.set_color(WHITE))
                     flourishes.append(Circumscribe(box, color=ACCENT, buff=0.08, stroke_width=3, time_width=0.4))
                 for eid in newly & set(self._diagram_edges):
-                    arrow = self._diagram_edges[eid][0]
+                    edge = self._diagram_edges[eid]
+                    arrow = edge[0]
                     highlight_anims.append(arrow.animate.set_stroke(ACCENT, width=3))
                 for nid in released & set(self._diagram_nodes):
                     box, _icon, label = self._diagram_nodes[nid]
-                    highlight_anims.append(box.animate.set_stroke(GREY_D, width=2).set_fill(BACKGROUND, opacity=1))
-                    highlight_anims.append(label.animate.set_color(GREY_D))
+                    highlight_anims.append(box.animate.set_stroke(GREY_C, width=2).set_fill(BACKGROUND, opacity=1))
+                    highlight_anims.append(label.animate.set_color(GREY_B))
                 for eid in released & set(self._diagram_edges):
-                    arrow = self._diagram_edges[eid][0]
+                    edge = self._diagram_edges[eid]
+                    arrow = edge[0]
                     highlight_anims.append(arrow.animate.set_stroke(GREY_D, width=2))
+                label_edge = primary_edge_id(activated, set(self._diagram_edges))
+                for eid, edge in self._diagram_edges.items():
+                    if len(edge) > 1:
+                        opacity = 1 if eid == label_edge else 0
+                        highlight_anims.append(
+                            edge[1].animate.set_color(WHITE).set_opacity(opacity)
+                        )
 
                 highlight_time = min(0.4, budget)
                 self.play(*highlight_anims, run_time=highlight_time, rate_func=smooth)

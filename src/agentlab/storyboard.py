@@ -195,10 +195,16 @@ def parse_storyboard(raw: str, digest: str, plan: ScenePlan) -> tuple[Storyboard
         board = Storyboard(**data)
     except ValidationError as exc:
         return None, str(exc)
+    if board.title == plan.title:
+        title_narration = f"{board.title}. {board.simple_definition}"
+        if len(title_narration) > MAX_NARRATION:
+            return None, "title and simple_definition exceed the narration limit"
+        board.beats[0].narration = title_narration
+        board.beats[0].on_screen_text = [board.title]
     error = _structure_error(board, plan)
     if error:
         return None, error
-    missing = ungrounded_numbers(data, digest, plan)
+    missing = ungrounded_numbers(board.model_dump(), digest, plan)
     if missing:
         return None, (
             "these numbers appear in the beats but not in the digest or scene plan: "
