@@ -1,0 +1,17 @@
+# Generated Video Retries and Costs Plan
+
+**Goal:** Ship dynamic generated Manim videos with bounded repair attempts, prompt caching, and visible cost data.
+
+**Spec:** `docs/specs/2026-09-16-generated-video-retries-and-costs.md`
+
+## Tasks
+
+- [ ] Add measured cache-aware model usage and cost records with tests.
+- [ ] Add one Cost Explorer month-to-date query with tests.
+- [ ] Add four attempts, a total deadline, three phone-width samples per beat, and best-safe-candidate selection with tests.
+- [ ] Persist attempt evidence, model usage, and costs in S3 and DynamoDB with tests.
+- [ ] Add cost lines to Telegram captions with tests.
+- [ ] Add prompt cache controls to stable system messages with tests.
+- [ ] Run focused tests, the full test suite, lint, and formatting checks.
+- [ ] Build and deploy the video image and Terraform changes.
+- [ ] Run one production-like video and inspect its logs, ledger row, cost, and sampled frames.
