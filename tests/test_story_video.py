@@ -18,7 +18,9 @@ FIXTURES = Path(__file__).parent / "fixtures"
 BOARD = Storyboard(
     **json.loads((FIXTURES / "storyboard_golden.json").read_text(encoding="utf-8"))
 )
-PLAN = ScenePlan(**json.loads((FIXTURES / "sample_plan.json").read_text(encoding="utf-8")))
+PLAN = ScenePlan(
+    **json.loads((FIXTURES / "sample_plan.json").read_text(encoding="utf-8"))
+)
 GOLDEN_SCENE = (FIXTURES / "paper_story_golden.py").read_text(encoding="utf-8")
 DIGEST = "# Digest\n0% and 44% on 50 items.\n## Limits\nNone."
 N = len(BOARD.beats)
@@ -90,13 +92,16 @@ def seams(monkeypatch):
         "render_errors": [],
         "timings": [],
         "coder": [],
+        "previous_sources": [],
         "frame_times": [],
+        "frame_timeouts": [],
+        "contact_sheets": [],
     }
 
     monkeypatch.setattr(
         story_video,
         "design_storyboard",
-        lambda digest, plan, complete, model: BOARD,
+        lambda digest, plan, complete, model, **kwargs: BOARD,
     )
 
     def fake_narrate(polly, texts, voice, out_dir):
@@ -119,6 +124,7 @@ def seams(monkeypatch):
         previous_source=None,
     ):
         state["coder"].append(feedback)
+        state["previous_sources"].append(previous_source)
         result = state["codes"].pop(0) if state["codes"] else GOLDEN_SCENE
         if isinstance(result, Exception):
             raise result
@@ -151,28 +157,34 @@ def seams(monkeypatch):
 
     monkeypatch.setattr(story_video, "render_scene_video", fake_render)
 
-    def fake_sample_frames(video, times, out_dir):
+    def fake_sample_frames(video, times, out_dir, timeout_seconds):
         state["frame_times"].append(times)
+        state["frame_timeouts"].append(timeout_seconds)
         return [Path(out_dir) / f"{index}.png" for index in range(len(times))]
 
     monkeypatch.setattr(story_video, "sample_frames", fake_sample_frames)
+
+    def fake_contact_sheets(frames, out_dir, timeout_seconds):
+        sheets = [Path(out_dir) / f"beat-{index}.png" for index in range(N)]
+        state["contact_sheets"].append(sheets)
+        return sheets
+
+    monkeypatch.setattr(story_video, "contact_sheet_frames", fake_contact_sheets)
     monkeypatch.setattr(
         story_video,
         "judge_frames",
         lambda frames, storyboard, plan, complete, model: (
-            state["judgements"].pop(0)
-            if state["judgements"]
-            else _judgement()
+            state["judgements"].pop(0) if state["judgements"] else _judgement()
         ),
     )
     monkeypatch.setattr(
         story_video,
         "concat_audio",
-        lambda clips, out, target_seconds=None: state.__setitem__(
-            "targets", target_seconds
-        )
-        or Path(out),
+        lambda clips, out, target_seconds=None: (
+            state.__setitem__("targets", target_seconds) or Path(out)
+        ),
     )
+
     def fake_mux(video, audio, out):
         output = Path(out)
         output.write_bytes(b"final")
@@ -216,9 +228,16 @@ def test_happy_path_one_attempt_then_final_render(seams, tmp_path):
     assert seams["renders"][0][1] == story_video.LOW_RENDER_TIMEOUT
     assert seams["renders"][1][1] == story_video.FINAL_RENDER_TIMEOUT
     assert seams["targets"] == [5.0] * N
-    assert seams["frame_times"] == [[2.5 + 5.0 * index for index in range(N)]]
+    assert seams["frame_times"] == [
+        [offset + 5.0 * index for index in range(N) for offset in (1.0, 2.5, 4.0)]
+    ]
+    assert seams["frame_timeouts"] == [story_video.FRAME_SAMPLE_TIMEOUT_SECONDS]
+    assert len(seams["contact_sheets"][0]) == N
     assert result.srt_path.exists()
     assert "class PaperStory" in result.scene_source
+    assert result.selected_attempt == 1
+    assert result.passed is True
+    assert result.attempt_records[0]["status"] == "passed"
 
 
 def test_guard_finding_goes_back_to_the_coder(seams, tmp_path):
@@ -231,9 +250,7 @@ def test_guard_finding_goes_back_to_the_coder(seams, tmp_path):
     assert len([quality for quality, _ in seams["renders"] if quality == "l"]) == 1
 
 
-def test_render_traceback_is_logged_and_goes_back_to_the_coder(
-    seams, tmp_path, caplog
-):
+def test_render_traceback_is_logged_and_goes_back_to_the_coder(seams, tmp_path, caplog):
     seams["render_errors"] = [_render_error()]
 
     with caplog.at_level(logging.WARNING, logger="agentlab.story_video"):
@@ -290,17 +307,33 @@ def test_raw_total_overrun_above_limit_goes_back_to_the_coder(seams, tmp_path):
     assert "total overrun" in seams["coder"][1]
 
 
-def test_judge_fix_retries_and_refuses_to_ship(seams, tmp_path):
+def test_judge_fix_retries_and_ships_best_safe_render(seams, tmp_path):
     seams["judgements"] = [
         _judgement(score=7, fix_beat=2),
         _judgement(score=4, fix_beat=3),
         _judgement(score=6, fix_beat=1),
+        _judgement(score=5, fix_beat=4),
     ]
 
-    with pytest.raises(StoryFailed, match="no scene passed"):
-        _compose(tmp_path)
+    result = _compose(tmp_path)
 
+    assert result.passed is False
+    assert result.judge_score == 7
+    assert result.selected_attempt == 1
     assert "beat 2" in seams["coder"][1]
+
+
+def test_low_quality_judgement_retries_with_a_fresh_visual_concept(seams, tmp_path):
+    weak = _judgement(score=5)
+    weak.verdict = "fix"
+    weak.note = "The composition is generic and static."
+    seams["judgements"] = [weak, _judgement(score=8)]
+
+    result = _compose(tmp_path)
+
+    assert result.attempts == 2
+    assert "fresh visual concept" in seams["coder"][1]
+    assert seams["previous_sources"][1] is None
 
 
 def test_latest_candidate_wins_a_score_tie(seams, tmp_path):
@@ -317,24 +350,30 @@ def test_latest_candidate_wins_a_score_tie(seams, tmp_path):
     assert result.scene_source == latest_source
 
 
-def test_later_coder_failure_does_not_ship_a_failed_candidate(seams, tmp_path):
-    seams["codes"] = [GOLDEN_SCENE, RuntimeError("coder unavailable")]
+def test_later_coder_failure_ships_earlier_safe_candidate(seams, tmp_path):
+    seams["codes"] = [
+        GOLDEN_SCENE,
+        RuntimeError("coder unavailable"),
+        RuntimeError("coder unavailable"),
+        RuntimeError("coder unavailable"),
+    ]
     seams["judgements"] = [_judgement(score=7, fix_beat=2)]
 
-    with pytest.raises(StoryFailed, match="no scene passed"):
-        _compose(tmp_path)
+    result = _compose(tmp_path)
 
-    assert [quality for quality, _ in seams["renders"]] == ["l"]
+    assert result.passed is False
+    assert result.selected_attempt == 1
+    assert [quality for quality, _ in seams["renders"]] == ["l", "m"]
 
 
-def test_max_attempts_is_capped_at_three(seams, tmp_path):
-    seams["render_errors"] = [_render_error()] * 4
+def test_max_attempts_is_capped_at_four(seams, tmp_path):
+    seams["render_errors"] = [_render_error()] * 5
 
     with pytest.raises(story_video.StoryFailed) as exc:
         _compose(tmp_path, max_attempts=99)
 
-    assert "3 attempts" in str(exc.value)
-    assert len(seams["coder"]) == 3
+    assert "4 attempts" in str(exc.value)
+    assert len(seams["coder"]) == 4
 
 
 def _drop_last_beat(timing):
@@ -421,13 +460,36 @@ def test_invalid_preview_timing_goes_back_to_the_coder(seams, tmp_path, mutate):
     assert "timing" in seams["coder"][1].lower()
 
 
-def test_three_failures_raise_story_failed(seams, tmp_path):
-    seams["render_errors"] = [_render_error()] * 3
+def test_four_failures_raise_story_failed(seams, tmp_path):
+    seams["render_errors"] = [_render_error()] * 4
 
     with pytest.raises(story_video.StoryFailed) as exc:
         _compose(tmp_path)
 
-    assert "3 attempts" in str(exc.value)
+    assert "4 attempts" in str(exc.value)
+
+
+def test_video_deadline_stops_new_attempts(seams, monkeypatch, tmp_path):
+    seams["render_errors"] = [_render_error()] * 4
+    times = iter([0.0, 0.0, 2.0])
+    monkeypatch.setattr(story_video.time, "monotonic", lambda: next(times, 2.0))
+
+    with pytest.raises(StoryFailed, match="deadline"):
+        story_video.compose_story_video(
+            DIGEST,
+            PLAN,
+            polly_client=None,
+            voice_id="Ivy",
+            complete=lambda model, messages: "",
+            work_dir=tmp_path / "work",
+            out_path=tmp_path / "out" / "video.mp4",
+            story_model="s",
+            scene_model="c",
+            judge_model="j",
+            deadline_seconds=1,
+        )
+
+    assert len(seams["coder"]) == 1
 
 
 def test_storyboard_invalid_becomes_story_failed(seams, monkeypatch, tmp_path):
@@ -442,9 +504,7 @@ def test_storyboard_invalid_becomes_story_failed(seams, monkeypatch, tmp_path):
     assert "storyboard" in str(exc.value)
 
 
-def test_final_render_exception_logs_and_falls_back_to_preview(
-    seams, tmp_path, caplog
-):
+def test_final_render_exception_logs_and_falls_back_to_preview(seams, tmp_path, caplog):
     seams["render_errors"] = [None, OSError("render disk full")]
 
     with caplog.at_level(logging.WARNING, logger="agentlab.story_video"):

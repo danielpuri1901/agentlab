@@ -94,3 +94,6 @@ class PaperStory(StoryScene):
 
     def beat_7(self):
         self.hold(0.6)
+
+    def beat_8(self):
+        self.hold(0.6)

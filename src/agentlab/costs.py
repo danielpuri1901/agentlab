@@ -1,4 +1,6 @@
 import os
+from copy import deepcopy
+from dataclasses import dataclass
 
 # litellm fetches its price map from GitHub over HTTPS at import time unless
 # this is set, which would violate the "no network calls" constraint on this
@@ -27,7 +29,23 @@ Claude 4.7+ model should apply this factor themselves."""
 class ModelPrice(BaseModel):
     input_per_mtok: float
     output_per_mtok: float
+    cache_read_input_per_mtok: float
+    cache_write_input_per_mtok: float
     source: str
+
+
+@dataclass(frozen=True)
+class ModelCallUsage:
+    stage: str
+    requested_model: str
+    pricing_model: str
+    input_tokens: int
+    output_tokens: int
+    cache_read_input_tokens: int
+    cache_write_input_tokens: int
+    latency_ms: int
+    estimated_cost_usd: float
+    pricing_source: str
 
 
 def _resolve_litellm_key(model: str) -> str:
@@ -54,18 +72,34 @@ def resolve_price(model: str) -> ModelPrice:
     entry = litellm.model_cost[key]
     input_per_mtok = entry["input_cost_per_token"] * 1e6
     output_per_mtok = entry["output_cost_per_token"] * 1e6
+    cache_read = entry.get("cache_read_input_token_cost")
+    cache_write = entry.get("cache_creation_input_token_cost")
     return ModelPrice(
         input_per_mtok=input_per_mtok,
         output_per_mtok=output_per_mtok,
+        cache_read_input_per_mtok=(
+            input_per_mtok if cache_read is None else cache_read * 1e6
+        ),
+        cache_write_input_per_mtok=(
+            input_per_mtok if cache_write is None else cache_write * 1e6
+        ),
         source=f"litellm:{key}",
     )
 
 
-def run_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+def run_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_input_tokens: int = 0,
+    cache_write_input_tokens: int = 0,
+) -> float:
     price = resolve_price(model)
     return (
         price.input_per_mtok * input_tokens / 1e6
         + price.output_per_mtok * output_tokens / 1e6
+        + price.cache_read_input_per_mtok * cache_read_input_tokens / 1e6
+        + price.cache_write_input_per_mtok * cache_write_input_tokens / 1e6
     )
 
 
@@ -74,3 +108,56 @@ def experiment_cost(usages: list[tuple[str, int, int]]) -> float:
         run_cost(model, input_tokens, output_tokens)
         for model, input_tokens, output_tokens in usages
     )
+
+
+def _token_detail(details, name: str) -> int:
+    if details is None:
+        return 0
+    value = (
+        details.get(name, 0) if isinstance(details, dict) else getattr(details, name, 0)
+    )
+    return int(value or 0)
+
+
+def completion_usage(
+    response,
+    requested_model: str,
+    pricing_model: str,
+    stage: str,
+    latency_ms: int,
+) -> ModelCallUsage:
+    usage = response.usage
+    input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    details = getattr(usage, "prompt_tokens_details", None)
+    cache_read = _token_detail(details, "cached_tokens")
+    cache_write = _token_detail(details, "cache_write_tokens")
+    price = resolve_price(pricing_model)
+    return ModelCallUsage(
+        stage=stage,
+        requested_model=requested_model,
+        pricing_model=pricing_model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_input_tokens=cache_read,
+        cache_write_input_tokens=cache_write,
+        latency_ms=latency_ms,
+        estimated_cost_usd=run_cost(
+            pricing_model,
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens=cache_read,
+            cache_write_input_tokens=cache_write,
+        ),
+        pricing_source=price.source,
+    )
+
+
+def cache_static_system_prompt(messages: list[dict]) -> list[dict]:
+    """Add one Bedrock prompt-cache checkpoint after stable system text."""
+    cached = deepcopy(messages)
+    for message in cached:
+        if message.get("role") == "system" and message.get("content"):
+            message["cache_control"] = {"type": "ephemeral"}
+            break
+    return cached

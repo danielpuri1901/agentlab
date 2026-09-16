@@ -9,12 +9,22 @@ Show the estimated model cost for each video and the tagged AgentLab AWS cost fo
 ## Video loop
 
 The storyboard remains grounded in the paper digest and scene plan.
+The scene plan is a factual brief, not a required visual layout.
+The storyboard model chooses one paper-specific visual concept.
+It can use abstract, geometric, cinematic, or diagrammatic visuals.
+The learning arc covers the problem, mechanism, finding, application or implication, limit, and final question.
+Composition, motion, visual rhythm, and transitions can change for every paper.
+The worker gives the storyboard model recent visual directions so it can avoid repeating them.
 The scene model writes one complete Manim file.
 The AST guard rejects unsafe code before execution.
 Each safe file gets a low-quality preview render with a hard timeout.
 The pipeline samples three frames from each beat at phone width.
+It combines each beat's start, middle, and end frames into one contact sheet for the vision judge.
+This preserves motion evidence while keeping the Bedrock request below its 20-image limit.
 The vision judge checks grounding, visual coverage, legibility, and layout.
 The next attempt receives the exact guard, render, timing, or judge failure.
+Technical failures repair the previous source.
+A weak but safe visual concept starts again without the previous source.
 The loop stops after four scene-code attempts or the per-video deadline.
 
 The first passing candidate ends the retry loop.
@@ -64,6 +74,11 @@ A production run must prove these behaviors:
 - A renderable candidate with a `fix` verdict ships when no candidate passes.
 - A total deadline stops more work.
 - Three frame samples exist for each beat.
+- The judge receives one three-panel contact sheet per beat.
+- The creative prompts allow paper-specific abstraction and changing compositions.
+- A weak visual score requests a fresh concept instead of patching the old layout.
+- The storyboard includes a practical application or implication.
+- Recent visual directions are stored and passed into the next storyboard request.
 - Prompt cache controls reach LiteLLM.
 - Measured token and cache usage produces a deterministic cost.
 - DynamoDB and Telegram show the per-video cost.

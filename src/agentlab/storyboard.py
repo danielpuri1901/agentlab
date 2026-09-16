@@ -20,8 +20,8 @@ MIN_MAPPING = 2
 MAX_MAPPING = 8
 MAX_TERM = 40
 MAX_MAPPING_VISUAL = 80
-MIN_BEATS = 7
-MAX_BEATS = 9
+MIN_BEATS = 8
+MAX_BEATS = 10
 MAX_NARRATION = 240
 MAX_VISUAL = 500
 MAX_ON_SCREEN = 2
@@ -35,7 +35,9 @@ class Mapping(BaseModel):
 
 
 class Beat(BaseModel):
-    role: Literal["title", "problem", "mechanism", "result", "limit", "question"]
+    role: Literal[
+        "title", "problem", "mechanism", "result", "application", "limit", "question"
+    ]
     narration: str = Field(min_length=1, max_length=MAX_NARRATION)
     visual: str = Field(min_length=1, max_length=MAX_VISUAL)
     on_screen_text: list[str] = Field(default_factory=list, max_length=MAX_ON_SCREEN)
@@ -116,7 +118,10 @@ def _clip(data: dict) -> dict:
     if isinstance(data.get("beats"), list):
         for beat in data["beats"]:
             if isinstance(beat, dict):
-                for key, limit in (("narration", MAX_NARRATION), ("visual", MAX_VISUAL)):
+                for key, limit in (
+                    ("narration", MAX_NARRATION),
+                    ("visual", MAX_VISUAL),
+                ):
                     if isinstance(beat.get(key), str):
                         beat[key] = beat[key][:limit]
                 if isinstance(beat.get("on_screen_text"), list):
@@ -134,9 +139,9 @@ def _structure_error(board: Storyboard, plan: ScenePlan) -> str:
     roles = [beat.role for beat in board.beats]
     if roles[:2] != ["title", "problem"]:
         return "beats 1 and 2 must have roles title and problem"
-    if roles[-3:] != ["result", "limit", "question"]:
-        return "the final three beats must have roles result, limit, and question"
-    if any(role != "mechanism" for role in roles[2:-3]):
+    if roles[-4:] != ["result", "application", "limit", "question"]:
+        return "the final four beats must have roles result, application, limit, and question"
+    if any(role != "mechanism" for role in roles[2:-4]):
         return "all beats between problem and result must have role mechanism"
     first = board.beats[0]
     if board.title not in first.on_screen_text:
@@ -149,18 +154,15 @@ def _structure_error(board: Storyboard, plan: ScenePlan) -> str:
     if _plain(board.beats[-1].narration) != _plain(plan.street_test_question):
         return "the question beat must use the scene plan street-test question exactly"
     if plan.key_numbers:
-        result_text = board.beats[-3].narration + " " + " ".join(
-            board.beats[-3].on_screen_text
-        )
+        result_beat = next(beat for beat in board.beats if beat.role == "result")
+        result_text = result_beat.narration + " " + " ".join(result_beat.on_screen_text)
         if not any(number.value in result_text for number in plan.key_numbers):
             return "the result beat must use at least one grounded key number"
     if "—" in board.model_dump_json():
         return "use a plain hyphen or period instead of an em dash"
     for index, beat in enumerate(board.beats, start=1):
         sentences = [
-            part.strip()
-            for part in re.split(r"[.!?]+", beat.narration)
-            if part.strip()
+            part.strip() for part in re.split(r"[.!?]+", beat.narration) if part.strip()
         ]
         for sentence in sentences:
             if len(sentence.split()) > MAX_SENTENCE_WORDS:
@@ -170,12 +172,8 @@ def _structure_error(board: Storyboard, plan: ScenePlan) -> str:
                 )
 
     allowed_terms = {
-        _plain(value)
-        for node in plan.diagram.nodes
-        for value in (node.id, node.label)
-    } | {
-        _plain(step.label) for step in plan.mechanism_steps
-    }
+        _plain(value) for node in plan.diagram.nodes for value in (node.id, node.label)
+    } | {_plain(step.label) for step in plan.mechanism_steps}
     unknown = [
         item.paper_term
         for item in board.mapping
@@ -186,7 +184,9 @@ def _structure_error(board: Storyboard, plan: ScenePlan) -> str:
     return ""
 
 
-def parse_storyboard(raw: str, digest: str, plan: ScenePlan) -> tuple[Storyboard | None, str]:
+def parse_storyboard(
+    raw: str, digest: str, plan: ScenePlan
+) -> tuple[Storyboard | None, str]:
     text = extract_json_object(raw)
     try:
         data = json.loads(text)
@@ -220,22 +220,36 @@ def parse_storyboard(raw: str, digest: str, plan: ScenePlan) -> tuple[Storyboard
     return board, ""
 
 
-STORYBOARD_SYSTEM = """You make a 90-second visual explanation of one research paper.
-Use the paper's real mechanism. Do not invent an analogy, metaphor, mascot, or unrelated physical scene.
+STORYBOARD_SYSTEM = """You are the visual director for a 90-second research-paper video.
+Make it clear, visually compelling, and memorable.
+Use the paper's real mechanism and evidence.
+Treat the scene plan as a factual brief, not as a required diagram or layout.
+
+Choose one strong visual concept designed for this paper.
+Abstract visual systems are welcome when their meaning is easy to follow.
+Use shape, space, scale, rhythm, contrast, and transformation to make ideas visible.
+Change the composition when a new view makes the idea clearer.
+Avoid a generic row of boxes unless that is truly the clearest explanation.
+Do not use an unrelated metaphor, mascot, or story.
 
 Start with the exact paper title and one simple definition of the main idea.
-Then show a concrete input or problem from the paper.
-Show the mechanism by moving data through the real components in the scene plan.
-Show cause and effect. Keep the same component positions between beats.
-Then show one grounded result, one limit, and the street-test question.
+Then establish a concrete input or problem from the paper.
+Show the real mechanism through cause and effect.
+Then show one grounded result, one practical application or implication, one limit, and the street-test question.
+If the application is your inference rather than the paper's claim, say that plainly.
 
-Write 7 to 9 beats with this exact role order:
+For every beat, first decide what the viewer must understand.
+Then choose the clearest visual explanation for someone seeing the idea for the first time.
+Describe meaningful motion and transitions, not a static inventory of objects.
+
+Write 8 to 10 beats with this exact role order:
 1. title
 2. problem
 3. two to four mechanism beats
 4. result
-5. limit
-6. question
+5. application
+6. limit
+7. question
 
 Each beat has role, narration, visual, and on_screen_text.
 Narration has one or two short sentences. Each sentence has at most 22 words.
@@ -248,15 +262,25 @@ The first beat's narration must contain simple_definition exactly.
 Use at most two short on-screen labels per beat.
 Only use paper terms that occur as diagram node labels or mechanism step labels.
 Every number must occur in the digest or scene plan.
-Show at most 12 repeated elements.
-Everything must be drawable with plain text and simple Manim shapes.
+Everything must be drawable with Manim text, shapes, paths, particles, and transformations.
 
 Output exactly one fenced json block with keys title, simple_definition, visual_focus,
 mapping (a list of paper_term and visual objects), and beats.
 Nothing can follow the json block."""
 
 
-def build_storyboard_prompt(digest: str, plan: ScenePlan) -> str:
+def build_storyboard_prompt(
+    digest: str,
+    plan: ScenePlan,
+    recent_visual_directions: list[str] | None = None,
+) -> str:
+    recent = ""
+    if recent_visual_directions:
+        recent = (
+            "\n\nRecent visual directions to avoid repeating:\n- "
+            + "\n- ".join(recent_visual_directions)
+            + "\nChoose a substantially different visual concept, composition, and motion system."
+        )
     return (
         "<digest>\n"
         f"{digest}\n"
@@ -265,17 +289,26 @@ def build_storyboard_prompt(digest: str, plan: ScenePlan) -> str:
         f"{plan.model_dump_json(indent=1)}\n"
         "</scene_plan>\n\n"
         "Explain this paper directly. Show its real components and relationships. "
-        "Start with the title and a simple definition. End with the result, limit, "
-        "and street-test question. Return the fenced json storyboard."
+        "Start with the title and a simple definition. End with the result, application, "
+        "limit, and street-test question. Return the fenced json storyboard." + recent
     )
 
 
 def design_storyboard(
-    digest: str, plan: ScenePlan, complete: Callable[[str, list[dict]], str], model: str
+    digest: str,
+    plan: ScenePlan,
+    complete: Callable[[str, list[dict]], str],
+    model: str,
+    recent_visual_directions: list[str] | None = None,
 ) -> Storyboard:
     messages = [
         {"role": "system", "content": STORYBOARD_SYSTEM},
-        {"role": "user", "content": build_storyboard_prompt(digest, plan)},
+        {
+            "role": "user",
+            "content": build_storyboard_prompt(
+                digest, plan, recent_visual_directions=recent_visual_directions
+            ),
+        },
     ]
     raw = complete(model, messages)
     board, error = parse_storyboard(raw, digest, plan)

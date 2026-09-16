@@ -19,7 +19,12 @@ import re
 import secrets
 import subprocess
 import tempfile
+import time
+from copy import deepcopy
+from dataclasses import asdict
 from datetime import UTC, datetime
+from decimal import Decimal
+from functools import partial as bind
 from pathlib import Path
 
 import boto3
@@ -28,7 +33,13 @@ import typer
 from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 
+from agentlab.aws_costs import month_to_date_tagged_cost
 from agentlab.charts import verdict_chart_png
+from agentlab.costs import (
+    ModelCallUsage,
+    cache_static_system_prompt,
+    completion_usage,
+)
 from agentlab.eval_runner import _run_arm, hypothesis_for
 from agentlab.notify import flush_pending, notify
 from agentlab.papers_db import is_seen, mark_seen, paper_identity, recent_seen_titles
@@ -66,6 +77,9 @@ GOLDEN_PAPERS_PATH = _REPO_ROOT / "docs" / "golden-papers.jsonl"
 _ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5})")
 EXPLAIN_TRACKS = ("core", "classic", "novel")
 DIGEST_URL_EXPIRY_SECONDS = 7 * 24 * 3600
+MODEL_CALL_TIMEOUT_SECONDS = 180
+DEFAULT_DEEP_READ_PRICE_MODEL = "bedrock/global.anthropic.claude-sonnet-4-6"
+DEFAULT_PICK_PRICE_MODEL = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 def _require_env(name: str) -> str:
@@ -139,14 +153,18 @@ def transition(
     return sk
 
 
-def upload_log(s3_client, bucket: str, experiment_id: str, arm_style: str, local_path: str) -> str:
+def upload_log(
+    s3_client, bucket: str, experiment_id: str, arm_style: str, local_path: str
+) -> str:
     """Upload one arm's local EvalLog file to its deterministic S3 key."""
     key = _log_key(experiment_id, arm_style)
     s3_client.upload_file(str(local_path), bucket, key)
     return key
 
 
-def download_log(s3_client, bucket: str, experiment_id: str, arm_style: str, dest_dir: Path) -> Path:
+def download_log(
+    s3_client, bucket: str, experiment_id: str, arm_style: str, dest_dir: Path
+) -> Path:
     """Download one arm's EvalLog from S3 to `dest_dir` for extraction."""
     key = _log_key(experiment_id, arm_style)
     dest_path = Path(dest_dir) / f"{arm_style}.eval"
@@ -239,7 +257,9 @@ def run_arm_command() -> None:
                     max_connections,
                 )
             )
-            key = upload_log(s3_client, results_bucket, experiment_id, arm_style, log.location)
+            key = upload_log(
+                s3_client, results_bucket, experiment_id, arm_style, log.location
+            )
     except Exception as exc:
         transition(table, experiment_id, "ARM_FAILED", arm_style, str(exc))
         # A failed experiment must never be silent (lesson: the Grok intake
@@ -282,8 +302,12 @@ def finalize_command() -> None:
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
-        baseline_path = download_log(s3_client, results_bucket, experiment_id, baseline_style, tmp_path)
-        candidate_path = download_log(s3_client, results_bucket, experiment_id, candidate_style, tmp_path)
+        baseline_path = download_log(
+            s3_client, results_bucket, experiment_id, baseline_style, tmp_path
+        )
+        candidate_path = download_log(
+            s3_client, results_bucket, experiment_id, candidate_style, tmp_path
+        )
 
         baseline = extract_results(str(baseline_path))
         candidate = extract_results(str(candidate_path))
@@ -342,7 +366,9 @@ def finalize_command() -> None:
             try:
                 transition(table, experiment_id, "PING_FAILED", None, str(exc))
             except Exception as t_exc:  # noqa: BLE001
-                typer.echo(f"ping failed and PING_FAILED write failed: {t_exc}", err=True)
+                typer.echo(
+                    f"ping failed and PING_FAILED write failed: {t_exc}", err=True
+                )
 
     typer.echo(f"verdict: {verdict_str}")
 
@@ -358,31 +384,102 @@ def finalize_command() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _complete(model: str, messages: list[dict]) -> str:
-    """The pick/deep-read model calls, delegated to the proposer's own
-    `_complete` (same litellm shape). Imported lazily, not at module level:
-    cloud.py imports `transition` from this module at import time, so a
-    top-level `from agentlab.proposer import _complete` here would form
-    worker -> proposer -> cloud -> worker, a circular import. propose_command
-    below already lazy-imports from proposer for the same reason.
-    """
-    from agentlab.proposer import _complete as _proposer_complete
+def _pricing_model_for(model: str) -> str | None:
+    pairs = (
+        ("DEEP_READ_MODEL", "DEEP_READ_PRICE_MODEL", DEFAULT_DEEP_READ_PRICE_MODEL),
+        ("PICK_MODEL", "PICK_PRICE_MODEL", DEFAULT_PICK_PRICE_MODEL),
+        ("STORY_MODEL", "STORY_PRICE_MODEL", DEFAULT_DEEP_READ_PRICE_MODEL),
+        ("SCENE_MODEL", "SCENE_PRICE_MODEL", DEFAULT_DEEP_READ_PRICE_MODEL),
+        ("JUDGE_MODEL", "JUDGE_PRICE_MODEL", DEFAULT_DEEP_READ_PRICE_MODEL),
+    )
+    for model_env, price_env, default_price in pairs:
+        if os.environ.get(model_env) == model:
+            return os.environ.get(price_env, default_price)
+    if "application-inference-profile" in model:
+        return None
+    return model
 
-    return _proposer_complete(model, messages)
 
-
-def _complete_long(model: str, messages: list[dict]) -> str:
-    """The story path's model calls allow complete generated scene files.
-
-    A scene file does not fit the deep read's 3000-token budget, so this
-    completion allows 12000 output tokens and a 600 second timeout. The lazy
-    litellm import avoids the same circular import as `_complete`.
-    """
+def _run_completion(
+    model: str,
+    messages: list[dict],
+    *,
+    max_tokens: int,
+    timeout: int,
+    stage: str,
+    usage_sink: list[ModelCallUsage] | None = None,
+    pricing_model: str | None = None,
+):
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     import litellm
 
+    price_id = pricing_model or _pricing_model_for(model)
+    request_messages = messages
+    if price_id and "anthropic.claude" in price_id:
+        request_messages = cache_static_system_prompt(messages)
+    started = time.perf_counter()
     response = litellm.completion(
-        model=model, messages=messages, max_tokens=12000, timeout=600
+        model=model,
+        messages=request_messages,
+        max_tokens=max_tokens,
+        timeout=timeout,
+    )
+    if usage_sink is not None and price_id is not None:
+        try:
+            usage_sink.append(
+                completion_usage(
+                    response,
+                    requested_model=model,
+                    pricing_model=price_id,
+                    stage=stage,
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                )
+            )
+        except (AttributeError, KeyError, TypeError, ValueError):
+            pass
+    return response
+
+
+def _complete(
+    model: str,
+    messages: list[dict],
+    *,
+    usage_sink: list[ModelCallUsage] | None = None,
+    pricing_model: str | None = None,
+) -> str:
+    response = _run_completion(
+        model,
+        messages,
+        max_tokens=3000,
+        timeout=MODEL_CALL_TIMEOUT_SECONDS,
+        stage="paper",
+        usage_sink=usage_sink,
+        pricing_model=pricing_model,
+    )
+    return response.choices[0].message.content
+
+
+def _complete_long(
+    model: str,
+    messages: list[dict],
+    *,
+    usage_sink: list[ModelCallUsage] | None = None,
+    pricing_model: str | None = None,
+) -> str:
+    """The story path's model calls allow complete generated scene files.
+
+    A scene file does not fit the deep read's 3000-token budget, so this
+    completion allows 12000 output tokens and a 180 second timeout. The lazy
+    litellm import avoids the same circular import as `_complete`.
+    """
+    response = _run_completion(
+        model,
+        messages,
+        max_tokens=12000,
+        timeout=MODEL_CALL_TIMEOUT_SECONDS,
+        stage="video",
+        usage_sink=usage_sink,
+        pricing_model=pricing_model,
     )
     choice = response.choices[0]
     if getattr(choice, "finish_reason", None) in {"length", "max_tokens"}:
@@ -464,6 +561,89 @@ def _candidate_record(
     }
 
 
+def _model_usage_record(
+    model_usage: list[ModelCallUsage],
+) -> tuple[Decimal, list[dict]]:
+    total = sum(
+        (Decimal(str(call.estimated_cost_usd)) for call in model_usage),
+        start=Decimal(0),
+    )
+    calls = [
+        {
+            **asdict(call),
+            "estimated_cost_usd": Decimal(str(call.estimated_cost_usd)),
+        }
+        for call in model_usage
+    ]
+    return total, calls
+
+
+def _upload_attempt_artifacts(
+    s3_client,
+    bucket: str,
+    video_key: str,
+    attempt_records: list[dict],
+) -> list[dict]:
+    records = deepcopy(attempt_records)
+    for record in records:
+        attempt = record.get("attempt")
+        prefix = f"stories/{video_key}/attempts/{attempt}"
+        source_path = record.pop("source_path", None)
+        if source_path and Path(source_path).is_file():
+            source_key = f"{prefix}/scene.py"
+            s3_client.upload_file(source_path, bucket, source_key)
+            record["source_key"] = source_key
+        frame_keys = []
+        for index, frame_path in enumerate(record.pop("frame_paths", []), start=1):
+            if not Path(frame_path).is_file():
+                continue
+            frame_key = f"{prefix}/frame-{index:02d}.png"
+            s3_client.upload_file(frame_path, bucket, frame_key)
+            frame_keys.append(frame_key)
+        if frame_keys:
+            record["frame_keys"] = frame_keys
+        sheet_keys = []
+        for index, sheet_path in enumerate(
+            record.pop("contact_sheet_paths", []), start=1
+        ):
+            if not Path(sheet_path).is_file():
+                continue
+            sheet_key = f"{prefix}/contact-sheet-{index:02d}.png"
+            s3_client.upload_file(sheet_path, bucket, sheet_key)
+            sheet_keys.append(sheet_key)
+        if sheet_keys:
+            record["contact_sheet_keys"] = sheet_keys
+    return records
+
+
+def _recent_visual_directions(table, limit: int = 6) -> list[str]:
+    items = []
+    request = {}
+    while True:
+        response = table.scan(**request)
+        items.extend(
+            item
+            for item in response.get("Items", [])
+            if item.get("sk") == "video" and item.get("visual_focus")
+        )
+        key = response.get("LastEvaluatedKey")
+        if not key:
+            break
+        request["ExclusiveStartKey"] = key
+    items.sort(key=lambda item: item.get("sent_ts", ""), reverse=True)
+    directions = []
+    seen = set()
+    for item in items:
+        focus = item["visual_focus"]
+        if focus in seen:
+            continue
+        seen.add(focus)
+        directions.append(f"{item.get('title', 'Previous paper')}: {focus}")
+        if len(directions) == limit:
+            break
+    return directions
+
+
 def _run_explain_track(
     track: str,
     table,
@@ -477,11 +657,16 @@ def _run_explain_track(
     scene_model: str,
     judge_model: str,
     partial: dict,
+    aws_mtd_cost: Decimal | None = None,
 ) -> str:
     """Run one explain track end to end. Returns "sent" or "empty" (no
     candidate left to pick). Raises on any other failure; `partial`
     accumulates title/url/claim/digest_url as they become available so the
     caller can send a useful fallback ping without redoing the work."""
+    model_usage: list[ModelCallUsage] = []
+    complete = bind(_complete, usage_sink=model_usage)
+    complete_long = bind(_complete_long, usage_sink=model_usage)
+
     if track == "classic":
         candidate = _next_unseen_classic(table)
         if candidate is None:
@@ -501,7 +686,7 @@ def _run_explain_track(
         interests = _load_interests()
         preference_context = load_preference_context(table, GOLDEN_PAPERS_PATH)
         baseline_ranking = rank_papers(
-            fresh, interests, _complete, mode=mode, model=pick_model, limit=len(fresh)
+            fresh, interests, complete, mode=mode, model=pick_model, limit=len(fresh)
         )
         if not baseline_ranking:
             return "empty"
@@ -512,7 +697,7 @@ def _run_explain_track(
             guided = pick_paper(
                 baseline_ranking[:3],
                 f"{interests}\n\n{preference_context}",
-                _complete,
+                complete,
                 mode=mode,
                 model=pick_model,
             )
@@ -546,7 +731,7 @@ def _run_explain_track(
     identity = paper_identity(url, title)
     mark_seen(table, identity, url, title, candidate.get("source", track), track)
 
-    digest, plan = deep_read(url, _fetch_text, _complete, model=deep_read_model)
+    digest, plan = deep_read(url, _fetch_text, complete, model=deep_read_model)
     partial["claim"] = plan.one_line_claim
 
     key = _generate_video_key(track)
@@ -571,12 +756,13 @@ def _run_explain_track(
                 plan,
                 polly_client,
                 voice_id,
-                _complete_long,
+                complete_long,
                 tmp_path / "story",
                 video_path,
                 story_model=story_model,
                 scene_model=scene_model,
                 judge_model=judge_model,
+                recent_visual_directions=_recent_visual_directions(table),
             )
         except StoryFailed as exc:
             # The worst day equals the old video: log why, render the template.
@@ -600,11 +786,17 @@ def _run_explain_track(
         story_key = None
         if story is not None:
             story_key = f"stories/{key}.json"
+            attempt_records = _upload_attempt_artifacts(
+                s3_client, bucket, key, story.attempt_records
+            )
             story_record = {
                 "storyboard": story.storyboard.model_dump(),
                 "judgement": story.judgement,
                 "attempts": story.attempts,
                 "timing": story.timing,
+                "selected_attempt": story.selected_attempt,
+                "passed": story.passed,
+                "attempt_records": attempt_records,
             }
             s3_client.put_object(
                 Bucket=bucket,
@@ -617,10 +809,14 @@ def _run_explain_track(
                 Body=story.scene_source.encode("utf-8"),
             )
 
+        model_cost, model_calls = _model_usage_record(model_usage)
+        cost_lines = [f"Estimated model cost: ${model_cost:.4f}"]
+        if aws_mtd_cost is not None:
+            cost_lines.append(f"Tagged AgentLab AWS MTD: ${aws_mtd_cost:.2f}")
         caption = (
             f"[{track.upper()}] {title}\n\n"
             f"{plan.one_line_claim}\n\n"
-            f"{plan.street_test_question}\n\n"
+            f"{plan.street_test_question}\n\n" + "\n".join(cost_lines) + "\n\n"
             f"{digest_url}"
         )
         # Ratings measure Daniel's immediate reaction (Daniel's ruling
@@ -669,6 +865,17 @@ def _run_explain_track(
                 "attempts": story.attempts if story is not None else None,
                 "judge_score": story.judge_score if story is not None else None,
                 "story_key": story_key,
+                "visual_focus": (
+                    story.storyboard.visual_focus if story is not None else None
+                ),
+                "selected_attempt": (
+                    story.selected_attempt if story is not None else None
+                ),
+                "judge_passed": story.passed if story is not None else None,
+                "estimated_model_cost_usd": model_cost,
+                "cost_estimated": True,
+                "model_calls": model_calls,
+                "tagged_aws_mtd_cost_usd": aws_mtd_cost,
             }
         )
         notify(
@@ -713,6 +920,14 @@ def explain_command() -> None:
     ssm_client = boto3.client("ssm")
     s3_client = boto3.client("s3")
     polly_client = boto3.client("polly")
+    try:
+        aws_mtd_cost = month_to_date_tagged_cost(
+            boto3.client("ce", region_name="us-east-1"),
+            project="agentlab",
+        )
+    except Exception as exc:  # noqa: BLE001 - cost visibility cannot block delivery
+        typer.echo(f"cost explorer unavailable: {str(exc)[:200]}", err=True)
+        aws_mtd_cost = None
 
     statuses: dict[str, str] = {}
     for track in tracks:
@@ -731,6 +946,7 @@ def explain_command() -> None:
                 scene_model,
                 judge_model,
                 partial,
+                aws_mtd_cost,
             )
         except Exception as exc:  # noqa: BLE001 - one track's failure must not sink the others
             statuses[track] = "failed"

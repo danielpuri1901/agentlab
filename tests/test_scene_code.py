@@ -7,8 +7,14 @@ import pytest
 from agentlab import scene_code, story_scene
 from agentlab.storyboard import Storyboard
 
-GOLDEN_SCENE = (Path(__file__).parent / "fixtures" / "paper_story_golden.py").read_text(encoding="utf-8")
-GOLDEN_BOARD = json.loads((Path(__file__).parent / "fixtures" / "storyboard_golden.json").read_text(encoding="utf-8"))
+GOLDEN_SCENE = (Path(__file__).parent / "fixtures" / "paper_story_golden.py").read_text(
+    encoding="utf-8"
+)
+GOLDEN_BOARD = json.loads(
+    (Path(__file__).parent / "fixtures" / "storyboard_golden.json").read_text(
+        encoding="utf-8"
+    )
+)
 BEATS = len(GOLDEN_BOARD["beats"])
 
 
@@ -52,7 +58,9 @@ def test_guard_flags_forbidden_things(snippet, needle):
         ("import numpy.lib.npyio as npio\n", "numpy.lib.npyio"),
     ],
 )
-def test_guard_flags_numpy_file_network_native_library_and_submodule_access(snippet, needle):
+def test_guard_flags_numpy_file_network_native_library_and_submodule_access(
+    snippet, needle
+):
     findings = scene_code.check_scene_code(snippet + GOLDEN_SCENE, BEATS)
     assert any(needle in finding for finding in findings), findings
 
@@ -74,7 +82,8 @@ from numpy import array, cos
 
 def test_guard_flags_include_numbers_true():
     source = GOLDEN_SCENE.replace(
-        "self.hold(0.6)", "self.axes = Axes(x_range=[0, 1], axis_config={'include_numbers': True}); self.hold(0.6)"
+        "self.hold(0.6)",
+        "self.axes = Axes(x_range=[0, 1], axis_config={'include_numbers': True}); self.hold(0.6)",
     )
     source = source.replace("from manim import (", "from manim import (\n    Axes,")
     findings = scene_code.check_scene_code(source, BEATS)
@@ -90,8 +99,12 @@ def test_guard_requires_every_beat_method_and_no_extras():
 
 def test_guard_rejects_construct_override_and_wrong_class():
     with_construct = GOLDEN_SCENE + "\n    def construct(self):\n        pass\n"
-    assert any("construct" in f for f in scene_code.check_scene_code(with_construct, BEATS))
-    renamed = GOLDEN_SCENE.replace("class PaperStory(StoryScene):", "class Other(StoryScene):")
+    assert any(
+        "construct" in f for f in scene_code.check_scene_code(with_construct, BEATS)
+    )
+    renamed = GOLDEN_SCENE.replace(
+        "class PaperStory(StoryScene):", "class Other(StoryScene):"
+    )
     assert any("PaperStory" in f for f in scene_code.check_scene_code(renamed, BEATS))
 
 
@@ -106,14 +119,26 @@ def test_extract_python_block_takes_the_last_fenced_block():
 
 
 def test_extract_python_block_falls_back_to_raw_when_unfenced():
-    raw = "from story_scene import StoryScene\nclass PaperStory(StoryScene):\n    pass\n"
+    raw = (
+        "from story_scene import StoryScene\nclass PaperStory(StoryScene):\n    pass\n"
+    )
     assert scene_code.extract_python_block(raw) == raw.strip()
 
 
 def test_cheat_sheet_names_every_public_story_scene_method():
     tree = ast.parse(Path(story_scene.__file__).read_text(encoding="utf-8"))
-    cls = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "StoryScene")
-    public = {n.name for n in cls.body if isinstance(n, ast.FunctionDef) and not n.name.startswith("_") and n.name != "construct"}
+    cls = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.ClassDef) and n.name == "StoryScene"
+    )
+    public = {
+        n.name
+        for n in cls.body
+        if isinstance(n, ast.FunctionDef)
+        and not n.name.startswith("_")
+        and n.name != "construct"
+    }
     assert public == {"fit", "label", "counter", "freeze", "clear_stage", "hold"}
     for name in public:
         assert f"self.{name}(" in scene_code.STORY_SCENE_API
@@ -138,10 +163,15 @@ def test_prompt_requires_scene_to_fit_below_completion_limit():
     assert "under 7000 output tokens" in scene_code.SCENE_CODE_SYSTEM
 
 
-def test_prompt_forbids_invented_labels_and_dense_overlays():
+def test_prompt_gives_the_scene_coder_visual_freedom():
     system = scene_code.SCENE_CODE_SYSTEM
-    assert "Only draw on-screen text listed in the storyboard" in system
-    assert "one visual change per beat" in system
+    assert "clearest visual explanation" in system
+    assert "visually compelling" in system
+    assert "abstract" in system
+    assert "Change the composition" in system
+    assert "designed for this paper" in system
+    assert "one visual change per beat" not in system
+    assert "Reuse the central object" not in system
 
 
 @pytest.mark.parametrize(
@@ -154,8 +184,12 @@ def test_prompt_validates_duration_margin_boundaries(duration, expected_budget):
         with pytest.raises(ValueError, match="greater than 0.3"):
             scene_code.build_scene_code_prompt(board, [duration] * BEATS, None, None)
     else:
-        prompt = scene_code.build_scene_code_prompt(board, [duration] * BEATS, None, None)
-        displayed = next(line for line in prompt.splitlines() if line.startswith("beat_1:"))
+        prompt = scene_code.build_scene_code_prompt(
+            board, [duration] * BEATS, None, None
+        )
+        displayed = next(
+            line for line in prompt.splitlines() if line.startswith("beat_1:")
+        )
         assert f"at most {expected_budget} s" in displayed
 
 
@@ -180,8 +214,14 @@ def test_prompt_rejects_duration_count_mismatch():
             "class PaperStory(StoryScene):\n    pass\n\nclass Helper:\n    pass\n",
             "exactly one top-level class named PaperStory",
         ),
-        ("class PaperStory(other.StoryScene):\n    pass\n", "exactly one direct base named StoryScene"),
-        ("class PaperStory(StoryScene, Helper):\n    pass\n", "exactly one direct base named StoryScene"),
+        (
+            "class PaperStory(other.StoryScene):\n    pass\n",
+            "exactly one direct base named StoryScene",
+        ),
+        (
+            "class PaperStory(StoryScene, Helper):\n    pass\n",
+            "exactly one direct base named StoryScene",
+        ),
     ],
 )
 def test_guard_requires_exactly_one_paper_story_class_shape(declaration, needle):
@@ -198,7 +238,12 @@ def test_write_scene_code_fix_round_includes_previous_source_and_feedback():
         return "```python\n" + GOLDEN_SCENE + "\n```"
 
     source = scene_code.write_scene_code(
-        board, [6.0] * BEATS, complete, model="m", feedback="beat 2 ran 1.2 s over", previous_source="OLD SOURCE"
+        board,
+        [6.0] * BEATS,
+        complete,
+        model="m",
+        feedback="beat 2 ran 1.2 s over",
+        previous_source="OLD SOURCE",
     )
     assert source == GOLDEN_SCENE.strip()
     user = seen[0][-1]["content"]

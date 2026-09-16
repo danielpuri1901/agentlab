@@ -457,6 +457,12 @@ resource "aws_iam_role_policy" "explain_task" {
         Resource = "*"
       },
       {
+        Sid      = "TaggedMonthToDateCost"
+        Effect   = "Allow"
+        Action   = ["ce:GetCostAndUsage"]
+        Resource = "*"
+      },
+      {
         Sid      = "TelegramParams"
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]

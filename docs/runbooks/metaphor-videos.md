@@ -6,19 +6,39 @@ Spec: `docs/specs/2026-09-05-metaphor-videos.md`.
 
 `worker explain` runs the three tracks as before.
 After the deep read, each track tries the story path through `agentlab.story_video.compose_story_video`.
-The story path creates a storyboard and narration, then makes up to three low-quality generated scene attempts and judges every renderable attempt.
-It renders the best candidate at medium quality for delivery.
+The story path creates a storyboard and narration, then makes up to four low-quality generated scene attempts and judges every renderable attempt.
+Each generated video follows a stable teaching sequence: title and definition, concrete problem, explanation, grounded result, application or implication, limitation, and final test question.
+The scene plan supplies facts and relationships but does not dictate the layout.
+The model chooses a paper-specific visual concept and controls its abstraction, composition, motion, rhythm, and transitions.
+Abstract, geometric, cinematic, and diagrammatic treatments are allowed when their meaning is clear.
+Each attempt samples the start, middle, and end of every beat at phone width.
+The three samples become one contact sheet per beat for the vision judge.
+The judge checks those frames, source accuracy, timing, and readability.
+It also scores whether the visual concept is clear, paper-specific, coherent, and visually compelling.
+The first passing attempt ships.
+If no attempt passes, the best safe rendered attempt ships.
+Technical failures repair the previous scene source.
+A weak visual concept starts a fresh scene without the previous source.
+Each shipped story stores its visual direction.
+Later videos receive recent directions and must choose a substantially different concept.
+The template is used only when no generated attempt renders safely.
+The selected candidate renders at medium quality for delivery.
 If that final render fails or has invalid timing, the compose loop uses the accepted low-quality preview instead.
 If the story path cannot produce any renderable scene and raises `StoryFailed`, the track writes a `STORY_FALLBACK` event to the ledger and renders the existing template.
 The Telegram message looks the same in either path.
 
 ## Where to look
 
-- `video#<key>` items in the state table include `render_path` (`story` or `template`), `attempts`, `judge_score`, and `story_key`.
+- `video#<key>` items in the state table include `render_path` (`story` or `template`), `attempts`, `selected_attempt`, `judge_score`, `judge_passed`, `story_key`, measured model calls, estimated model cost, and tagged AgentLab month-to-date AWS cost.
 - `explain-<yyyymmdd>` items include `STORY_FALLBACK` events with the reason in `detail`.
-- S3 `stories/<key>.json` contains the storyboard, judgement, attempts, and timing.
+- S3 `stories/<key>.json` contains the storyboard, judgement, attempts, timing, and artifact keys for every attempt.
 - S3 `stories/<key>.py` contains the generated scene source that rendered.
+- S3 `stories/<key>/attempts/` contains every generated source file and sampled frame.
 - CloudWatch `/ecs/agentlab-explain` contains warnings and Manim tracebacks for failed story attempts, including a warning when the accepted preview replaces a failed final render.
+
+The Telegram caption shows the estimated model cost for that video.
+It also shows tagged AgentLab AWS month-to-date spend when Cost Explorer is available.
+Cost Explorer data can lag behind current usage.
 
 ## Run one paper locally
 
@@ -57,7 +77,7 @@ Then run `SCENE_SPEC_JSON=work/spec.json PYTHONPATH=work uvx --python 3.12 manim
 ## Knobs
 
 - `STORY_MODEL`, `SCENE_MODEL`, and `JUDGE_MODEL` are Bedrock model IDs that each default to `DEEP_READ_MODEL`.
-- `agentlab.story_video.MAX_ATTEMPTS`, `LOW_RENDER_TIMEOUT`, and `FINAL_RENDER_TIMEOUT` control the retry and render limits.
+- `agentlab.story_video.MAX_ATTEMPTS`, `LOW_RENDER_TIMEOUT`, `FINAL_RENDER_TIMEOUT`, and `VIDEO_DEADLINE_SECONDS` control the retry and render limits.
 - `agentlab.story_scene.PER_BEAT_OVERRUN_LIMIT` and `TOTAL_OVERRUN_LIMIT` control accepted scene timing.
 - `storyboard.STORYBOARD_SYSTEM`, `scene_code.SCENE_CODE_SYSTEM`, and `frame_judge.JUDGE_SYSTEM` are the model prompts.
 

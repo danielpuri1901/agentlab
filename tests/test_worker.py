@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -20,6 +21,7 @@ from typer.testing import CliRunner
 from agentlab import notify as notify_mod
 from agentlab import worker as worker_mod
 from agentlab.cli import app
+from agentlab.costs import ModelCallUsage
 from agentlab.eval_runner import _run_arm
 from agentlab.notify import CHAT_ID_PARAM, TOKEN_PARAM, notify
 from agentlab.results import extract_results, mean_score
@@ -28,7 +30,14 @@ from agentlab.stats import paired_analysis
 from agentlab.stats import verdict as compute_verdict
 from agentlab.story_video import StoryFailed, StoryResult
 from agentlab.storyboard import Storyboard
-from agentlab.worker import _optional_int_env, transition, upload_log
+from agentlab.worker import (
+    _model_usage_record,
+    _optional_int_env,
+    _recent_visual_directions,
+    _upload_attempt_artifacts,
+    transition,
+    upload_log,
+)
 
 runner = CliRunner()
 
@@ -152,7 +161,9 @@ def _set_run_arm_env(monkeypatch, experiment_id):
     monkeypatch.setenv("STATE_TABLE", TABLE)
 
 
-def test_run_arm_generic_failure_writes_arm_failed_and_exits_nonzero(moto_fabric, monkeypatch):
+def test_run_arm_generic_failure_writes_arm_failed_and_exits_nonzero(
+    moto_fabric, monkeypatch
+):
     _s3, _dynamodb, table = moto_fabric
     _set_run_arm_env(monkeypatch, "exp-test-fail-generic")
 
@@ -185,7 +196,9 @@ def test_run_arm_check_log_status_failure_writes_diagnosis_not_bare_exit_code(
     _set_run_arm_env(monkeypatch, "exp-test-fail-status")
 
     async def fake_eval_async(*args, **kwargs):
-        return [SimpleNamespace(status="error", location="/tmp/fake/logs/structured.eval")]
+        return [
+            SimpleNamespace(status="error", location="/tmp/fake/logs/structured.eval")
+        ]
 
     monkeypatch.setattr("agentlab.eval_runner.eval_async", fake_eval_async)
 
@@ -202,7 +215,9 @@ def test_run_arm_check_log_status_failure_writes_diagnosis_not_bare_exit_code(
     assert "/tmp/fake/logs/structured.eval" in detail
 
 
-def test_finalize_writes_report_and_matches_local_verdict(moto_fabric, monkeypatch, tmp_path):
+def test_finalize_writes_report_and_matches_local_verdict(
+    moto_fabric, monkeypatch, tmp_path
+):
     s3, _dynamodb, table = moto_fabric
     experiment_id = "exp-test-2"
     seeds = [0, 1]
@@ -232,7 +247,9 @@ def test_finalize_writes_report_and_matches_local_verdict(moto_fabric, monkeypat
     result = runner.invoke(app, ["worker", "finalize"])
     assert result.exit_code == 0, result.output
 
-    report_obj = s3.get_object(Bucket=BUCKET, Key=f"experiments/{experiment_id}/report.md")
+    report_obj = s3.get_object(
+        Bucket=BUCKET, Key=f"experiments/{experiment_id}/report.md"
+    )
     report_text = report_obj["Body"].read().decode("utf-8")
     assert expected_verdict in report_text
     assert "mockllm/model" in report_text
@@ -347,9 +364,7 @@ def test_finalize_sends_ping_with_chart(
     assert f"structured scores {expected_candidate_mean:.3f}" in caption
     assert f"truncate scores {expected_baseline_mean:.3f}" in caption
     assert "95% CI" in caption
-    assert (
-        f"{expected_result.ci_low:+.3f} to {expected_result.ci_high:+.3f}" in caption
-    )
+    assert f"{expected_result.ci_low:+.3f} to {expected_result.ci_high:+.3f}" in caption
     assert f"s3://{BUCKET}/experiments/{experiment_id}/report.md" in caption
 
     items = table.scan()["Items"]
@@ -420,7 +435,9 @@ def test_finalize_ping_and_ping_failed_write_both_fail_still_exits_zero(
 
     real_transition = transition
 
-    def selectively_exploding_transition(table_, experiment_id_, event, arm, detail, ts=None):
+    def selectively_exploding_transition(
+        table_, experiment_id_, event, arm, detail, ts=None
+    ):
         if event == "PING_FAILED":
             raise RuntimeError("dynamo also down")
         return real_transition(table_, experiment_id_, event, arm, detail, ts=ts)
@@ -474,10 +491,14 @@ def test_transition_is_idempotent_on_retry(moto_fabric):
     _s3, _dynamodb, table = moto_fabric
     ts = "2026-08-16T00:00:00.000000Z"
 
-    transition(table, "exp-idem", "ARM_STARTED", "structured", "model=mockllm/model", ts=ts)
+    transition(
+        table, "exp-idem", "ARM_STARTED", "structured", "model=mockllm/model", ts=ts
+    )
     # Simulates a retried task re-emitting the identical event: must not
     # duplicate the item or raise.
-    transition(table, "exp-idem", "ARM_STARTED", "structured", "model=mockllm/model", ts=ts)
+    transition(
+        table, "exp-idem", "ARM_STARTED", "structured", "model=mockllm/model", ts=ts
+    )
 
     items = table.scan()["Items"]
     assert len(items) == 1
@@ -589,7 +610,10 @@ def _make_scene_plan(url: str, title: str) -> ScenePlan:
         title=title[:70],
         one_line_claim=f"{title} shows something new.",
         diagram={
-            "nodes": [{"id": "input", "label": "Input"}, {"id": "output", "label": "Output"}],
+            "nodes": [
+                {"id": "input", "label": "Input"},
+                {"id": "output", "label": "Output"},
+            ],
             "edges": [{"source": "input", "target": "output"}],
         },
         mechanism_steps=[
@@ -665,6 +689,9 @@ def _fake_story_success(
         judge_score=8,
         judgement={"score": 8, "beats": [], "verdict": "pass", "note": None},
         timing={"beats": [], "total": 25.0},
+        selected_attempt=2,
+        passed=True,
+        attempt_records=[{"attempt": 2, "status": "passed"}],
     )
 
 
@@ -684,10 +711,13 @@ def _patch_explain_render_stages(monkeypatch, fail_urls=frozenset(), story=None)
     monkeypatch.setattr("agentlab.worker.deep_read", _make_fake_deep_read(fail_urls))
     monkeypatch.setattr("agentlab.worker.verify_voice", lambda polly_client: "Joanna")
     monkeypatch.setattr(
-        "agentlab.worker.narrate", lambda polly_client, texts, voice_id, out_dir: ["clip"]
+        "agentlab.worker.narrate",
+        lambda polly_client, texts, voice_id, out_dir: ["clip"],
     )
     monkeypatch.setattr("agentlab.worker.render_video", _fake_render_video)
-    monkeypatch.setattr("agentlab.worker.compose_story_video", story or _fake_story_failed)
+    monkeypatch.setattr(
+        "agentlab.worker.compose_story_video", story or _fake_story_failed
+    )
 
 
 def _patch_explain_pools(monkeypatch):
@@ -699,25 +729,57 @@ def _patch_explain_pools(monkeypatch):
 
 def test_complete_long_allows_story_output_budget_and_timeout(monkeypatch):
     calls = []
+    usage_sink = []
 
     def fake_completion(**kwargs):
         calls.append(kwargs)
         return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="complete"))]
+            choices=[SimpleNamespace(message=SimpleNamespace(content="complete"))],
+            usage=SimpleNamespace(
+                prompt_tokens=100,
+                completion_tokens=20,
+                prompt_tokens_details=SimpleNamespace(
+                    cached_tokens=30,
+                    cache_write_tokens=40,
+                ),
+            ),
         )
 
-    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+    monkeypatch.setitem(
+        sys.modules, "litellm", SimpleNamespace(completion=fake_completion)
+    )
 
-    messages = [{"role": "user", "content": "Write the scene."}]
-    assert worker_mod._complete_long("bedrock/story-model", messages) == "complete"
+    messages = [
+        {"role": "system", "content": "Stable Manim rules."},
+        {"role": "user", "content": "Write the scene."},
+    ]
+    assert (
+        worker_mod._complete_long(
+            "bedrock/story-model",
+            messages,
+            usage_sink=usage_sink,
+            pricing_model="bedrock/global.anthropic.claude-sonnet-4-6",
+        )
+        == "complete"
+    )
     assert calls == [
         {
             "model": "bedrock/story-model",
-            "messages": messages,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Stable Manim rules.",
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"role": "user", "content": "Write the scene."},
+            ],
             "max_tokens": 12000,
-            "timeout": 600,
+            "timeout": 180,
         }
     ]
+    assert usage_sink[0].input_tokens == 100
+    assert usage_sink[0].cache_read_input_tokens == 30
+    assert usage_sink[0].cache_write_input_tokens == 40
 
 
 @pytest.mark.parametrize("finish_reason", ["length", "max_tokens"])
@@ -732,7 +794,9 @@ def test_complete_long_rejects_truncated_output(monkeypatch, finish_reason):
             ]
         )
 
-    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+    monkeypatch.setitem(
+        sys.modules, "litellm", SimpleNamespace(completion=fake_completion)
+    )
 
     with pytest.raises(ValueError, match="token limit"):
         worker_mod._complete_long("bedrock/story-model", [])
@@ -745,17 +809,28 @@ def test_explain_story_path_ships_and_records_artifacts(
     _set_explain_env(monkeypatch, track="core")
     _patch_explain_pools(monkeypatch)
     _patch_explain_render_stages(monkeypatch, story=_fake_story_success)
+    monkeypatch.setattr(
+        "agentlab.worker.month_to_date_tagged_cost",
+        lambda *args, **kwargs: Decimal("12.34"),
+    )
 
     result = runner.invoke(app, ["worker", "explain"])
     assert result.exit_code == 0, result.output
     assert "explain: core=sent" in result.output
 
     table = boto3.resource("dynamodb").Table(TABLE)
-    videos = [i for i in table.scan()["Items"] if i["experiment_id"].startswith("video#")]
+    videos = [
+        i for i in table.scan()["Items"] if i["experiment_id"].startswith("video#")
+    ]
     assert len(videos) == 1
     row = videos[0]
     assert row["render_path"] == "story"
     assert row["attempts"] == 2 and row["judge_score"] == 8
+    assert row["selected_attempt"] == 2
+    assert row["judge_passed"] is True
+    assert row["visual_focus"].startswith("Keep the agent")
+    assert row["estimated_model_cost_usd"] == 0
+    assert row["model_calls"] == []
     key = row["experiment_id"].removeprefix("video#")
     assert row["story_key"] == f"stories/{key}.json"
 
@@ -766,9 +841,109 @@ def test_explain_story_path_ships_and_records_artifacts(
         story = json.loads(body.read())
     assert story["storyboard"]["title"] == "Recursive Self-Improvement in AI"
     assert story["judgement"]["score"] == 8
+    assert story["attempt_records"] == [{"attempt": 2, "status": "passed"}]
+
+    _url, kwargs = next(
+        call for call in telegram_calls if call[0].endswith("/sendVideo")
+    )
+    assert "Estimated model cost: $0.0000" in kwargs["data"]["caption"]
+    assert "Tagged AgentLab AWS MTD: $12.34" in kwargs["data"]["caption"]
 
     events = [i for i in table.scan()["Items"] if i["sk"].startswith("event#")]
     assert not any(e["event"] == "STORY_FALLBACK" for e in events)
+
+
+def test_upload_attempt_artifacts_replaces_local_paths_with_s3_keys(
+    moto_fabric, tmp_path
+):
+    s3, _dynamodb, _table = moto_fabric
+    source = tmp_path / "paper_story.py"
+    frame = tmp_path / "frame.png"
+    sheet = tmp_path / "sheet.png"
+    source.write_text("class PaperStory: pass", encoding="utf-8")
+    frame.write_bytes(b"png")
+    sheet.write_bytes(b"sheet")
+
+    records = _upload_attempt_artifacts(
+        s3,
+        BUCKET,
+        "core-1",
+        [
+            {
+                "attempt": 1,
+                "status": "judge_fix",
+                "source_path": str(source),
+                "frame_paths": [str(frame)],
+                "contact_sheet_paths": [str(sheet)],
+            }
+        ],
+    )
+
+    assert "source_path" not in records[0]
+    assert "frame_paths" not in records[0]
+    assert "contact_sheet_paths" not in records[0]
+    assert records[0]["source_key"] == "stories/core-1/attempts/1/scene.py"
+    assert records[0]["frame_keys"] == ["stories/core-1/attempts/1/frame-01.png"]
+    assert records[0]["contact_sheet_keys"] == [
+        "stories/core-1/attempts/1/contact-sheet-01.png"
+    ]
+    keys = {
+        item["Key"]
+        for item in s3.list_objects_v2(Bucket=BUCKET, Prefix="stories/core-1/")[
+            "Contents"
+        ]
+    }
+    assert records[0]["source_key"] in keys
+    assert records[0]["frame_keys"][0] in keys
+    assert records[0]["contact_sheet_keys"][0] in keys
+
+
+def test_recent_visual_directions_returns_latest_distinct_story_concepts(moto_fabric):
+    _s3, _dynamodb, table = moto_fabric
+    table.put_item(
+        Item={
+            "experiment_id": "video#1",
+            "sk": "video",
+            "sent_ts": "2026-09-14T10:00:00Z",
+            "title": "Older",
+            "visual_focus": "Orbiting dots become a lattice.",
+        }
+    )
+    table.put_item(
+        Item={
+            "experiment_id": "video#2",
+            "sk": "video",
+            "sent_ts": "2026-09-15T10:00:00Z",
+            "title": "Newer",
+            "visual_focus": "A field folds into two paths.",
+        }
+    )
+
+    directions = _recent_visual_directions(table, limit=1)
+
+    assert directions == ["Newer: A field folds into two paths."]
+
+
+def test_model_usage_record_uses_dynamodb_decimals():
+    usage = [
+        ModelCallUsage(
+            stage="video",
+            requested_model="profile",
+            pricing_model="sonnet",
+            input_tokens=10,
+            output_tokens=2,
+            cache_read_input_tokens=3,
+            cache_write_input_tokens=4,
+            latency_ms=50,
+            estimated_cost_usd=0.00125,
+            pricing_source="test",
+        )
+    ]
+
+    total, calls = _model_usage_record(usage)
+
+    assert total == Decimal("0.00125")
+    assert calls[0]["estimated_cost_usd"] == Decimal("0.00125")
 
 
 def test_explain_story_failure_falls_back_to_template_and_logs(
@@ -842,7 +1017,7 @@ def test_explain_passes_story_model_defaults_and_overrides(
 
     result = runner.invoke(app, ["worker", "explain"])
     assert result.exit_code == 0, result.output
-    assert captured == expected
+    assert captured == {**expected, "recent_visual_directions": []}
 
 
 def test_explain_all_three_tracks_send_three_videos_and_mark_seen(
@@ -872,7 +1047,9 @@ def test_explain_all_three_tracks_send_three_videos_and_mark_seen(
     assert "explain: core=sent classic=sent novel=sent" in result.output
 
 
-def test_explain_track_core_runs_only_core(moto_fabric_with_ssm, telegram_calls, monkeypatch):
+def test_explain_track_core_runs_only_core(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
     _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
     _set_explain_env(monkeypatch, track="core")
     _set_daytime(monkeypatch)
@@ -939,7 +1116,9 @@ def test_explain_uses_gated_feedback_and_collects_clarity(
     assert "Preference evidence (topic-feedback-v1)." in captured["interests"]
     assert len(captured["calls"]) == 2
     assert len(captured["calls"][1]) <= 3
-    _url, kwargs = next(call for call in telegram_calls if call[0].endswith("/sendVideo"))
+    _url, kwargs = next(
+        call for call in telegram_calls if call[0].endswith("/sendVideo")
+    )
     assert kwargs["data"]["caption"].startswith("[CORE] Core Candidate Paper\n")
     keyboard = json.loads(kwargs["data"]["reply_markup"])["inline_keyboard"]
     assert [button["text"] for button in keyboard[0]] == ["COOL", "MEH", "SKIP"]
@@ -1029,7 +1208,8 @@ def test_explain_render_failure_includes_stderr_in_fallback_ping(
     monkeypatch.setattr("agentlab.worker.deep_read", _make_fake_deep_read())
     monkeypatch.setattr("agentlab.worker.verify_voice", lambda polly_client: "Joanna")
     monkeypatch.setattr(
-        "agentlab.worker.narrate", lambda polly_client, plan, voice_id, out_dir: ["clip"]
+        "agentlab.worker.narrate",
+        lambda polly_client, plan, voice_id, out_dir: ["clip"],
     )
 
     def fake_render_video_raises(plan, clips, out_path):

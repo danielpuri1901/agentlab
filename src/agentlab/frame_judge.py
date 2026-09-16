@@ -15,7 +15,9 @@ from agentlab.scene_plan import ScenePlan, extract_json_object
 from agentlab.storyboard import Storyboard
 
 FALLBACK_SCORE = 5
-FRAME_WIDTH = 960
+FRAME_WIDTH = 480
+FRAMES_PER_BEAT = 3
+FRAME_SAMPLE_TIMEOUT_SECONDS = 15
 MAX_MISSING_VISUALS = 0
 MIN_PASS_SCORE = 7
 
@@ -92,7 +94,12 @@ def parse_judgement(raw: str) -> tuple[Judgement | None, str]:
     return judgement, ""
 
 
-def sample_frames(video_path, times: list[float], out_dir) -> list[Path]:
+def sample_frames(
+    video_path,
+    times: list[float],
+    out_dir,
+    timeout_seconds: int = FRAME_SAMPLE_TIMEOUT_SECONDS,
+) -> list[Path]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     frames = []
@@ -113,35 +120,78 @@ def sample_frames(video_path, times: list[float], out_dir) -> list[Path]:
                 "-vf",
                 f"scale={FRAME_WIDTH}:-1",
                 str(output),
-            ]
+            ],
+            timeout=timeout_seconds,
         )
         frames.append(output)
     return frames
 
 
-JUDGE_SYSTEM = """You check rendered frames of a short explainer video against its \
-storyboard. The video must explain the paper directly with its real components. Each \
-frame is the middle of one beat. Compare every narration claim with the grounded scene \
-plan. For each frame decide: grounded (does the narration stay within the scene plan), shows_visual \
-(does the frame show what the beat's visual description says should be on screen at \
-that point, roughly), legible (is every piece of text readable at this size, nothing \
-tiny or garbled), clean (nothing overlaps another element, nothing is cut off at the \
-frame edge, nothing is drawn over the caption text in the bottom band). Put a short \
-concrete issue when something is wrong, else null. Then give an overall score from 0 \
-to 10 for how well the frames explain the real mechanism. Beat 1 must show the title. \
-The mechanism beats must show the named paper components and their cause-and-effect \
-changes. Reject an unrelated analogy, decorative metaphor, unexplained technical term, \
-or generic row of boxes. Mark the affected beat shows_visual=false and score the video \
-at most 5. Be strict about overlap, cut-off elements, and missing mechanism details. \
-Answer with ONLY a fenced json \
+def contact_sheet_frames(
+    frames: list[Path],
+    out_dir,
+    timeout_seconds: int = FRAME_SAMPLE_TIMEOUT_SECONDS,
+) -> list[Path]:
+    if len(frames) % FRAMES_PER_BEAT:
+        raise ValueError(
+            f"frames count {len(frames)} must be divisible by {FRAMES_PER_BEAT}"
+        )
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sheets = []
+    for start in range(0, len(frames), FRAMES_PER_BEAT):
+        group = frames[start : start + FRAMES_PER_BEAT]
+        output = out_dir / f"beat-{start // FRAMES_PER_BEAT + 1:02d}.png"
+        command = ["ffmpeg", "-y", "-v", "error"]
+        for frame in group:
+            command.extend(["-i", str(frame)])
+        command.extend(
+            [
+                "-filter_complex",
+                f"hstack=inputs={FRAMES_PER_BEAT}",
+                str(output),
+            ]
+        )
+        video_render.run_subprocess(command, timeout=timeout_seconds)
+        sheets.append(output)
+    return sheets
+
+
+JUDGE_SYSTEM = """You judge sampled frames from a short research-paper video. Each beat \
+has one contact sheet: start on the left, middle in the center, and end on the right. \
+Each panel is sampled at phone width. The video must explain the real mechanism \
+and stay within the grounded scene plan.
+
+For each beat decide:
+- grounded: the narration and visual meaning stay within the scene plan.
+- shows_visual: the frames make the narrated idea easier to understand through meaningful \
+visual change. An abstract visual is valid when its mapping is clear. It does not need to \
+copy the storyboard description literally.
+- legible: every necessary text item is readable at phone width.
+- clean: nothing collides, gets cut off, or covers the caption band.
+
+Put a short, concrete issue when something is wrong, else null. Judge the progression \
+across all three frames, not only each still image. Then give one overall score from 0 to 10:
+- 9 to 10: clear, visually compelling, paper-specific, and memorable.
+- 7 to 8: clear and coherent, with meaningful motion and an intentional composition.
+- 0 to 6: confusing, static, generic, repetitive, or visually weak.
+
+Beat 1 must show the title. The mechanism beats must reveal cause and effect. Reject an \
+unrelated metaphor, an unexplained technical term, or a generic layout that could fit any \
+paper without changing its behavior. Do not reject useful abstraction. When the score is \
+below 7, include a note that states how to improve the visual concept. Be strict about \
+grounding, readability, clipping, and overlap. Answer with ONLY a fenced json \
 object: {"beats": [{"beat": 1, "grounded": true, "shows_visual": true, "legible": true, "clean": true, \
-"issue": null}, ...], "score": 7}. The score is a top-level sibling after the closed \
+"issue": null}, ...], "score": 7, "note": null}. The score is a top-level sibling after the closed \
 beats array, never an item inside beats."""
 
 
 def _image_part(path: Path) -> dict:
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}}
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:image/png;base64,{encoded}"},
+    }
 
 
 def build_judge_messages(
@@ -167,20 +217,29 @@ def build_judge_messages(
             ),
         }
     ]
-    for index, (frame, beat) in enumerate(zip(frames, storyboard.beats, strict=True), start=1):
+    for index, (frame, beat) in enumerate(
+        zip(frames, storyboard.beats, strict=True), start=1
+    ):
         content.append(
             {
                 "type": "text",
                 "text": (
                     f"Beat {index}. Narration: {beat.narration}\n"
                     f"Visual: {beat.visual}\n"
-                    f"Allowed on-screen text: {json.dumps(beat.on_screen_text)}"
+                    f"Allowed on-screen text: {json.dumps(beat.on_screen_text)}\n"
+                    "The left panel is the start, the middle panel is the middle, "
+                    "and the right panel is the end."
                 ),
             }
         )
         content.append(_image_part(Path(frame)))
-    content.append({"type": "text", "text": "Judge every beat above. Fenced json only."})
-    return [{"role": "system", "content": JUDGE_SYSTEM}, {"role": "user", "content": content}]
+    content.append(
+        {"type": "text", "text": "Judge every beat above. Fenced json only."}
+    )
+    return [
+        {"role": "system", "content": JUDGE_SYSTEM},
+        {"role": "user", "content": content},
+    ]
 
 
 def _completeness_error(judgement: Judgement, expected: int) -> str:
@@ -226,11 +285,19 @@ def judge_frames(
             error = completeness_error
     logger.warning("judge unavailable: %s", error)
     return Judgement(
-        beats=[], score=FALLBACK_SCORE, verdict="fix", note=f"judge unavailable: {error}"
+        beats=[],
+        score=FALLBACK_SCORE,
+        verdict="fix",
+        note=f"judge unavailable: {error}",
     )
 
 
 def judgement_feedback(judgement: Judgement) -> str:
+    if not judgement.beats:
+        return (
+            "The frame judge was unavailable. Return the same scene file unchanged.\n- "
+            + (judgement.note or "no judge detail")
+        )
     lines = []
     for beat in judgement.beats:
         problems = []
@@ -246,5 +313,11 @@ def judgement_feedback(judgement: Judgement) -> str:
             detail = f" ({beat.issue})" if beat.issue else ""
             lines.append(f"beat {beat.beat}: {', '.join(problems)}{detail}")
     if not lines:
-        return "The frame judge found no specific problems."
-    return "The frame judge flagged these beats; fix only these:\n- " + "\n- ".join(lines)
+        detail = judgement.note or f"overall visual score was {judgement.score}/10"
+        return (
+            "Create a fresh visual concept instead of patching the prior layout.\n- "
+            + detail
+        )
+    if judgement.note:
+        lines.append(f"overall: {judgement.note}")
+    return "The frame judge flagged these problems:\n- " + "\n- ".join(lines)

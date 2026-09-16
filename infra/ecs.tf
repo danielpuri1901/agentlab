@@ -156,8 +156,8 @@ resource "aws_cloudwatch_log_group" "explain" {
   retention_in_days = 30
 }
 
-# The task now renders each video up to four times (low-quality attempts plus
-# the final medium render) through compose_story_video, so it gets 4 vCPU / 8 GB;
+# The task can render four low-quality attempts plus one final medium render
+# through compose_story_video, so it gets 4 vCPU / 8 GB;
 # still ARM64 Fargate.
 resource "aws_ecs_task_definition" "explain" {
   family                   = "agentlab-explain"
@@ -186,6 +186,8 @@ resource "aws_ecs_task_definition" "explain" {
         { name = "RESULTS_BUCKET", value = aws_s3_bucket.results.id },
         { name = "DEEP_READ_MODEL", value = "bedrock/arn:aws:bedrock:eu-west-1:891377302765:application-inference-profile/mfzwa25maf8z" },
         { name = "PICK_MODEL", value = "bedrock/arn:aws:bedrock:eu-west-1:891377302765:application-inference-profile/kpbqsnaqf2ti" },
+        { name = "DEEP_READ_PRICE_MODEL", value = "bedrock/global.anthropic.claude-sonnet-4-6" },
+        { name = "PICK_PRICE_MODEL", value = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0" },
       ]
       logConfiguration = {
         logDriver = "awslogs"
