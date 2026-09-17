@@ -22,6 +22,22 @@ def test_golden_scene_passes_the_guard():
     assert scene_code.check_scene_code(GOLDEN_SCENE, BEATS) == []
 
 
+def test_visual_direction_reads_generated_scene_concept():
+    assert scene_code.visual_direction(GOLDEN_SCENE).startswith("A crowded house")
+
+
+def test_guard_requires_visual_direction_comment():
+    source = GOLDEN_SCENE.replace(
+        "# Visual direction: A crowded house compresses into one case while the needed item stays visible.\n",
+        "",
+    )
+
+    assert (
+        "visual direction"
+        in " ".join(scene_code.check_scene_code(source, BEATS)).lower()
+    )
+
+
 @pytest.mark.parametrize(
     "snippet, needle",
     [

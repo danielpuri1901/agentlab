@@ -62,6 +62,7 @@ VALID_PLAN_DICT = {
     "key_numbers": [
         {"value": "12%", "meaning": "Accuracy gain over raw context."},
     ],
+    "application_or_implication": "Use retrieval to recover the few turns needed for the current question.",
     "limits_or_caveats": "The paper does not test beyond 50 simulated turns.",
     "street_test_question": "Would this beat your current compaction approach on real logs.",
     "citation_url": "https://arxiv.org/abs/2601.00001",
@@ -90,6 +91,9 @@ def test_valid_plan_constructs():
     plan = ScenePlan(**VALID_PLAN_DICT)
     assert plan.title == VALID_PLAN_DICT["title"]
     assert len(plan.mechanism_steps) == 3
+    assert (
+        plan.application_or_implication == VALID_PLAN_DICT["application_or_implication"]
+    )
 
 
 def test_mechanism_steps_four_is_ok():
@@ -114,7 +118,9 @@ def test_mechanism_steps_seven_is_rejected():
     ]
     with pytest.raises(ValidationError):
         ScenePlan(**_plan_kwargs(mechanism_steps=seven_steps))
-    assert parse_scene_plan(json.dumps(_plan_kwargs(mechanism_steps=seven_steps))) is None
+    assert (
+        parse_scene_plan(json.dumps(_plan_kwargs(mechanism_steps=seven_steps))) is None
+    )
 
 
 def test_overlong_narration_clipped_by_parse_but_rejected_by_model():
@@ -262,13 +268,18 @@ def test_pick_paper_core_returns_valid_dict():
         assert "MOST relevant" in messages[1]["content"]
         return "2"
 
-    chosen = pick_paper(CANDIDATES, "agents, evals, harnesses", fake_complete, mode="core")
+    chosen = pick_paper(
+        CANDIDATES, "agents, evals, harnesses", fake_complete, mode="core"
+    )
     assert chosen == CANDIDATES[1]
 
 
 def test_pick_paper_candidate_lines_render_pool_source_title_signal():
     prompt = build_pick_prompt(CANDIDATES, "agents", "core")
-    assert "1. [exploit/arxiv] Paper A: agent memory (a survey of agent memory systems)" in prompt
+    assert (
+        "1. [exploit/arxiv] Paper A: agent memory (a survey of agent memory systems)"
+        in prompt
+    )
     assert "2. [exploit/hn] Paper B: harness benchmarks (120 points)" in prompt
     assert "3. [explore/hf] Paper C: diffusion world models (40 upvotes)" in prompt
 
@@ -355,6 +366,7 @@ def test_deep_read_pins_citation_to_fetch_url(monkeypatch):
             {"label": f"L{i}", "detail": "D.", "narration": "N."} for i in range(3)
         ],
         "key_numbers": [],
+        "application_or_implication": "Use this when the same verification pattern appears in another system.",
         "limits_or_caveats": "L.",
         "street_test_question": "Q?",
         "citation_url": "https://evil.example/hallucinated",
@@ -377,7 +389,9 @@ def test_mechanism_step_kind_defaults_and_validates():
 
     step = MechanismStep(label="L", detail="D", narration="N")
     assert step.kind == "transform"
-    assert MechanismStep(label="L", detail="D", narration="N", kind="gate").kind == "gate"
+    assert (
+        MechanismStep(label="L", detail="D", narration="N", kind="gate").kind == "gate"
+    )
     try:
         MechanismStep(label="L", detail="D", narration="N", kind="explode")
         raise AssertionError("unknown kind must be rejected")
@@ -412,6 +426,7 @@ def test_overlong_strings_clip_instead_of_failing():
             for _ in range(3)
         ],
         "key_numbers": [{"value": "V" * 50, "meaning": "M" * 200}],
+        "application_or_implication": "A" * 500,
         "limits_or_caveats": "X" * 500,
         "street_test_question": "Q" * 500,
         "citation_url": "https://arxiv.org/abs/2608.23493",
@@ -419,6 +434,7 @@ def test_overlong_strings_clip_instead_of_failing():
     plan = parse_scene_plan(_json.dumps(plan_dict))
     assert plan is not None
     assert len(plan.one_line_claim) == MAX_CLAIM
+    assert len(plan.application_or_implication) == MAX_CLAIM
     assert len(plan.mechanism_steps[0].narration) == MAX_NARRATION
     assert len(plan.diagram.nodes[0].label) == MAX_NODE_LABEL
     assert len(plan.diagram.nodes[0].icon) == MAX_NODE_ICON
@@ -465,7 +481,10 @@ def test_diagram_node_count_bounds():
 def test_diagram_edge_count_bounds():
     from agentlab.scene_plan import Diagram
 
-    no_edges = {"nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}], "edges": []}
+    no_edges = {
+        "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "edges": [],
+    }
     with pytest.raises(ValidationError):
         Diagram(**no_edges)
 

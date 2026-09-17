@@ -44,6 +44,20 @@ def test_parse_storyboard_tolerates_fences_and_prose(golden, plan):
     assert board.visual_focus.startswith("Keep the agent")
 
 
+def test_parse_storyboard_pins_application_to_grounded_plan(golden, plan):
+    application = next(
+        beat for beat in golden["beats"] if beat["role"] == "application"
+    )
+    application["narration"] = "Use it everywhere because it always works."
+
+    board, error = sb.parse_storyboard(_fenced(golden), DIGEST, plan)
+
+    assert error == ""
+    assert board is not None
+    actual = next(beat for beat in board.beats if beat.role == "application")
+    assert actual.narration == plan.application_or_implication
+
+
 def test_parse_storyboard_clips_long_strings_instead_of_failing(golden, plan):
     golden["visual_focus"] = "x" * 500
     golden["beats"][0]["visual"] = "y" * 900

@@ -190,6 +190,12 @@ FORBIDDEN_NAMES = frozenset(
 )
 
 _BEAT_RE = re.compile(r"^beat_(\d+)$")
+_VISUAL_DIRECTION_RE = re.compile(r"^# Visual direction:\s*(\S.*)$", re.MULTILINE)
+
+
+def visual_direction(source: str) -> str:
+    match = _VISUAL_DIRECTION_RE.search(source)
+    return match.group(1).strip() if match else ""
 
 
 def _attribute_path(node: ast.Attribute) -> tuple[str, ...] | None:
@@ -222,6 +228,8 @@ def check_scene_code(source: str, beat_count: int) -> list[str]:
     except SyntaxError as exc:
         return [f"syntax error: line {exc.lineno}: {exc.msg}"]
     findings: list[str] = []
+    if not visual_direction(source):
+        findings.append("missing '# Visual direction: ...' scene concept comment")
     numpy_aliases = {
         alias.asname or "numpy"
         for node in ast.walk(tree)
@@ -348,7 +356,10 @@ to encode meaning. Avoid a generic row of labelled boxes unless the paper truly 
 Every movement must explain something. Do not merely decorate or repeat narration as text.
 
 Contract:
-- File starts with `from manim import (...)` naming only what you use, then `from \
+- File starts with one `# Visual direction: ...` comment that names the scene's actual \
+composition and motion concept. This must describe what this generated file implements, \
+including fresh retry concepts. The next line is `from manim import (...)` naming only \
+what you use, then `from \
 story_scene import StoryScene` plus any constants you use from it.
 - Exactly one class, `class PaperStory(StoryScene):`. Do not override construct.
 - Keep the complete file under 7000 output tokens. Import only names you use.

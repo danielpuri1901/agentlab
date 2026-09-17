@@ -69,14 +69,15 @@ def test_cache_aware_cost_uses_each_measured_token_class():
     )
 
 
-def test_completion_usage_reads_cache_tokens_and_latency():
+def test_completion_usage_separates_uncached_and_cached_input_tokens():
     response = SimpleNamespace(
         usage=SimpleNamespace(
-            prompt_tokens=100,
+            prompt_tokens=1_700,
             completion_tokens=20,
             prompt_tokens_details=SimpleNamespace(
-                cached_tokens=300,
-                cache_write_tokens=400,
+                text_tokens=1_000,
+                cached_tokens=500,
+                cache_creation_tokens=200,
             ),
         )
     )
@@ -93,12 +94,20 @@ def test_completion_usage_reads_cache_tokens_and_latency():
         stage="scene",
         requested_model="bedrock/arn:profile",
         pricing_model="bedrock/global.anthropic.claude-sonnet-4-6",
-        input_tokens=100,
+        input_tokens=1_000,
         output_tokens=20,
-        cache_read_input_tokens=300,
-        cache_write_input_tokens=400,
+        cache_read_input_tokens=500,
+        cache_write_input_tokens=200,
         latency_ms=1234,
-        estimated_cost_usd=pytest.approx(0.00219),
+        estimated_cost_usd=pytest.approx(
+            run_cost(
+                "bedrock/global.anthropic.claude-sonnet-4-6",
+                input_tokens=1_000,
+                output_tokens=20,
+                cache_read_input_tokens=500,
+                cache_write_input_tokens=200,
+            )
+        ),
         pricing_source="litellm:global.anthropic.claude-sonnet-4-6",
     )
 

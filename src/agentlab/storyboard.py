@@ -207,6 +207,9 @@ def parse_storyboard(
         board.beats[0].on_screen_text = [board.title]
     if board.beats and board.beats[-1].role == "question":
         board.beats[-1].narration = plan.street_test_question
+    for beat in board.beats:
+        if beat.role == "application":
+            beat.narration = plan.application_or_implication
     error = _structure_error(board, plan)
     if error:
         return None, error

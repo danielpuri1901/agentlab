@@ -465,6 +465,7 @@ def _complete_long(
     *,
     usage_sink: list[ModelCallUsage] | None = None,
     pricing_model: str | None = None,
+    timeout: int = MODEL_CALL_TIMEOUT_SECONDS,
 ) -> str:
     """The story path's model calls allow complete generated scene files.
 
@@ -476,7 +477,7 @@ def _complete_long(
         model,
         messages,
         max_tokens=12000,
-        timeout=MODEL_CALL_TIMEOUT_SECONDS,
+        timeout=timeout,
         stage="video",
         usage_sink=usage_sink,
         pricing_model=pricing_model,
@@ -624,7 +625,8 @@ def _recent_visual_directions(table, limit: int = 6) -> list[str]:
         items.extend(
             item
             for item in response.get("Items", [])
-            if item.get("sk") == "video" and item.get("visual_focus")
+            if item.get("sk") == "video"
+            and (item.get("visual_direction") or item.get("visual_focus"))
         )
         key = response.get("LastEvaluatedKey")
         if not key:
@@ -634,7 +636,7 @@ def _recent_visual_directions(table, limit: int = 6) -> list[str]:
     directions = []
     seen = set()
     for item in items:
-        focus = item["visual_focus"]
+        focus = item.get("visual_direction") or item["visual_focus"]
         if focus in seen:
             continue
         seen.add(focus)
@@ -791,6 +793,7 @@ def _run_explain_track(
             )
             story_record = {
                 "storyboard": story.storyboard.model_dump(),
+                "visual_direction": story.visual_direction,
                 "judgement": story.judgement,
                 "attempts": story.attempts,
                 "timing": story.timing,
@@ -865,7 +868,11 @@ def _run_explain_track(
                 "attempts": story.attempts if story is not None else None,
                 "judge_score": story.judge_score if story is not None else None,
                 "story_key": story_key,
-                "visual_focus": (
+                "visual_direction": (
+                    story.visual_direction if story is not None else None
+                ),
+                "visual_focus": story.visual_direction if story is not None else None,
+                "storyboard_visual_focus": (
                     story.storyboard.visual_focus if story is not None else None
                 ),
                 "selected_attempt": (

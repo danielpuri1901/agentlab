@@ -125,7 +125,9 @@ def verify_voice(polly_client) -> str:
     spec requires (voice availability differs by AWS region)."""
     response = polly_client.describe_voices()
     candidates = [
-        v for v in response.get("Voices", []) if v["LanguageCode"] in PREFERRED_VOICE_LANGS
+        v
+        for v in response.get("Voices", [])
+        if v["LanguageCode"] in PREFERRED_VOICE_LANGS
     ]
     if not candidates:
         raise RuntimeError("no en-US or en-GB Polly voice available in this region")
@@ -156,7 +158,9 @@ def ffprobe_duration(path: Path) -> float:
     return float(result.stdout.strip())
 
 
-def narrate(polly_client, texts: list[str], voice_id: str, out_dir) -> list[NarrationClip]:
+def narrate(
+    polly_client, texts: list[str], voice_id: str, out_dir
+) -> list[NarrationClip]:
     """One mp3 per text, duration measured with ffprobe. The template path
     passes scene_texts(plan); the story path passes each beat's narration.
     `voice_id` is expected to be neural-capable (verify_voice's job);
@@ -171,7 +175,11 @@ def narrate(polly_client, texts: list[str], voice_id: str, out_dir) -> list[Narr
         )
         audio_path = out_dir / f"clip_{i:02d}.mp3"
         audio_path.write_bytes(response["AudioStream"].read())
-        clips.append(NarrationClip(path=audio_path, seconds=ffprobe_duration(audio_path), text=text))
+        clips.append(
+            NarrationClip(
+                path=audio_path, seconds=ffprobe_duration(audio_path), text=text
+            )
+        )
     return clips
 
 
@@ -195,14 +203,18 @@ def build_srt(clips: list[NarrationClip], durations: list[float] | None = None) 
     own seconds no longer match the final audio track's timing."""
     lengths = durations if durations is not None else [c.seconds for c in clips]
     if len(lengths) != len(clips):
-        raise ValueError(f"durations has {len(lengths)} entries, clips has {len(clips)}")
+        raise ValueError(
+            f"durations has {len(lengths)} entries, clips has {len(clips)}"
+        )
     entries = []
     cursor = 0.0
     for i, (clip, length) in enumerate(zip(clips, lengths, strict=True), start=1):
         start, end = cursor, cursor + length
         cursor = end
         wrapped = "\n".join(textwrap.wrap(clip.text, SRT_WRAP_WIDTH)) or clip.text
-        entries.append(f"{i}\n{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n{wrapped}\n")
+        entries.append(
+            f"{i}\n{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n{wrapped}\n"
+        )
     return "\n".join(entries)
 
 
@@ -302,7 +314,9 @@ def template_spec(plan: ScenePlan, durations: list[float]) -> dict:
     narration text from the plan structure."""
     texts = scene_texts(plan)
     if len(durations) != len(texts):
-        raise ValueError(f"durations has {len(durations)} entries, plan needs {len(texts)}")
+        raise ValueError(
+            f"durations has {len(durations)} entries, plan needs {len(texts)}"
+        )
     return {"plan": plan.model_dump(), "durations": durations, "captions": texts}
 
 
@@ -311,36 +325,63 @@ def render_template_video(
 ) -> Path:
     """Today's fixed PaperScene template, through the general render seam."""
     return render_scene_video(
-        VIDEO_SCENES_FILE, SCENE_CLASS, template_spec(plan, durations), out_dir, quality=quality
+        VIDEO_SCENES_FILE,
+        SCENE_CLASS,
+        template_spec(plan, durations),
+        out_dir,
+        quality=quality,
     )
 
 
 def concat_audio(
-    clips: list[NarrationClip], out_path: Path, target_seconds: list[float] | None = None
+    clips: list[NarrationClip],
+    out_path: Path,
+    target_seconds: list[float] | None = None,
+    timeout_seconds: int = DEFAULT_RENDER_TIMEOUT_SECONDS,
 ) -> Path:
     """Concatenate narration clips; with target_seconds, first pad each clip
     with silence to its target (never shorter than the clip itself), so the
     audio lines up with beats that ran a little longer than their narration."""
     if target_seconds is not None and len(target_seconds) != len(clips):
-        raise ValueError(f"target_seconds has {len(target_seconds)} entries, clips has {len(clips)}")
+        raise ValueError(
+            f"target_seconds has {len(target_seconds)} entries, clips has {len(clips)}"
+        )
     inputs = []
     for clip in clips:
         inputs += ["-i", str(clip.path)]
     n = len(clips)
     if target_seconds is None:
-        filter_str = "".join(f"[{i}:a]" for i in range(n)) + f"concat=n={n}:v=0:a=1[out]"
+        filter_str = (
+            "".join(f"[{i}:a]" for i in range(n)) + f"concat=n={n}:v=0:a=1[out]"
+        )
     else:
         pads = "".join(
             f"[{i}:a]apad=whole_dur={max(target, clip.seconds):.3f}[a{i}];"
             for i, (clip, target) in enumerate(zip(clips, target_seconds, strict=True))
         )
-        filter_str = pads + "".join(f"[a{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[out]"
-    cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", filter_str, "-map", "[out]", str(out_path)]
-    run_subprocess(cmd)
+        filter_str = (
+            pads + "".join(f"[a{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[out]"
+        )
+    cmd = [
+        "ffmpeg",
+        "-y",
+        *inputs,
+        "-filter_complex",
+        filter_str,
+        "-map",
+        "[out]",
+        str(out_path),
+    ]
+    run_subprocess(cmd, timeout=timeout_seconds)
     return out_path
 
 
-def mux_final(video_path: Path, audio_path: Path, out_path: Path) -> Path:
+def mux_final(
+    video_path: Path,
+    audio_path: Path,
+    out_path: Path,
+    timeout_seconds: int = DEFAULT_RENDER_TIMEOUT_SECONDS,
+) -> Path:
     """Plain video+audio mux, no filter graph: the silent video already has
     captions burned in by Manim, so nothing here needs to touch the video
     stream, and `-c:v copy` just repackages it (no re-encode, no libass
@@ -365,11 +406,13 @@ def mux_final(video_path: Path, audio_path: Path, out_path: Path) -> Path:
         "-shortest",
         str(out_path),
     ]
-    run_subprocess(cmd)
+    run_subprocess(cmd, timeout=timeout_seconds)
     return out_path
 
 
-def render_video(plan: ScenePlan, clips: list[NarrationClip], out_path) -> tuple[Path, Path]:
+def render_video(
+    plan: ScenePlan, clips: list[NarrationClip], out_path
+) -> tuple[Path, Path]:
     """Full pipeline: render the scene (captions burned in, sized to the
     narration), concat the narration clips, mux. Returns (video_path,
     srt_path); the .srt is a sidecar artifact only (e.g. for a future
@@ -377,7 +420,9 @@ def render_video(plan: ScenePlan, clips: list[NarrationClip], out_path) -> tuple
     out_path = Path(out_path)
     work_dir = Path(tempfile.mkdtemp(prefix="agentlab-video-"))
     durations = [clip.seconds for clip in clips]
-    silent_video = render_template_video(plan, durations, work_dir / "render", quality="m")
+    silent_video = render_template_video(
+        plan, durations, work_dir / "render", quality="m"
+    )
     audio_path = concat_audio(clips, work_dir / "narration.mp3")
     srt_path = out_path.with_suffix(".srt")
     srt_path.parent.mkdir(parents=True, exist_ok=True)

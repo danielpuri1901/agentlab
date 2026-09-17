@@ -4,6 +4,8 @@ import base64
 import json
 import logging
 import math
+import subprocess
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -22,6 +24,13 @@ MAX_MISSING_VISUALS = 0
 MIN_PASS_SCORE = 7
 
 logger = logging.getLogger(__name__)
+
+
+def _remaining_subprocess_timeout(deadline: float, command: list[str]) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise subprocess.TimeoutExpired(command, 0)
+    return remaining
 
 
 class BeatJudgement(BaseModel):
@@ -103,25 +112,27 @@ def sample_frames(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     frames = []
-    for index, time in enumerate(times, start=1):
+    deadline = time.monotonic() + timeout_seconds
+    for index, sample_time in enumerate(times, start=1):
         output = out_dir / f"frame_{index:02d}.png"
+        command = [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-ss",
+            f"{sample_time:.3f}",
+            "-i",
+            str(video_path),
+            "-frames:v",
+            "1",
+            "-vf",
+            f"scale={FRAME_WIDTH}:-1",
+            str(output),
+        ]
         video_render.run_subprocess(
-            [
-                "ffmpeg",
-                "-y",
-                "-v",
-                "error",
-                "-ss",
-                f"{time:.3f}",
-                "-i",
-                str(video_path),
-                "-frames:v",
-                "1",
-                "-vf",
-                f"scale={FRAME_WIDTH}:-1",
-                str(output),
-            ],
-            timeout=timeout_seconds,
+            command,
+            timeout=_remaining_subprocess_timeout(deadline, command),
         )
         frames.append(output)
     return frames
@@ -139,6 +150,7 @@ def contact_sheet_frames(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     sheets = []
+    deadline = time.monotonic() + timeout_seconds
     for start in range(0, len(frames), FRAMES_PER_BEAT):
         group = frames[start : start + FRAMES_PER_BEAT]
         output = out_dir / f"beat-{start // FRAMES_PER_BEAT + 1:02d}.png"
@@ -152,7 +164,10 @@ def contact_sheet_frames(
                 str(output),
             ]
         )
-        video_render.run_subprocess(command, timeout=timeout_seconds)
+        video_render.run_subprocess(
+            command,
+            timeout=_remaining_subprocess_timeout(deadline, command),
+        )
         sheets.append(output)
     return sheets
 

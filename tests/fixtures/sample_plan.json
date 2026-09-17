@@ -49,6 +49,7 @@
     {"value": "74%", "meaning": "of the deployment-time self-evolution papers were posted in 2026."},
     {"value": "55%", "meaning": "drop in informational gain across 10 rounds of ungrounded self-critique."}
   ],
+  "application_or_implication": "Use the verification hierarchy to choose stronger evaluators before an agent accepts its own changes.",
   "limits_or_caveats": "The paper does not claim recursive self-improvement is running inside frontier labs today; industrial practice is only observable through what labs choose to publish.",
   "street_test_question": "Does your last self-improving pipeline climb the verification hierarchy, or does it just trust its own confidence?",
   "citation_url": "https://arxiv.org/abs/2607.07663"

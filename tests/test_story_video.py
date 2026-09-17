@@ -180,12 +180,12 @@ def seams(monkeypatch):
     monkeypatch.setattr(
         story_video,
         "concat_audio",
-        lambda clips, out, target_seconds=None: (
+        lambda clips, out, target_seconds=None, timeout_seconds=None: (
             state.__setitem__("targets", target_seconds) or Path(out)
         ),
     )
 
-    def fake_mux(video, audio, out):
+    def fake_mux(video, audio, out, timeout_seconds=None):
         output = Path(out)
         output.write_bytes(b"final")
         return output
@@ -235,6 +235,7 @@ def test_happy_path_one_attempt_then_final_render(seams, tmp_path):
     assert len(seams["contact_sheets"][0]) == N
     assert result.srt_path.exists()
     assert "class PaperStory" in result.scene_source
+    assert result.visual_direction.startswith("A crowded house")
     assert result.selected_attempt == 1
     assert result.passed is True
     assert result.attempt_records[0]["status"] == "passed"
@@ -490,6 +491,20 @@ def test_video_deadline_stops_new_attempts(seams, monkeypatch, tmp_path):
         )
 
     assert len(seams["coder"]) == 1
+
+
+def test_deadline_bound_completion_caps_each_model_call(monkeypatch):
+    calls = []
+    monkeypatch.setattr(story_video.time, "monotonic", lambda: 40.0)
+
+    bounded = story_video._deadline_bound_completion(
+        lambda model, messages, **kwargs: calls.append(kwargs) or "ok",
+        started=10.0,
+        deadline_seconds=100,
+    )
+
+    assert bounded("model", []) == "ok"
+    assert calls == [{"timeout": 70}]
 
 
 def test_storyboard_invalid_becomes_story_failed(seams, monkeypatch, tmp_path):

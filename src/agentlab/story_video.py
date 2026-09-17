@@ -22,7 +22,7 @@ from agentlab.frame_judge import (
     judgement_feedback,
     sample_frames,
 )
-from agentlab.scene_code import check_scene_code, write_scene_code
+from agentlab.scene_code import check_scene_code, visual_direction, write_scene_code
 from agentlab.scene_plan import ScenePlan
 from agentlab.story_scene import (
     SCENE_CLASS,
@@ -69,6 +69,7 @@ class StoryResult:
     srt_path: Path
     storyboard: Storyboard
     scene_source: str
+    visual_direction: str
     attempts: int
     judge_score: int | None
     judgement: dict | None
@@ -125,6 +126,14 @@ def _remaining_timeout(started: float, deadline_seconds: int, limit: int) -> int
     if remaining <= 0:
         raise _DeadlineExceeded(f"video deadline of {deadline_seconds} s reached")
     return max(1, min(limit, int(remaining)))
+
+
+def _deadline_bound_completion(complete, started: float, deadline_seconds: int):
+    def bounded(model: str, messages: list[dict]) -> str:
+        timeout = _remaining_timeout(started, deadline_seconds, LOW_RENDER_TIMEOUT)
+        return complete(model, messages, timeout=timeout)
+
+    return bounded
 
 
 def _render(
@@ -289,12 +298,13 @@ def _compose(
     recent_visual_directions,
 ) -> StoryResult:
     started = time.monotonic()
+    bounded_complete = _deadline_bound_completion(complete, started, deadline_seconds)
     work_dir.mkdir(parents=True, exist_ok=True)
     try:
         storyboard = design_storyboard(
             digest,
             plan,
-            complete,
+            bounded_complete,
             model=story_model,
             recent_visual_directions=recent_visual_directions,
         )
@@ -331,7 +341,7 @@ def _compose(
             source = write_scene_code(
                 storyboard,
                 durations,
-                complete,
+                bounded_complete,
                 model=scene_model,
                 feedback=feedback,
                 previous_source=previous,
@@ -447,7 +457,9 @@ def _compose(
             contact_sheets = contact_sheet_frames(
                 frames,
                 scene_file.parent / "contact-sheets",
-                timeout_seconds=frame_timeout,
+                timeout_seconds=_remaining_timeout(
+                    started, deadline_seconds, FRAME_SAMPLE_TIMEOUT_SECONDS
+                ),
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             detail = _failure_detail(exc)
@@ -468,7 +480,7 @@ def _compose(
                 break
             raise StoryFailed(str(exc)) from exc
         judgement = judge_frames(
-            contact_sheets, storyboard, plan, complete, model=judge_model
+            contact_sheets, storyboard, plan, bounded_complete, model=judge_model
         )
         candidates.append(
             _Candidate(attempt, source, scene_file, video, timing, judgement, frames)
@@ -526,16 +538,27 @@ def _compose(
         clips,
         work_dir / "narration.mp3",
         target_seconds=lengths,
+        timeout_seconds=_remaining_timeout(
+            started, deadline_seconds, FINAL_RENDER_TIMEOUT
+        ),
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     srt_path = out_path.with_suffix(".srt")
     srt_path.write_text(build_srt(clips, durations=lengths), encoding="utf-8")
-    video_path = mux_final(final_video, audio, out_path)
+    video_path = mux_final(
+        final_video,
+        audio,
+        out_path,
+        timeout_seconds=_remaining_timeout(
+            started, deadline_seconds, FINAL_RENDER_TIMEOUT
+        ),
+    )
     return StoryResult(
         video_path=Path(video_path),
         srt_path=srt_path,
         storyboard=storyboard,
         scene_source=best.source,
+        visual_direction=visual_direction(best.source),
         attempts=attempts,
         judge_score=best.judgement.score,
         judgement=best.judgement.model_dump(),

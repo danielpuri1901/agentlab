@@ -119,6 +119,15 @@ def _token_detail(details, name: str) -> int:
     return int(value or 0)
 
 
+def _optional_token_detail(details, name: str) -> int | None:
+    if details is None:
+        return None
+    value = (
+        details.get(name) if isinstance(details, dict) else getattr(details, name, None)
+    )
+    return None if value is None else int(value)
+
+
 def completion_usage(
     response,
     requested_model: str,
@@ -127,11 +136,19 @@ def completion_usage(
     latency_ms: int,
 ) -> ModelCallUsage:
     usage = response.usage
-    input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+    total_input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
     output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
     details = getattr(usage, "prompt_tokens_details", None)
     cache_read = _token_detail(details, "cached_tokens")
-    cache_write = _token_detail(details, "cache_write_tokens")
+    cache_write = _token_detail(details, "cache_creation_tokens") or _token_detail(
+        details, "cache_write_tokens"
+    )
+    text_tokens = _optional_token_detail(details, "text_tokens")
+    input_tokens = (
+        text_tokens
+        if text_tokens is not None
+        else max(0, total_input_tokens - cache_read - cache_write)
+    )
     price = resolve_price(pricing_model)
     return ModelCallUsage(
         stage=stage,

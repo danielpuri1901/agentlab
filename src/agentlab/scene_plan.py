@@ -71,8 +71,12 @@ class DiagramEdge(BaseModel):
 
 
 class Diagram(BaseModel):
-    nodes: list[DiagramNode] = Field(min_length=MIN_DIAGRAM_NODES, max_length=MAX_DIAGRAM_NODES)
-    edges: list[DiagramEdge] = Field(min_length=MIN_DIAGRAM_EDGES, max_length=MAX_DIAGRAM_EDGES)
+    nodes: list[DiagramNode] = Field(
+        min_length=MIN_DIAGRAM_NODES, max_length=MAX_DIAGRAM_NODES
+    )
+    edges: list[DiagramEdge] = Field(
+        min_length=MIN_DIAGRAM_EDGES, max_length=MAX_DIAGRAM_EDGES
+    )
 
     @model_validator(mode="after")
     def _edges_reference_known_nodes(self) -> "Diagram":
@@ -96,7 +100,9 @@ class MechanismStep(BaseModel):
     # The visual motif the template animates for this step. The model picks
     # the fitting one; it never writes animation code (Daniel's feedback
     # 2026-08-23: show the mechanism operating, not text about it).
-    kind: Literal["transform", "gate", "loop", "split", "store", "compare"] = "transform"
+    kind: Literal["transform", "gate", "loop", "split", "store", "compare"] = (
+        "transform"
+    )
     # Which of the plan's OWN diagram nodes/edges this step is about (edge
     # ids are written "source->target"); validated against the plan's
     # diagram by ScenePlan._activates_reference_known_ids below, since a
@@ -116,7 +122,10 @@ class ScenePlan(BaseModel):
     mechanism_steps: list[MechanismStep] = Field(
         min_length=MIN_MECHANISM_STEPS, max_length=MAX_MECHANISM_STEPS
     )
-    key_numbers: list[KeyNumber] = Field(default_factory=list, max_length=MAX_KEY_NUMBERS)
+    key_numbers: list[KeyNumber] = Field(
+        default_factory=list, max_length=MAX_KEY_NUMBERS
+    )
+    application_or_implication: str = Field(min_length=1, max_length=MAX_CLAIM)
     limits_or_caveats: str = Field(min_length=1, max_length=MAX_LIMITS)
     street_test_question: str = Field(min_length=1, max_length=MAX_QUESTION)
     citation_url: str = Field(min_length=1)
@@ -166,12 +175,16 @@ After the digest, output a fenced ```json block containing ONLY the scene \
 plan object, nothing before or after it, with these keys: title, \
 one_line_claim, diagram (see below), mechanism_steps (3 to 6 (three to \
 six) objects with label, detail, narration, kind, activates), key_numbers \
-(0 to 3 (zero to three) objects with value, meaning), limits_or_caveats, \
+(0 to 3 (zero to three) objects with value, meaning), application_or_implication, \
+limits_or_caveats, \
 street_test_question, citation_url. The narration field of each mechanism \
 step is read aloud as the video's voiceover: write it as short, \
 spoken-style sentences a person would actually say out loud, plain \
 language, one idea per sentence, never an em dash. Every key_numbers value \
-must be a number that appears in the source text. limits_or_caveats is one \
+must be a number that appears in the source text. application_or_implication \
+is one plain sentence that states where the finding could be used or what it \
+changes. When this is your inference, start it with "Possible use:" or \
+"Implication:". limits_or_caveats is one \
 sentence about what the paper does NOT claim.
 
 Each mechanism step also has a kind field, the visual motif the video \
@@ -266,6 +279,9 @@ _EXAMPLE_PLAN = {
     "key_numbers": [
         {"value": "12", "meaning": "average comparisons per 200-item held-out list."}
     ],
+    "application_or_implication": (
+        "Possible use: compare candidate agent outputs before choosing one."
+    ),
     "limits_or_caveats": "The paper does not test lists longer than 50 items.",
     "street_test_question": "Would a pairwise comparator beat your current sort step.",
     "citation_url": "https://example.com/sortnet",
@@ -276,7 +292,7 @@ _EXAMPLE_BLOCK = (
     "shape of a correct reply; never treat its content as real, never reuse "
     "it):\n\n"
     'Fictional source: "SortNet sorts a list purely by pairwise comparisons '
-    'made at inference time. On 200 held-out lists it sorts correctly 100% '
+    "made at inference time. On 200 held-out lists it sorts correctly 100% "
     'of the time using 12 comparisons on average."\n\n'
     f"{_EXAMPLE_DIGEST}\n\n"
     "```json\n" + json.dumps(_EXAMPLE_PLAN) + "\n```"
@@ -348,10 +364,15 @@ _extract_json_object = extract_json_object
 _CLIP_LIMITS = {
     "title": MAX_TITLE,
     "one_line_claim": MAX_CLAIM,
+    "application_or_implication": MAX_CLAIM,
     "limits_or_caveats": MAX_LIMITS,
     "street_test_question": MAX_QUESTION,
 }
-_STEP_CLIP_LIMITS = {"label": MAX_LABEL, "detail": MAX_DETAIL, "narration": MAX_NARRATION}
+_STEP_CLIP_LIMITS = {
+    "label": MAX_LABEL,
+    "detail": MAX_DETAIL,
+    "narration": MAX_NARRATION,
+}
 _DIAGRAM_NODE_CLIP_LIMITS = {"label": MAX_NODE_LABEL, "icon": MAX_NODE_ICON}
 _DIAGRAM_EDGE_CLIP_LIMITS = {"label": MAX_EDGE_LABEL}
 
@@ -512,7 +533,11 @@ def build_pick_prompt(candidates: list[dict], interests_text: str, mode: str) ->
         f"{c.get('title', '')} ({_candidate_signal(c)})"
         for i, c in enumerate(candidates, 1)
     )
-    instruction = (_NOVEL_INSTRUCTION + _PAPER_PREFERENCE) if mode == "novel" else _CORE_INSTRUCTION
+    instruction = (
+        (_NOVEL_INSTRUCTION + _PAPER_PREFERENCE)
+        if mode == "novel"
+        else _CORE_INSTRUCTION
+    )
     return (
         f"Candidates:\n{lines}\n\n"
         f"Daniel's interests:\n{interests_text}\n\n"
@@ -552,7 +577,10 @@ def pick_paper(
         model,
         [
             {"role": "system", "content": PICK_SYSTEM},
-            {"role": "user", "content": build_pick_prompt(candidates, interests_text, mode)},
+            {
+                "role": "user",
+                "content": build_pick_prompt(candidates, interests_text, mode),
+            },
         ],
     )
     index = _parse_pick_index(raw, len(candidates))

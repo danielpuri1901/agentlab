@@ -2,6 +2,8 @@
 the StoryScene contract. Used by the render test and by scene_code's guard
 test as the canonical clean example."""
 
+# Visual direction: A crowded house compresses into one case while the needed item stays visible.
+
 from manim import (
     DOWN,
     LEFT,

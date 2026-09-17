@@ -242,7 +242,8 @@ def test_sample_frames_calls_ffmpeg_once_per_time(monkeypatch, tmp_path):
     assert len(frames) == 2 and all(f.exists() for f in frames)
     assert calls[0][calls[0].index("-ss") + 1] == "1.500"
     assert "scale=480:-1" in " ".join(calls[1])
-    assert timeouts == [frame_judge.FRAME_SAMPLE_TIMEOUT_SECONDS] * 2
+    assert timeouts[0] <= frame_judge.FRAME_SAMPLE_TIMEOUT_SECONDS
+    assert 0 < timeouts[1] <= timeouts[0]
 
 
 def test_contact_sheet_frames_combines_three_samples_per_beat(monkeypatch, tmp_path):
@@ -265,9 +266,7 @@ def test_contact_sheet_frames_combines_three_samples_per_beat(monkeypatch, tmp_p
     assert len(sheets) == 2
     assert len(calls) == 2
     assert all("hstack=inputs=3" in call[0] for call in calls)
-    assert all(
-        call[1]["timeout"] == frame_judge.FRAME_SAMPLE_TIMEOUT_SECONDS for call in calls
-    )
+    assert 0 < calls[-1][1]["timeout"] <= calls[0][1]["timeout"]
 
 
 def test_judgement_feedback_lists_only_beats_with_problems():

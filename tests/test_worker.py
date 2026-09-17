@@ -637,6 +637,7 @@ def _make_scene_plan(url: str, title: str) -> ScenePlan:
             },
         ],
         key_numbers=[],
+        application_or_implication="Use this method when the same problem appears in a real system.",
         limits_or_caveats="The paper does not claim to solve everything.",
         street_test_question="Would you implement this in your own harness?",
         citation_url=url,
@@ -685,6 +686,7 @@ def _fake_story_success(
         srt_path=srt,
         storyboard=Storyboard(**GOLDEN_BOARD),
         scene_source="class PaperStory: pass",
+        visual_direction="A wave folds into a verified path.",
         attempts=2,
         judge_score=8,
         judgement={"score": 8, "beats": [], "verdict": "pass", "note": None},
@@ -759,6 +761,7 @@ def test_complete_long_allows_story_output_budget_and_timeout(monkeypatch):
             messages,
             usage_sink=usage_sink,
             pricing_model="bedrock/global.anthropic.claude-sonnet-4-6",
+            timeout=37,
         )
         == "complete"
     )
@@ -774,10 +777,10 @@ def test_complete_long_allows_story_output_budget_and_timeout(monkeypatch):
                 {"role": "user", "content": "Write the scene."},
             ],
             "max_tokens": 12000,
-            "timeout": 180,
+            "timeout": 37,
         }
     ]
-    assert usage_sink[0].input_tokens == 100
+    assert usage_sink[0].input_tokens == 30
     assert usage_sink[0].cache_read_input_tokens == 30
     assert usage_sink[0].cache_write_input_tokens == 40
 
@@ -828,7 +831,7 @@ def test_explain_story_path_ships_and_records_artifacts(
     assert row["attempts"] == 2 and row["judge_score"] == 8
     assert row["selected_attempt"] == 2
     assert row["judge_passed"] is True
-    assert row["visual_focus"].startswith("Keep the agent")
+    assert row["visual_direction"] == "A wave folds into a verified path."
     assert row["estimated_model_cost_usd"] == 0
     assert row["model_calls"] == []
     key = row["experiment_id"].removeprefix("video#")
@@ -840,6 +843,7 @@ def test_explain_story_path_ships_and_records_artifacts(
     with s3.get_object(Bucket=BUCKET, Key=f"stories/{key}.json")["Body"] as body:
         story = json.loads(body.read())
     assert story["storyboard"]["title"] == "Recursive Self-Improvement in AI"
+    assert story["visual_direction"] == "A wave folds into a verified path."
     assert story["judgement"]["score"] == 8
     assert story["attempt_records"] == [{"attempt": 2, "status": "passed"}]
 

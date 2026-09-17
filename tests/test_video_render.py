@@ -37,7 +37,9 @@ def sample_plan() -> ScenePlan:
 def test_scene_texts_order_and_count(sample_plan):
     texts = video_render.scene_texts(sample_plan)
     n_steps = len(sample_plan.mechanism_steps)
-    assert len(texts) == 1 + n_steps + 1 + 1 + 1  # title+claim, steps, numbers, caveat, question
+    assert (
+        len(texts) == 1 + n_steps + 1 + 1 + 1
+    )  # title+claim, steps, numbers, caveat, question
     assert texts[0] == f"{sample_plan.title}. {sample_plan.one_line_claim}"
     for i, step in enumerate(sample_plan.mechanism_steps):
         assert texts[1 + i] == step.narration
@@ -105,20 +107,32 @@ def test_verify_voice_prefers_en_us_neural_over_standard_and_other_langs():
         [
             {"Id": "Celine", "LanguageCode": "fr-FR", "SupportedEngines": ["neural"]},
             {"Id": "Salli", "LanguageCode": "en-US", "SupportedEngines": ["standard"]},
-            {"Id": "Ivy", "LanguageCode": "en-US", "SupportedEngines": ["neural", "standard"]},
-            {"Id": "Emma", "LanguageCode": "en-GB", "SupportedEngines": ["neural", "standard"]},
+            {
+                "Id": "Ivy",
+                "LanguageCode": "en-US",
+                "SupportedEngines": ["neural", "standard"],
+            },
+            {
+                "Id": "Emma",
+                "LanguageCode": "en-GB",
+                "SupportedEngines": ["neural", "standard"],
+            },
         ]
     )
     assert video_render.verify_voice(polly) == "Ivy"
 
 
 def test_verify_voice_falls_back_to_standard_when_no_neural_voice_exists():
-    polly = FakePolly([{"Id": "Salli", "LanguageCode": "en-US", "SupportedEngines": ["standard"]}])
+    polly = FakePolly(
+        [{"Id": "Salli", "LanguageCode": "en-US", "SupportedEngines": ["standard"]}]
+    )
     assert video_render.verify_voice(polly) == "Salli"
 
 
 def test_verify_voice_raises_when_no_en_us_or_en_gb_voice():
-    polly = FakePolly([{"Id": "Celine", "LanguageCode": "fr-FR", "SupportedEngines": ["neural"]}])
+    polly = FakePolly(
+        [{"Id": "Celine", "LanguageCode": "fr-FR", "SupportedEngines": ["neural"]}]
+    )
     with pytest.raises(RuntimeError):
         video_render.verify_voice(polly)
 
@@ -160,14 +174,21 @@ def test_narrate_returns_one_clip_per_text_with_right_text_and_duration(
 
     assert [c.text for c in clips] == texts
     assert all(c.seconds == 4.5 for c in clips)
-    assert all(c.path.exists() and c.path.read_bytes() == b"fake-mp3-bytes" for c in clips)
+    assert all(
+        c.path.exists() and c.path.read_bytes() == b"fake-mp3-bytes" for c in clips
+    )
     assert [call["Text"] for call in polly.synthesize_calls] == texts
-    assert all(call["VoiceId"] == "Ivy" and call["Engine"] == "neural" for call in polly.synthesize_calls)
+    assert all(
+        call["VoiceId"] == "Ivy" and call["Engine"] == "neural"
+        for call in polly.synthesize_calls
+    )
 
 
 def test_narrate_creates_out_dir_if_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(video_render, "ffprobe_duration", lambda path: 3.0)
-    polly = FakePolly([{"Id": "Ivy", "LanguageCode": "en-US", "SupportedEngines": ["neural"]}])
+    polly = FakePolly(
+        [{"Id": "Ivy", "LanguageCode": "en-US", "SupportedEngines": ["neural"]}]
+    )
     out_dir = tmp_path / "does" / "not" / "exist" / "yet"
     video_render.narrate(polly, ["one", "two"], "Ivy", out_dir)
     assert out_dir.exists()
@@ -178,7 +199,9 @@ def test_narrate_creates_out_dir_if_missing(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_render_env_has_no_aws_keys_and_puts_scene_dir_first_on_pythonpath(monkeypatch, tmp_path):
+def test_render_env_has_no_aws_keys_and_puts_scene_dir_first_on_pythonpath(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA-should-not-leak")
     monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/x")
     monkeypatch.setenv("PYTHONPATH", "/elsewhere")
@@ -186,7 +209,9 @@ def test_render_env_has_no_aws_keys_and_puts_scene_dir_first_on_pythonpath(monke
     scene_dir = tmp_path / "scene"
     spec_path = tmp_path / "spec.json"
 
-    env = video_render.render_env(scene_dir, spec_path, extra_env={"SCENE_TIMING_OUT": "/t.json"})
+    env = video_render.render_env(
+        scene_dir, spec_path, extra_env={"SCENE_TIMING_OUT": "/t.json"}
+    )
 
     assert not any(key.startswith("AWS_") for key in env)
     assert env["PYTHONPATH"].split(os.pathsep)[0] == str(scene_dir)
@@ -228,7 +253,9 @@ def test_build_srt_wraps_long_text_at_wrap_width():
     srt = video_render.build_srt(clips)
     expected_wrapped = "\n".join(textwrap.wrap(long_text, video_render.SRT_WRAP_WIDTH))
     assert expected_wrapped in srt
-    assert srt.count("\n") >= expected_wrapped.count("\n") + 2  # index + timing lines too
+    assert (
+        srt.count("\n") >= expected_wrapped.count("\n") + 2
+    )  # index + timing lines too
 
 
 def test_build_srt_uses_given_durations_when_provided(tmp_path):
@@ -256,7 +283,9 @@ def _fake_manim_run(media_dir: Path):
     return fake_run
 
 
-def test_render_template_video_builds_expected_manim_command(monkeypatch, tmp_path, sample_plan):
+def test_render_template_video_builds_expected_manim_command(
+    monkeypatch, tmp_path, sample_plan
+):
     calls = []
     media_dir = tmp_path / "out"
 
@@ -265,10 +294,14 @@ def test_render_template_video_builds_expected_manim_command(monkeypatch, tmp_pa
         return _fake_manim_run(media_dir)(cmd, **kwargs)
 
     monkeypatch.setattr(video_render, "run_subprocess", fake_run)
-    monkeypatch.setattr(video_render, "_manim_command", lambda: ["uvx", "--python", "3.12", "manim"])
+    monkeypatch.setattr(
+        video_render, "_manim_command", lambda: ["uvx", "--python", "3.12", "manim"]
+    )
     durations = video_render.default_scene_durations(sample_plan)
 
-    result = video_render.render_template_video(sample_plan, durations, media_dir, quality="l")
+    result = video_render.render_template_video(
+        sample_plan, durations, media_dir, quality="l"
+    )
 
     assert result.name == "PaperScene.mp4"
     cmd, kwargs = calls[0]
@@ -277,7 +310,9 @@ def test_render_template_video_builds_expected_manim_command(monkeypatch, tmp_pa
     assert str(video_render.VIDEO_SCENES_FILE) in cmd
     assert video_render.SCENE_CLASS in cmd
     assert kwargs["timeout"] == video_render.DEFAULT_RENDER_TIMEOUT_SECONDS
-    spec = json.loads(Path(kwargs["env"]["SCENE_SPEC_JSON"]).read_text(encoding="utf-8"))
+    spec = json.loads(
+        Path(kwargs["env"]["SCENE_SPEC_JSON"]).read_text(encoding="utf-8")
+    )
     assert spec["durations"] == durations
     assert spec["plan"]["title"] == sample_plan.title
     assert spec["captions"] == video_render.scene_texts(sample_plan)
@@ -295,14 +330,21 @@ def test_render_scene_video_takes_any_scene_file_and_timeout(monkeypatch, tmp_pa
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr(video_render, "run_subprocess", fake_run)
-    monkeypatch.setattr(video_render, "_manim_command", lambda: ["uvx", "--python", "3.12", "manim"])
+    monkeypatch.setattr(
+        video_render, "_manim_command", lambda: ["uvx", "--python", "3.12", "manim"]
+    )
     scene_file = tmp_path / "scene" / "paper_story.py"
     scene_file.parent.mkdir()
     scene_file.write_text("# scene", encoding="utf-8")
 
     result = video_render.render_scene_video(
-        scene_file, "PaperStory", {"storyboard": {}, "durations": [1.0], "captions": ["x"]},
-        media_dir, quality="l", timeout_seconds=42, extra_env={"SCENE_TIMING_OUT": "/t.json"},
+        scene_file,
+        "PaperStory",
+        {"storyboard": {}, "durations": [1.0], "captions": ["x"]},
+        media_dir,
+        quality="l",
+        timeout_seconds=42,
+        extra_env={"SCENE_TIMING_OUT": "/t.json"},
     )
 
     assert result.name == "PaperStory.mp4"
@@ -326,25 +368,36 @@ def test_template_spec_raises_on_duration_count_mismatch(sample_plan):
 def test_concat_audio_pads_each_clip_to_its_target(monkeypatch, tmp_path):
     run_calls = []
     monkeypatch.setattr(
-        video_render, "run_subprocess",
-        lambda cmd, **kwargs: run_calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", ""),
+        video_render,
+        "run_subprocess",
+        lambda cmd, **kwargs: (
+            run_calls.append((cmd, kwargs))
+            or subprocess.CompletedProcess(cmd, 0, "", "")
+        ),
     )
     clips = [
         NarrationClip(path=tmp_path / "a.mp3", seconds=3.0, text="a"),
         NarrationClip(path=tmp_path / "b.mp3", seconds=2.0, text="b"),
     ]
-    video_render.concat_audio(clips, tmp_path / "out.mp3", target_seconds=[3.4, 1.5])
-    filter_arg = run_calls[0][run_calls[0].index("-filter_complex") + 1]
+    video_render.concat_audio(
+        clips, tmp_path / "out.mp3", target_seconds=[3.4, 1.5], timeout_seconds=19
+    )
+    command, kwargs = run_calls[0]
+    filter_arg = command[command.index("-filter_complex") + 1]
     assert "[0:a]apad=whole_dur=3.400[a0];" in filter_arg
     assert "[1:a]apad=whole_dur=2.000[a1];" in filter_arg  # never shorter than the clip
     assert filter_arg.endswith("[a0][a1]concat=n=2:v=0:a=1[out]")
+    assert kwargs["timeout"] == 19
 
 
 def test_concat_audio_without_targets_is_a_plain_concat(monkeypatch, tmp_path):
     run_calls = []
     monkeypatch.setattr(
-        video_render, "run_subprocess",
-        lambda cmd, **kwargs: run_calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", ""),
+        video_render,
+        "run_subprocess",
+        lambda cmd, **kwargs: (
+            run_calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+        ),
     )
     clips = [NarrationClip(path=tmp_path / "a.mp3", seconds=3.0, text="a")]
     video_render.concat_audio(clips, tmp_path / "out.mp3")
@@ -352,12 +405,34 @@ def test_concat_audio_without_targets_is_a_plain_concat(monkeypatch, tmp_path):
     assert filter_arg == "[0:a]concat=n=1:v=0:a=1[out]"
 
 
+def test_mux_final_passes_timeout_to_ffmpeg(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        video_render,
+        "run_subprocess",
+        lambda cmd, **kwargs: (
+            calls.append((cmd, kwargs)) or subprocess.CompletedProcess(cmd, 0, "", "")
+        ),
+    )
+
+    video_render.mux_final(
+        tmp_path / "silent.mp4",
+        tmp_path / "audio.mp3",
+        tmp_path / "final.mp4",
+        timeout_seconds=23,
+    )
+
+    assert calls[0][1]["timeout"] == 23
+
+
 # ---------------------------------------------------------------------------
 # render_video (full pipeline orchestration)
 # ---------------------------------------------------------------------------
 
 
-def test_render_video_orchestrates_render_concat_mux(monkeypatch, tmp_path, sample_plan):
+def test_render_video_orchestrates_render_concat_mux(
+    monkeypatch, tmp_path, sample_plan
+):
     texts = video_render.scene_texts(sample_plan)
     clips = []
     for i, text in enumerate(texts):
@@ -374,7 +449,9 @@ def test_render_video_orchestrates_render_concat_mux(monkeypatch, tmp_path, samp
         render_calls.append((plan, durations, out_dir, quality))
         return fake_silent_video
 
-    monkeypatch.setattr(video_render, "render_template_video", fake_render_template_video)
+    monkeypatch.setattr(
+        video_render, "render_template_video", fake_render_template_video
+    )
 
     run_calls = []
 
@@ -483,9 +560,7 @@ def test_leading_number_returns_none_for_non_numeric_value():
 def test_topological_order_linear_chain():
     from agentlab.video_scenes import topological_order
 
-    order = topological_order(
-        ["c", "a", "b"], [("a", "b"), ("b", "c")]
-    )
+    order = topological_order(["c", "a", "b"], [("a", "b"), ("b", "c")])
     assert order == ["a", "b", "c"]
 
 
@@ -547,10 +622,13 @@ def test_primary_edge_label_limits_dense_step_to_one_label():
     """One step with two active edges must not draw overlapping edge labels."""
     from agentlab import video_scenes
 
-    assert video_scenes.primary_edge_id(
-        ["rl", "rl->hacking", "align->hacking", "hacking"],
-        {"rl->hacking", "align->hacking"},
-    ) == "rl->hacking"
+    assert (
+        video_scenes.primary_edge_id(
+            ["rl", "rl->hacking", "align->hacking", "hacking"],
+            {"rl->hacking", "align->hacking"},
+        )
+        == "rl->hacking"
+    )
     assert video_scenes.primary_edge_id(["rl", "hacking"], {"rl->hacking"}) is None
 
 
@@ -603,7 +681,9 @@ def test_render_template_video_real_manim_output(tmp_path, sample_plan):
     durations = video_render.default_scene_durations(sample_plan)
     out_dir = tmp_path / "render"
 
-    video_path = video_render.render_template_video(sample_plan, durations, out_dir, quality="l")
+    video_path = video_render.render_template_video(
+        sample_plan, durations, out_dir, quality="l"
+    )
 
     assert video_path.exists()
     duration = video_render.ffprobe_duration(video_path)
