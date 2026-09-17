@@ -195,12 +195,15 @@ def test_parse_storyboard_accepts_normalised_scene_plan_node_ids(golden, plan):
     assert board is not None
 
 
-def test_parse_storyboard_requires_the_scene_plan_title(golden, plan):
+def test_parse_storyboard_repairs_title_from_scene_plan(golden, plan):
     golden["title"] = "A clever gate story"
     golden["beats"][0]["on_screen_text"] = [golden["title"]]
     board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
-    assert board is None
-    assert "scene plan title" in error
+    assert error == ""
+    assert board is not None
+    assert board.title == plan.title
+    assert board.beats[0].narration == f"{plan.title}. {board.simple_definition}"
+    assert board.beats[0].on_screen_text == [plan.title]
 
 
 def test_parse_storyboard_builds_title_beat_from_known_fields(golden, plan):

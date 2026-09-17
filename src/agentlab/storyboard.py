@@ -199,12 +199,12 @@ def parse_storyboard(
         board = Storyboard(**data)
     except ValidationError as exc:
         return None, str(exc)
-    if board.title == plan.title:
-        title_narration = f"{board.title}. {board.simple_definition}"
-        if len(title_narration) > MAX_NARRATION:
-            return None, "title and simple_definition exceed the narration limit"
-        board.beats[0].narration = title_narration
-        board.beats[0].on_screen_text = [board.title]
+    board.title = plan.title
+    title_narration = f"{plan.title}. {board.simple_definition}"
+    if len(title_narration) > MAX_NARRATION:
+        return None, "title and simple_definition exceed the narration limit"
+    board.beats[0].narration = title_narration
+    board.beats[0].on_screen_text = [plan.title]
     if board.beats and board.beats[-1].role == "question":
         board.beats[-1].narration = plan.street_test_question
     for beat in board.beats:
