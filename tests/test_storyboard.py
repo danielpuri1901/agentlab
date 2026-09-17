@@ -220,6 +220,11 @@ def test_parse_storyboard_builds_title_beat_from_known_fields(golden, plan):
 
 
 def test_parse_storyboard_builds_question_beat_from_scene_plan(golden, plan):
+    plan.street_test_question = (
+        "How would you know whether this memory and reflection system improves "
+        "decisions when the environment changes and old lessons become misleading "
+        "rather than useful?"
+    )
     golden["beats"][-1]["narration"] = "Would this work for you?"
 
     board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)

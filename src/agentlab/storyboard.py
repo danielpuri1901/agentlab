@@ -26,7 +26,6 @@ MAX_NARRATION = 240
 MAX_VISUAL = 500
 MAX_ON_SCREEN = 2
 MAX_ON_SCREEN_LEN = 70
-MAX_SENTENCE_WORDS = 22
 
 
 class Mapping(BaseModel):
@@ -160,17 +159,6 @@ def _structure_error(board: Storyboard, plan: ScenePlan) -> str:
             return "the result beat must use at least one grounded key number"
     if "—" in board.model_dump_json():
         return "use a plain hyphen or period instead of an em dash"
-    for index, beat in enumerate(board.beats, start=1):
-        sentences = [
-            part.strip() for part in re.split(r"[.!?]+", beat.narration) if part.strip()
-        ]
-        for sentence in sentences:
-            if len(sentence.split()) > MAX_SENTENCE_WORDS:
-                return (
-                    f"beat {index} has a sentence longer than "
-                    f"{MAX_SENTENCE_WORDS} words"
-                )
-
     allowed_terms = {
         _plain(value) for node in plan.diagram.nodes for value in (node.id, node.label)
     } | {_plain(step.label) for step in plan.mechanism_steps}
