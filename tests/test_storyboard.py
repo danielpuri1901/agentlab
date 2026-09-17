@@ -129,13 +129,37 @@ def test_design_storyboard_retries_once_with_the_error_then_succeeds(golden, pla
     assert len(board.beats) == 8
 
 
-def test_design_storyboard_raises_after_second_failure(golden, plan):
+def test_design_storyboard_uses_a_second_correction_for_an_invented_number(
+    golden, plan
+):
+    bad = json.loads(json.dumps(golden))
+    bad["beats"][1]["narration"] = "The interface fails on 24% of tasks."
+    replies = iter([_fenced(bad), _fenced(bad), _fenced(golden)])
+    calls = []
+
+    def complete(model, messages):
+        calls.append(messages)
+        return next(replies)
+
+    board = sb.design_storyboard(DIGEST, plan, complete, model="m")
+
+    assert len(calls) == 3
+    assert "24%" in calls[2][-1]["content"]
+    assert len(board.beats) == 8
+
+
+def test_design_storyboard_raises_after_all_attempts_fail(golden, plan):
     bad = json.loads(json.dumps(golden))
     bad["beats"] = bad["beats"][:2]
+    calls = []
+
+    def complete(model, messages):
+        calls.append(messages)
+        return _fenced(bad)
+
     with pytest.raises(sb.StoryboardInvalid):
-        sb.design_storyboard(
-            DIGEST, plan, lambda model, messages: _fenced(bad), model="m"
-        )
+        sb.design_storyboard(DIGEST, plan, complete, model="m")
+    assert len(calls) == sb.MAX_STORYBOARD_ATTEMPTS
 
 
 def test_prompt_carries_digest_plan_and_the_hard_rules(plan):

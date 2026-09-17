@@ -26,6 +26,7 @@ MAX_NARRATION = 240
 MAX_VISUAL = 500
 MAX_ON_SCREEN = 2
 MAX_ON_SCREEN_LEN = 70
+MAX_STORYBOARD_ATTEMPTS = 3
 
 
 class Mapping(BaseModel):
@@ -61,7 +62,7 @@ class Storyboard(BaseModel):
 
 
 class StoryboardInvalid(ValueError):
-    """No valid storyboard was produced after one correction attempt."""
+    """No valid storyboard was produced within the bounded attempt limit."""
 
 
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?%|\d{3,}")
@@ -301,10 +302,13 @@ def design_storyboard(
             ),
         },
     ]
-    raw = complete(model, messages)
-    board, error = parse_storyboard(raw, digest, plan)
-    if board is None:
-        retry = messages + [
+    error = ""
+    for _ in range(MAX_STORYBOARD_ATTEMPTS):
+        raw = complete(model, messages)
+        board, error = parse_storyboard(raw, digest, plan)
+        if board is not None:
+            return board
+        messages += [
             {"role": "assistant", "content": raw},
             {
                 "role": "user",
@@ -314,8 +318,6 @@ def design_storyboard(
                 ),
             },
         ]
-        raw = complete(model, retry)
-        board, error = parse_storyboard(raw, digest, plan)
-    if board is None:
-        raise StoryboardInvalid(f"storyboard invalid after retry: {error}")
-    return board
+    raise StoryboardInvalid(
+        f"storyboard invalid after {MAX_STORYBOARD_ATTEMPTS} attempts: {error}"
+    )
