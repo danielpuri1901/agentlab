@@ -36,9 +36,11 @@ sidecar artifact (for future use, e.g. platform upload), but nothing in the
 render path depends on ffmpeg being able to render it.
 """
 
+import ctypes
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import textwrap
 from dataclasses import dataclass
@@ -58,7 +60,7 @@ DEFAULT_RENDER_TIMEOUT_SECONDS = 480
 # Only these parent environment keys are copied into the render subprocess.
 # This reduces direct credential exposure, but does not isolate the subprocess
 # from the worker filesystem, user identity, or network.
-RENDER_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
+RENDER_ENV_KEYS = ("PATH", "LANG", "LC_ALL")
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,17 @@ def run_subprocess(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     """Single seam for every external process this module shells out to
     (ffprobe, ffmpeg, `uvx manim`); tests monkeypatch this one function."""
     return subprocess.run(cmd, check=True, capture_output=True, text=True, **kwargs)
+
+
+def protect_worker_process() -> None:
+    """Block same-user child processes from reading this worker through /proc."""
+    if sys.platform != "linux":
+        return
+    pr_set_dumpable = 4
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(pr_set_dumpable, 0, 0, 0, 0) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
 
 
 # ---------------------------------------------------------------------------
@@ -250,12 +263,17 @@ def render_env(scene_dir: Path, spec_path: Path, extra_env: dict | None = None) 
     credential isolation.
     """
     env = {key: os.environ[key] for key in RENDER_ENV_KEYS if key in os.environ}
-    python_path = str(scene_dir)
-    if os.environ.get("PYTHONPATH"):
-        python_path = f"{python_path}{os.pathsep}{os.environ['PYTHONPATH']}"
-    env["PYTHONPATH"] = python_path
+    env["HOME"] = str(scene_dir)
+    env["TMPDIR"] = str(scene_dir)
+    env["PYTHONPATH"] = str(scene_dir)
     env["SCENE_SPEC_JSON"] = str(spec_path)
     if extra_env:
+        invalid = sorted(key for key in extra_env if not key.startswith("SCENE_"))
+        if invalid:
+            raise ValueError(
+                "render environment override must start with SCENE_: "
+                + ", ".join(invalid)
+            )
         env.update(extra_env)
     return env
 
@@ -304,6 +322,7 @@ def render_scene_video(
         str(scene_file),
         scene_class,
     ]
+    protect_worker_process()
     run_subprocess(cmd, env=env, timeout=timeout_seconds)
     return _find_rendered_video(out_dir, scene_class)
 

@@ -173,12 +173,31 @@ resource "aws_ecs_task_definition" "explain" {
     operating_system_family = "LINUX"
   }
 
+  volume {
+    name = "render-tmp"
+  }
+
   container_definitions = jsonencode([
     {
-      name      = "explain"
-      image     = "${aws_ecr_repository.agentlab.repository_url}:${var.video_image_tag}"
-      essential = true
-      command   = ["worker", "explain"]
+      name                   = "explain"
+      image                  = "${aws_ecr_repository.agentlab.repository_url}:${var.video_image_tag}"
+      essential              = true
+      command                = ["worker", "explain"]
+      user                   = "999:999"
+      readonlyRootFilesystem = true
+      linuxParameters = {
+        initProcessEnabled = true
+        capabilities = {
+          drop = ["ALL"]
+        }
+      }
+      mountPoints = [
+        {
+          sourceVolume  = "render-tmp"
+          containerPath = "/tmp"
+          readOnly      = false
+        }
+      ]
       environment = [
         { name = "AWS_REGION", value = var.aws_region },
         { name = "AWS_DEFAULT_REGION", value = var.aws_region },

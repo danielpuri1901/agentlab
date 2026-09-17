@@ -136,6 +136,10 @@ FORBIDDEN_NAMES = frozenset(
         "getattr",
         "setattr",
         "delattr",
+        "type",
+        "object",
+        "super",
+        "dir",
         "vars",
         "breakpoint",
         "input",
@@ -154,6 +158,10 @@ FORBIDDEN_NAMES = frozenset(
         "__class__",
         "__mro__",
         "camera",
+        "renderer",
+        "file_writer",
+        "window",
+        "config",
         # anything that needs LaTeX (the video image has none)
         "Tex",
         "MathTex",
@@ -251,6 +259,8 @@ def check_scene_code(source: str, beat_count: int) -> list[str]:
             elif root == "numpy" and node.module != "numpy":
                 findings.append(f"numpy submodule import not allowed: {node.module}")
             for alias in node.names:
+                if alias.name == "*":
+                    findings.append("wildcard imports are not allowed")
                 if alias.name in FORBIDDEN_NAMES:
                     findings.append(f"forbidden name imported: {alias.name}")
                 if node.module == "numpy" and alias.name not in ALLOWED_NUMPY_MEMBERS:
@@ -258,11 +268,19 @@ def check_scene_code(source: str, beat_count: int) -> list[str]:
         elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
             findings.append(f"forbidden name: {node.id}")
         elif isinstance(node, ast.Attribute):
-            if node.attr in FORBIDDEN_NAMES:
+            if node.attr.startswith("_"):
+                findings.append(f"private attribute not allowed: {node.attr}")
+            elif node.attr in FORBIDDEN_NAMES:
                 findings.append(f"forbidden attribute: {node.attr}")
             path = _attribute_path(node)
             if path and path[0] in numpy_aliases and not _numpy_attribute_allowed(path):
                 findings.append(f"numpy attribute not allowed: {'.'.join(path)}")
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and re.fullmatch(r"__[^\s]+__", node.value)
+        ):
+            findings.append(f"dunder name literal not allowed: {node.value}")
         elif (
             isinstance(node, ast.keyword)
             and node.arg == "include_numbers"

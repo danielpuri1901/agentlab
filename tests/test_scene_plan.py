@@ -75,6 +75,7 @@ DIGEST_MD = (
     "## How it connects to AgentLab\n\nSame shape as our compaction task.\n\n"
     "## Limits\n\nNever tested past 50 simulated turns."
 )
+SOURCE_TEXT = "The study reports a 12% gain and tests 50 simulated turns."
 
 
 def _plan_kwargs(**overrides):
@@ -193,7 +194,7 @@ def test_deep_read_retries_once_then_succeeds():
 
     digest, plan = deep_read(
         "https://arxiv.org/abs/2601.00001",
-        lambda url: "the full fetched source text",
+        lambda url: SOURCE_TEXT,
         fake_complete,
     )
 
@@ -215,9 +216,32 @@ def test_deep_read_raises_when_still_invalid_after_retry():
     with pytest.raises(ValueError, match="scene plan invalid"):
         deep_read(
             "https://arxiv.org/abs/2601.00001",
-            lambda url: "source text",
+            lambda url: SOURCE_TEXT,
             fake_complete,
         )
+
+
+def test_deep_read_retries_numbers_missing_from_fetched_source():
+    calls = []
+    bad_plan = _plan_kwargs(key_numbers=[{"value": "91%", "meaning": "Invented gain."}])
+    bad_digest = DIGEST_MD.replace("12%", "91%")
+
+    def fake_complete(model, messages):
+        calls.append(messages)
+        if len(calls) == 1:
+            return _fenced(bad_plan, digest=bad_digest)
+        return _fenced(VALID_PLAN_DICT)
+
+    digest, plan = deep_read(
+        "https://arxiv.org/abs/2601.00001",
+        lambda url: SOURCE_TEXT,
+        fake_complete,
+    )
+
+    assert len(calls) == 2
+    assert "91%" in calls[1][-1]["content"]
+    assert digest == DIGEST_MD
+    assert plan.key_numbers[0].value == "12%"
 
 
 def test_deep_read_passes_fetched_text_and_url_into_prompt():
@@ -225,7 +249,7 @@ def test_deep_read_passes_fetched_text_and_url_into_prompt():
 
     def fake_fetch(url):
         seen["url"] = url
-        return "SENTINEL SOURCE TEXT 42%"
+        return "SENTINEL SOURCE TEXT 42%. " + SOURCE_TEXT
 
     def fake_complete(model, messages):
         seen["prompt"] = messages[-1]["content"]

@@ -56,6 +56,9 @@ MIN_DIAGRAM_EDGES = 1
 MAX_DIAGRAM_EDGES = 10
 MAX_STEP_ACTIVATES = MAX_DIAGRAM_NODES + MAX_DIAGRAM_EDGES
 _NODE_ID_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+_SOURCE_NUMBER_RE = re.compile(
+    r"(?<![A-Za-z])\d+(?:[.,]\d+)*(?:\s*(?:%|percent))?", re.IGNORECASE
+)
 
 
 class DiagramNode(BaseModel):
@@ -446,6 +449,45 @@ def parse_scene_plan(raw: str) -> ScenePlan | None:
     return plan
 
 
+def _normalise_source_number(value: str) -> str:
+    return value.lower().replace(",", "").replace(" ", "").replace("percent", "%")
+
+
+def _ungrounded_source_numbers(
+    digest: str, plan: ScenePlan, source_text: str
+) -> list[str]:
+    grounded = {
+        _normalise_source_number(value)
+        for value in _SOURCE_NUMBER_RE.findall(source_text)
+    }
+    plan_text = "\n".join(
+        [
+            plan.title,
+            plan.one_line_claim,
+            plan.application_or_implication,
+            plan.limits_or_caveats,
+            plan.street_test_question,
+            *(node.label for node in plan.diagram.nodes),
+            *(edge.label or "" for edge in plan.diagram.edges),
+            *(
+                text
+                for step in plan.mechanism_steps
+                for text in (step.label, step.detail, step.narration)
+            ),
+            *(
+                text
+                for number in plan.key_numbers
+                for text in (number.value, number.meaning)
+            ),
+        ]
+    )
+    missing: list[str] = []
+    for value in _SOURCE_NUMBER_RE.findall(digest + "\n" + plan_text):
+        if _normalise_source_number(value) not in grounded and value not in missing:
+            missing.append(value)
+    return missing
+
+
 def deep_read(
     url: str,
     fetch_text: Callable[[str], str],
@@ -467,22 +509,32 @@ def deep_read(
     raw = complete(model, messages)
     digest, plan_raw = split_digest_and_plan(raw)
     plan, error = _parse_scene_plan_verbose(plan_raw)
+    if plan is not None:
+        missing = _ungrounded_source_numbers(digest, plan, source_text)
+        if missing:
+            plan = None
+            error = "numbers missing from fetched source: " + ", ".join(missing)
     if plan is None:
         retry_messages = messages + [
             {
                 "role": "user",
                 "content": (
-                    "Your last reply's scene plan JSON was invalid. "
+                    "Your last reply was invalid. "
                     f"Validation error: {error}\n"
                     "Send the full digest again, then a corrected "
-                    "```json fenced scene plan at the very end that fixes "
-                    "only the JSON so it matches the schema exactly."
+                    "```json fenced scene plan at the very end. Fix the stated "
+                    "error and keep every claim grounded in the source text."
                 ),
             }
         ]
         raw = complete(model, retry_messages)
         digest, plan_raw = split_digest_and_plan(raw)
         plan, error = _parse_scene_plan_verbose(plan_raw)
+        if plan is not None:
+            missing = _ungrounded_source_numbers(digest, plan, source_text)
+            if missing:
+                plan = None
+                error = "numbers missing from fetched source: " + ", ".join(missing)
     if plan is None:
         raise ValueError(f"scene plan invalid after retry for {url}: {error}")
     # The model never writes the citation: the fetch URL is ground truth

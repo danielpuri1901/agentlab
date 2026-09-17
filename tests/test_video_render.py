@@ -205,6 +205,8 @@ def test_render_env_has_no_aws_keys_and_puts_scene_dir_first_on_pythonpath(
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA-should-not-leak")
     monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/x")
     monkeypatch.setenv("PYTHONPATH", "/elsewhere")
+    monkeypatch.setenv("HOME", "/home/worker")
+    monkeypatch.setenv("TMPDIR", "/parent-tmp")
     monkeypatch.setenv("PATH", "/usr/bin")
     scene_dir = tmp_path / "scene"
     spec_path = tmp_path / "spec.json"
@@ -214,11 +216,21 @@ def test_render_env_has_no_aws_keys_and_puts_scene_dir_first_on_pythonpath(
     )
 
     assert not any(key.startswith("AWS_") for key in env)
-    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(scene_dir)
-    assert "/elsewhere" in env["PYTHONPATH"]
+    assert env["PYTHONPATH"] == str(scene_dir)
+    assert env["HOME"] == str(scene_dir)
+    assert env["TMPDIR"] == str(scene_dir)
     assert env["SCENE_SPEC_JSON"] == str(spec_path)
     assert env["SCENE_TIMING_OUT"] == "/t.json"
     assert env["PATH"] == "/usr/bin"
+
+
+def test_render_env_rejects_non_scene_overrides(tmp_path):
+    with pytest.raises(ValueError, match="render environment override"):
+        video_render.render_env(
+            tmp_path,
+            tmp_path / "spec.json",
+            extra_env={"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/secret"},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +332,7 @@ def test_render_template_video_builds_expected_manim_command(
 
 def test_render_scene_video_takes_any_scene_file_and_timeout(monkeypatch, tmp_path):
     calls = []
+    protected = []
     media_dir = tmp_path / "out"
 
     def fake_run(cmd, **kwargs):
@@ -330,6 +343,9 @@ def test_render_scene_video_takes_any_scene_file_and_timeout(monkeypatch, tmp_pa
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr(video_render, "run_subprocess", fake_run)
+    monkeypatch.setattr(
+        video_render, "protect_worker_process", lambda: protected.append(True)
+    )
     monkeypatch.setattr(
         video_render, "_manim_command", lambda: ["uvx", "--python", "3.12", "manim"]
     )
@@ -353,6 +369,7 @@ def test_render_scene_video_takes_any_scene_file_and_timeout(monkeypatch, tmp_pa
     assert kwargs["timeout"] == 42
     assert kwargs["env"]["SCENE_TIMING_OUT"] == "/t.json"
     assert kwargs["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(scene_file.parent)
+    assert protected == [True]
 
 
 def test_template_spec_raises_on_duration_count_mismatch(sample_plan):

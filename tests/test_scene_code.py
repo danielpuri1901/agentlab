@@ -59,6 +59,30 @@ def test_guard_flags_forbidden_things(snippet, needle):
     assert any(needle in f for f in findings), findings
 
 
+def test_guard_blocks_indirect_dunder_access_to_builtins():
+    source = GOLDEN_SCENE.replace(
+        "self.hold(0.6)",
+        'leak = type(self).__getattribute__(self, "__dict__")\n        self.hold(0.6)',
+    )
+
+    findings = scene_code.check_scene_code(source, BEATS)
+
+    assert any("type" in finding for finding in findings), findings
+    assert any("__getattribute__" in finding for finding in findings), findings
+    assert any("__dict__" in finding for finding in findings), findings
+
+
+def test_guard_rejects_wildcard_imports():
+    source = GOLDEN_SCENE.replace(
+        "from manim import (",
+        "from manim import *\nfrom manim import (",
+    )
+
+    findings = scene_code.check_scene_code(source, BEATS)
+
+    assert any("wildcard" in finding for finding in findings), findings
+
+
 @pytest.mark.parametrize(
     ("snippet", "needle"),
     [
