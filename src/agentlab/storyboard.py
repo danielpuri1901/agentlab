@@ -98,6 +98,57 @@ def ungrounded_numbers(data: dict, digest: str, plan: ScenePlan) -> list[str]:
     return found
 
 
+def _fit_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit].rsplit(" ", 1)[0].rstrip(" ,;:")
+    return clipped.rstrip(".") + "."
+
+
+def _repair_ungrounded_numbers(board: Storyboard, digest: str, plan: ScenePlan) -> None:
+    mechanism_index = 0
+    for beat in board.beats:
+        narration_data = {"beats": [{"narration": beat.narration}]}
+        if ungrounded_numbers(narration_data, digest, plan):
+            if beat.role == "title":
+                definition_limit = min(
+                    MAX_DEFINITION, MAX_NARRATION - len(plan.title) - 2
+                )
+                board.simple_definition = _fit_text(
+                    plan.one_line_claim, definition_limit
+                )
+                beat.narration = f"{plan.title}. {board.simple_definition}"
+            elif beat.role == "problem":
+                beat.narration = _fit_text(plan.one_line_claim, MAX_NARRATION)
+            elif beat.role == "mechanism":
+                step = plan.mechanism_steps[
+                    min(mechanism_index, len(plan.mechanism_steps) - 1)
+                ]
+                beat.narration = _fit_text(step.narration, MAX_NARRATION)
+            elif beat.role == "result" and plan.key_numbers:
+                number = plan.key_numbers[0]
+                beat.narration = _fit_text(
+                    f"{number.value}: {number.meaning}", MAX_NARRATION
+                )
+            elif beat.role == "application":
+                beat.narration = plan.application_or_implication
+            elif beat.role == "limit":
+                beat.narration = plan.limits_or_caveats
+            elif beat.role == "question":
+                beat.narration = plan.street_test_question
+            else:
+                beat.narration = _fit_text(plan.one_line_claim, MAX_NARRATION)
+        beat.on_screen_text = [
+            label
+            for label in beat.on_screen_text
+            if not ungrounded_numbers(
+                {"beats": [{"on_screen_text": [label]}]}, digest, plan
+            )
+        ]
+        if beat.role == "mechanism":
+            mechanism_index += 1
+
+
 def _clip(data: dict) -> dict:
     for key, limit in (
         ("title", MAX_TITLE),
@@ -199,6 +250,7 @@ def parse_storyboard(
     for beat in board.beats:
         if beat.role == "application":
             beat.narration = plan.application_or_implication
+    _repair_ungrounded_numbers(board, digest, plan)
     error = _structure_error(board, plan)
     if error:
         return None, error

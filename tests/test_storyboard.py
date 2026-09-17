@@ -106,11 +106,14 @@ def test_ungrounded_numbers_compares_complete_numeric_tokens(golden, plan):
     assert sb.ungrounded_numbers(golden, DIGEST, plan) == ["125", "4%"]
 
 
-def test_parse_storyboard_treats_ungrounded_number_as_validation_error(golden, plan):
+def test_parse_storyboard_repairs_ungrounded_number_from_scene_plan(golden, plan):
     golden["beats"][3]["narration"] = "Codes first keeps 91%."
+    golden["beats"][3]["on_screen_text"] = ["91% retained"]
     board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
-    assert board is None
-    assert "91%" in error
+    assert error == ""
+    assert board is not None
+    assert "91%" not in board.model_dump_json()
+    assert sb.ungrounded_numbers(board.model_dump(), DIGEST, plan) == []
 
 
 def test_design_storyboard_retries_once_with_the_error_then_succeeds(golden, plan):
@@ -129,11 +132,11 @@ def test_design_storyboard_retries_once_with_the_error_then_succeeds(golden, pla
     assert len(board.beats) == 8
 
 
-def test_design_storyboard_uses_a_second_correction_for_an_invented_number(
+def test_design_storyboard_uses_a_second_correction_for_repeated_invalid_structure(
     golden, plan
 ):
     bad = json.loads(json.dumps(golden))
-    bad["beats"][1]["narration"] = "The interface fails on 24% of tasks."
+    bad["beats"] = bad["beats"][:2]
     replies = iter([_fenced(bad), _fenced(bad), _fenced(golden)])
     calls = []
 
@@ -144,7 +147,7 @@ def test_design_storyboard_uses_a_second_correction_for_an_invented_number(
     board = sb.design_storyboard(DIGEST, plan, complete, model="m")
 
     assert len(calls) == 3
-    assert "24%" in calls[2][-1]["content"]
+    assert "beats" in calls[2][-1]["content"]
     assert len(board.beats) == 8
 
 
