@@ -179,10 +179,45 @@ resource "aws_ecs_task_definition" "explain" {
 
   container_definitions = jsonencode([
     {
-      name                   = "explain"
+      name                   = "init-render-tmp"
       image                  = "${aws_ecr_repository.agentlab.repository_url}:${var.video_image_tag}"
-      essential              = true
-      command                = ["worker", "explain"]
+      essential              = false
+      entryPoint             = ["/bin/sh", "-c"]
+      command                = ["chmod 1777 /tmp"]
+      user                   = "0"
+      readonlyRootFilesystem = true
+      linuxParameters = {
+        capabilities = {
+          drop = ["ALL"]
+        }
+      }
+      mountPoints = [
+        {
+          sourceVolume  = "render-tmp"
+          containerPath = "/tmp"
+          readOnly      = false
+        }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.explain.name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "explain-init"
+        }
+      }
+    },
+    {
+      name      = "explain"
+      image     = "${aws_ecr_repository.agentlab.repository_url}:${var.video_image_tag}"
+      essential = true
+      command   = ["worker", "explain"]
+      dependsOn = [
+        {
+          containerName = "init-render-tmp"
+          condition     = "SUCCESS"
+        }
+      ]
       user                   = "999:999"
       readonlyRootFilesystem = true
       linuxParameters = {
@@ -207,6 +242,10 @@ resource "aws_ecs_task_definition" "explain" {
         { name = "PICK_MODEL", value = "bedrock/arn:aws:bedrock:eu-west-1:891377302765:application-inference-profile/kpbqsnaqf2ti" },
         { name = "DEEP_READ_PRICE_MODEL", value = "bedrock/global.anthropic.claude-sonnet-4-6" },
         { name = "PICK_PRICE_MODEL", value = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0" },
+        { name = "HOME", value = "/tmp/home" },
+        { name = "TMPDIR", value = "/tmp" },
+        { name = "MPLCONFIGDIR", value = "/tmp/matplotlib" },
+        { name = "XDG_CACHE_HOME", value = "/tmp/cache" },
       ]
       logConfiguration = {
         logDriver = "awslogs"
