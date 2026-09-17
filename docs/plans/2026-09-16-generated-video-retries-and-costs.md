@@ -13,5 +13,5 @@
 - [x] Add cost lines to Telegram captions with tests.
 - [x] Add prompt cache controls to stable system messages with tests.
 - [x] Run focused tests, the full test suite, lint, and formatting checks.
-- [ ] Build and deploy the video image and Terraform changes.
-- [ ] Run one production-like video and inspect its logs, ledger row, cost, and sampled frames.
+- [x] Build and deploy the video image and Terraform changes.
+- [x] Run one production-like video and inspect its logs, ledger row, cost, and sampled frames.
