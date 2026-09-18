@@ -184,7 +184,7 @@ def _clip(data: dict) -> dict:
     return data
 
 
-def _structure_error(board: Storyboard, plan: ScenePlan) -> str:
+def _structure_error(board: Storyboard, plan: ScenePlan, digest: str) -> str:
     if board.title != plan.title:
         return "storyboard title must match the scene plan title exactly"
     roles = [beat.role for beat in board.beats]
@@ -214,10 +214,14 @@ def _structure_error(board: Storyboard, plan: ScenePlan) -> str:
     allowed_terms = {
         _plain(value) for node in plan.diagram.nodes for value in (node.id, node.label)
     } | {_plain(step.label) for step in plan.mechanism_steps}
+    grounded_text = _plain(digest + " " + plan.model_dump_json())
     unknown = [
         item.paper_term
         for item in board.mapping
-        if _plain(item.paper_term) not in allowed_terms
+        if (
+            _plain(item.paper_term) not in allowed_terms
+            and _plain(item.paper_term) not in grounded_text
+        )
     ]
     if unknown:
         return "mapping uses terms outside the scene plan: " + ", ".join(unknown)
@@ -251,7 +255,7 @@ def parse_storyboard(
         if beat.role == "application":
             beat.narration = plan.application_or_implication
     _repair_ungrounded_numbers(board, digest, plan)
-    error = _structure_error(board, plan)
+    error = _structure_error(board, plan, digest)
     if error:
         return None, error
     missing = ungrounded_numbers(board.model_dump(), digest, plan)
@@ -304,7 +308,8 @@ Never use an em dash.
 The first beat's on_screen_text must contain the exact storyboard title.
 The first beat's narration must contain simple_definition exactly.
 Use at most two short on-screen labels per beat.
-Only use paper terms that occur as diagram node labels or mechanism step labels.
+Use paper terms from the digest or scene plan. Prefer exact diagram node labels or
+mechanism step labels, but a specific term grounded in the digest is also valid.
 Every number must occur in the digest or scene plan.
 Everything must be drawable with Manim text, shapes, paths, particles, and transformations.
 

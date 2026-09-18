@@ -58,6 +58,25 @@ def test_parse_storyboard_pins_application_to_grounded_plan(golden, plan):
     assert actual.narration == plan.application_or_implication
 
 
+def test_parse_storyboard_accepts_mapping_term_grounded_in_digest(golden, plan):
+    golden["mapping"][0]["paper_term"] = "conventional-commit classifier"
+    digest = DIGEST + "\nThe conventional-commit classifier labels each change."
+
+    board, error = sb.parse_storyboard(_fenced(golden), digest, plan)
+
+    assert error == ""
+    assert board is not None
+
+
+def test_parse_storyboard_rejects_mapping_term_missing_from_digest_and_plan(golden, plan):
+    golden["mapping"][0]["paper_term"] = "invented hidden classifier"
+
+    board, error = sb.parse_storyboard(_fenced(golden), DIGEST, plan)
+
+    assert board is None
+    assert "mapping uses terms outside the scene plan" in error
+
+
 def test_parse_storyboard_clips_long_strings_instead_of_failing(golden, plan):
     golden["visual_focus"] = "x" * 500
     golden["beats"][0]["visual"] = "y" * 900

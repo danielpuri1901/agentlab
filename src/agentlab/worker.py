@@ -34,6 +34,7 @@ from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 
 from agentlab.aws_costs import month_to_date_tagged_cost
+from agentlab.bedrock import converse as bedrock_converse
 from agentlab.charts import verdict_chart_png
 from agentlab.costs import (
     ModelCallUsage,
@@ -414,16 +415,24 @@ def _run_completion(
     import litellm
 
     price_id = pricing_model or _pricing_model_for(model)
-    request_messages = messages
-    if price_id and "anthropic.claude" in price_id:
-        request_messages = cache_static_system_prompt(messages)
     started = time.perf_counter()
-    response = litellm.completion(
-        model=model,
-        messages=request_messages,
-        max_tokens=max_tokens,
-        timeout=timeout,
-    )
+    if model.startswith("bedrock/arn:aws:bedrock:"):
+        response = bedrock_converse(
+            model,
+            messages,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
+    else:
+        request_messages = messages
+        if price_id and "anthropic.claude" in price_id:
+            request_messages = cache_static_system_prompt(messages)
+        response = litellm.completion(
+            model=model,
+            messages=request_messages,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
     if usage_sink is not None and price_id is not None:
         try:
             usage_sink.append(
