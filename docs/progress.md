@@ -36,7 +36,7 @@ timeline
 ```mermaid
 flowchart LR
     S["Scheduler\n08:00 flush\n09:30 + 12:00 propose"] --> P["Proposer on Fargate\nreads releases, arXiv, HN\nfiles cited proposals"]
-    P -->|ping + buttons| D["Your phone\n@Learn1901_bot"]
+    P -->|ping + buttons| D["Your phone\n@your_bot"]
     D -->|tap| L["Approvals Lambda\nonly your id counts"]
     L -->|registered rerun| F["Fabric\nSQS -> Step Functions -> Fargate"]
     F -->|verdict + chart| D

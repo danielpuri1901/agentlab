@@ -14,7 +14,7 @@ No new database: proposals and pending pings live in the existing `agentlab-stat
 ## Global Constraints
 
 - Every user-facing message follows STE: headline first, short sentences, plain words, and NEVER an em dash (use a plain dash).
-- Only Telegram user id 6309668956 may decide a proposal; a tap from any other id is logged and ignored, with no state change.
+- Only Telegram user id 123456789 may decide a proposal; a tap from any other id is logged and ignored, with no state change.
 - Secrets (bot token, webhook secret) live ONLY in SSM Parameter Store as SecureString; never in the repo, the image, plan/spec files, or Terraform state.
 - Quiet hours are 23:00-08:00 Europe/Amsterdam: pings queue in DynamoDB and flush at the 08:00 scheduled run.
 - Max 3 proposals filed per day; auto-submit is allowed ONLY for proposals with a prepared, validated `submit_body` (registered compaction re-runs with `tasks<=20`, `repeats<=5`, model starting with `bedrock/`).
@@ -107,7 +107,7 @@ def fabric():
         table.wait_until_exists()
         ssm = boto3.client("ssm", region_name=REGION)
         ssm.put_parameter(Name=TOKEN_PARAM, Value="test-token", Type="SecureString")
-        ssm.put_parameter(Name=CHAT_ID_PARAM, Value="6309668956", Type="String")
+        ssm.put_parameter(Name=CHAT_ID_PARAM, Value="123456789", Type="String")
         yield table, ssm
 
 
@@ -156,7 +156,7 @@ def test_notify_daytime_sends_with_buttons(fabric, telegram_calls, monkeypatch):
     assert len(telegram_calls) == 1
     url, kwargs = telegram_calls[0]
     assert url == "https://api.telegram.org/bottest-token/sendMessage"
-    assert kwargs["json"]["chat_id"] == "6309668956"
+    assert kwargs["json"]["chat_id"] == "123456789"
     assert kwargs["json"]["reply_markup"]["inline_keyboard"][0][0] == {
         "text": "APPROVE 1",
         "callback_data": "prop:p1:approve",
@@ -1340,12 +1340,12 @@ sys.modules["approvals_webhook"] = webhook
 spec.loader.exec_module(webhook)
 ```
 
-Fixtures: moto table + SSM (params `/agentlab/telegram/bot-token` and `/agentlab/telegram/webhook-secret`, values `"test-token"`/`"test-secret"`) + an SQS queue; env vars set via monkeypatch (`STATE_TABLE`, `QUEUE_URL`, `ALLOWED_USER_ID="6309668956"`, `TOKEN_PARAM`, `SECRET_PARAM`); `monkeypatch.setattr(webhook, "_telegram", recorder)` capturing `(method, payload)` tuples; clear `webhook._SSM` between tests (`monkeypatch.setattr(webhook, "_SSM", {})`).
+Fixtures: moto table + SSM (params `/agentlab/telegram/bot-token` and `/agentlab/telegram/webhook-secret`, values `"test-token"`/`"test-secret"`) + an SQS queue; env vars set via monkeypatch (`STATE_TABLE`, `QUEUE_URL`, `ALLOWED_USER_ID="123456789"`, `TOKEN_PARAM`, `SECRET_PARAM`); `monkeypatch.setattr(webhook, "_telegram", recorder)` capturing `(method, payload)` tuples; clear `webhook._SSM` between tests (`monkeypatch.setattr(webhook, "_SSM", {})`).
 
 Event builder:
 
 ```python
-def make_event(secret="test-secret", from_id=6309668956, data="prop:p1:approve",
+def make_event(secret="test-secret", from_id=123456789, data="prop:p1:approve",
                text="msg text", keyboard=None):
     update = {
         "callback_query": {
@@ -1354,7 +1354,7 @@ def make_event(secret="test-secret", from_id=6309668956, data="prop:p1:approve",
             "data": data,
             "message": {
                 "message_id": 7,
-                "chat": {"id": 6309668956},
+                "chat": {"id": 123456789},
                 "text": text,
                 "reply_markup": {"inline_keyboard": keyboard or []},
             },
@@ -1623,7 +1623,7 @@ In `infra/variables.tf`, add:
 variable "telegram_chat_id" {
   description = "Daniel's Telegram chat/user id. The webhook Lambda accepts taps from this id only. Not a secret."
   type        = string
-  default     = "6309668956"
+  default     = "123456789"
 }
 ```
 
@@ -2145,7 +2145,7 @@ git commit -m "feat: webhook registration script"
 
 - [ ] **Step 2: Store the bot token in SSM**
 
-The token is the one Daniel got from BotFather for @Learn1901_bot (he pasted it in the session; it lives nowhere in the repo).
+The token is the one Daniel got from BotFather for @your_bot (he pasted it in the session; it lives nowhere in the repo).
 Run with the value passed inline from the session, not from a file:
 
 ```bash

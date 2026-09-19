@@ -1,6 +1,50 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+.aws/
+credentials
+credentials.*
+secrets/
+*.secret
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Terraform local state and private values
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+.terraformrc
+terraform.rc
+
+# Python
 .venv/
 __pycache__/
+*.py[cod]
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local tools and output
+.DS_Store
+.idea/
+.vscode/
 /logs/
 .superpowers/
 media/

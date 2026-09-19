@@ -15,7 +15,7 @@ Video explainers render in the house style (mechanism-first with real artifacts,
 
 ## The product, concretely (what lands where, phone-first)
 
-Every proposer run ends in ONE digest email to danielpuri1901@gmail.com.
+Every proposer run ends in ONE digest email to you@example.com.
 The email body: 1-3 findings in STE (headline first), each with its numbers; a "pending your ratification" list; links.
 Links point into the private GitHub repo, which renders leaderboards and plays mp4 videos in the GitHub mobile app - no laptop needed.
 Charts ship as PNGs rendered by the worker (matplotlib is already in the image) and committed with the finding.

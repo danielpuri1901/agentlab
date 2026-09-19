@@ -74,7 +74,7 @@ def fabric():
         table.wait_until_exists()
         ssm = boto3.client("ssm", region_name=REGION)
         ssm.put_parameter(Name=TOKEN_PARAM, Value="test-token", Type="SecureString")
-        ssm.put_parameter(Name=CHAT_ID_PARAM, Value="6309668956", Type="String")
+        ssm.put_parameter(Name=CHAT_ID_PARAM, Value="123456789", Type="String")
         s3 = boto3.client("s3", region_name=REGION)
         s3.create_bucket(Bucket=BUCKET)
         yield table, ssm, s3

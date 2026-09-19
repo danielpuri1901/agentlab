@@ -137,7 +137,7 @@ resource "aws_ecs_task_definition" "proposer" {
         { name = "AWS_DEFAULT_REGION", value = var.aws_region },
         { name = "STATE_TABLE", value = aws_dynamodb_table.state.name },
         { name = "RESULTS_BUCKET", value = aws_s3_bucket.results.id },
-        { name = "PROPOSER_MODEL", value = "bedrock/arn:aws:bedrock:eu-west-1:891377302765:application-inference-profile/kpbqsnaqf2ti" },
+        { name = "PROPOSER_MODEL", value = var.proposer_model },
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -238,8 +238,8 @@ resource "aws_ecs_task_definition" "explain" {
         { name = "AWS_DEFAULT_REGION", value = var.aws_region },
         { name = "STATE_TABLE", value = aws_dynamodb_table.state.name },
         { name = "RESULTS_BUCKET", value = aws_s3_bucket.results.id },
-        { name = "DEEP_READ_MODEL", value = "bedrock/arn:aws:bedrock:eu-west-1:891377302765:application-inference-profile/mfzwa25maf8z" },
-        { name = "PICK_MODEL", value = "bedrock/arn:aws:bedrock:eu-west-1:891377302765:application-inference-profile/kpbqsnaqf2ti" },
+        { name = "DEEP_READ_MODEL", value = var.deep_read_model },
+        { name = "PICK_MODEL", value = var.pick_model },
         { name = "DEEP_READ_PRICE_MODEL", value = "bedrock/global.anthropic.claude-sonnet-4-6" },
         { name = "PICK_PRICE_MODEL", value = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0" },
         { name = "HOME", value = "/tmp/home" },

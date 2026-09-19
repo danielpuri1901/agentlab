@@ -5,7 +5,7 @@ Supersedes the delivery sections of docs/plans/2026-08-17-v03-daytime-lab-draft.
 
 ## The product
 
-AgentLab talks to Daniel on Telegram (bot @Learn1901_bot, chat id 6309668956) the moment things happen, and Daniel steers it with taps.
+AgentLab talks to Daniel on Telegram (bot @your_bot, chat id 123456789) the moment things happen, and Daniel steers it with taps.
 Proposer runs START on schedule (09:30 and 12:00 Amsterdam); every MESSAGE is event-driven: an experiment finalizes, a proposal is ready, a champion changes.
 Ping format: STE headline first, one key number, a chart image or video when one exists, APPROVE/REJECT inline buttons when a decision is needed.
 Quiet hours 23:00-08:00 Amsterdam: pings queue and deliver at 08:00.

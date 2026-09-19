@@ -2,6 +2,10 @@
 *.tfstate
 *.tfstate.*
 terraform.tfvars
+*.tfvars
+*.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
 image_tag.auto.tfvars
 tfplan
 .build/

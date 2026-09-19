@@ -1,0 +1,10 @@
+# Copy this file to runtime.auto.tfvars, then replace every example value.
+# runtime.auto.tfvars is ignored by Git.
+
+alert_email        = "you@example.com"
+results_bucket_name = "agentlab-results-123456789012"
+telegram_chat_id    = "123456789"
+
+proposer_model  = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
+deep_read_model = "bedrock/global.anthropic.claude-sonnet-4-6"
+pick_model      = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"

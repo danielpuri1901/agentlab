@@ -38,7 +38,7 @@ BASELINE_STYLE = "truncate"
 CANDIDATE_STYLE = "structured"
 
 DEFAULT_STATE_TABLE = "agentlab-state"
-DEFAULT_RESULTS_BUCKET = "agentlab-results-891377302765"
+DEFAULT_RESULTS_BUCKET = "agentlab-results-example"
 
 _MODEL_PATTERN = re.compile(r"^[A-Za-z0-9./:_-]+$")
 

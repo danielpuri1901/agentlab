@@ -29,7 +29,7 @@ QUEUE_NAME = "agentlab-experiments-test"
 REGION = "us-east-1"
 TOKEN_PARAM = "/agentlab/telegram/bot-token"
 SECRET_PARAM = "/agentlab/telegram/webhook-secret"
-ALLOWED_USER_ID = "6309668956"
+ALLOWED_USER_ID = "123456789"
 
 SUBMIT_BODY = json.dumps(
     {
@@ -113,7 +113,7 @@ def fabric(monkeypatch):
 
 def make_event(
     secret="test-secret",
-    from_id=6309668956,
+    from_id=123456789,
     data="prop:p1:approve",
     text="msg text",
     keyboard=None,
@@ -125,7 +125,7 @@ def make_event(
             "data": data,
             "message": {
                 "message_id": 7,
-                "chat": {"id": 6309668956},
+                "chat": {"id": 123456789},
                 "text": text,
                 "reply_markup": {"inline_keyboard": keyboard or []},
             },
@@ -355,11 +355,11 @@ def test_base64_encoded_body(fabric, recorder):
     update = {
         "callback_query": {
             "id": "cb1",
-            "from": {"id": 6309668956},
+            "from": {"id": 123456789},
             "data": "prop:p1:approve",
             "message": {
                 "message_id": 7,
-                "chat": {"id": 6309668956},
+                "chat": {"id": 123456789},
                 "text": "msg text",
                 "reply_markup": {"inline_keyboard": []},
             },

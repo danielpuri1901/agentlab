@@ -85,7 +85,7 @@ def moto_fabric_with_ssm(moto_fabric):
     s3, dynamodb, table = moto_fabric
     ssm = boto3.client("ssm", region_name=REGION)
     ssm.put_parameter(Name=TOKEN_PARAM, Value="test-token", Type="SecureString")
-    ssm.put_parameter(Name=CHAT_ID_PARAM, Value="6309668956", Type="String")
+    ssm.put_parameter(Name=CHAT_ID_PARAM, Value="123456789", Type="String")
     yield s3, dynamodb, table, ssm
 
 

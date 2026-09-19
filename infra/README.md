@@ -1,21 +1,21 @@
 # infra
 
-Terraform foundation for AgentLab's AWS fabric (v0.2).
-This root manages the account-level cost guardrail and the two data stores the cloud worker commands already depend on.
-State is local (no S3 backend) for v0.2.
-Nothing here has been applied yet.
+Terraform for AgentLab's AWS services.
+State is local.
+Terraform state and private runtime values stay outside Git.
 
 ## What exists
 
 - `main.tf` - provider configuration: AWS provider pinned to `~> 6.0`, region `eu-west-1`, `default_tags` applying `project = agentlab` to every resource.
-- `variables.tf` - input variables with defaults matching the contracts below.
+- `variables.tf` - public defaults plus required private deployment inputs.
 - `outputs.tf` - the table name, bucket name, and queue URL/ARN that later tasks (ECS task definitions, the cloud CLI) will consume.
-- `budget.tf` - an `aws_budgets_budget` monthly cost budget of $50, emailing an ACTUAL (not forecasted) spend alert at 80% to danielpuri1901@gmail.com.
+- `budget.tf` - an `aws_budgets_budget` monthly cost budget with an email alert at 80% actual spend.
 - `dynamodb.tf` - the `agentlab-state` table (PK `experiment_id`, SK `sk`, both String, on-demand billing), matching the shape `src/agentlab/worker.py` already reads and writes.
-- `s3.tf` - the `agentlab-results-891377302765` bucket: versioning explicitly off, all public access blocked, and a lifecycle rule that aborts abandoned multipart uploads after 7 days.
+- `s3.tf` - the results bucket: versioning off, public access blocked, abandoned multipart uploads removed after 7 days.
 - `sqs.tf` - the `agentlab-experiments` queue plus its dead-letter queue, with a redrive policy and the visibility-timeout reasoning cited inline.
 - `ecr.tf` - the `agentlab` ECR repository (scan on push) and lifecycle rules that independently keep the last 10 `app-` images and the last 10 `video-` images.
-- `.gitignore` - ignores `.terraform/`, Terraform state files, and `image_tag.auto.tfvars` (see "image_tag bootstrap" below); the `.terraform.lock.hcl` provider lock file is committed as normal.
+- `runtime.auto.tfvars.example` - safe example values for required deployment inputs.
+- `.gitignore` - ignores Terraform state plus every local variable file; the provider lock file stays tracked.
 
 ## image_tag bootstrap
 
@@ -25,11 +25,6 @@ That means a plain `terraform apply` with no override would try to run an image 
 The mechanism that prevents this: every successful run of `scripts/build_and_push_image.sh` writes `infra/image_tag.auto.tfvars` with `image_tag = "app-<git short sha>"` for the commit it just built and pushed.
 Terraform automatically loads `image_tag.auto.tfvars` from the working directory on every plan/apply, with no `-var` flag needed, so a plain `terraform apply` after a push always picks up the exact image that was just built - never `:latest`, never a stale pin.
 `image_tag.auto.tfvars` is gitignored on purpose: it is a local build artifact recording "what did I last push," not a checked-in value, and it will differ between whoever last ran the build script.
-
-## What does not exist yet
-
-No compute, no IAM roles beyond what the budget resource needs, no Step Functions, no EventBridge Pipe.
-Those arrive in later tasks once this foundation is reviewed.
 
 ## How to validate
 

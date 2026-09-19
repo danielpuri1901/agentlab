@@ -37,5 +37,5 @@ Structured summarization retains more of the planted per-fact information across
 ## Replay
 
 Inspect eval logs for this experiment:
-- `/Users/danielpuri/Desktop/Projects/agentlab/results/experiment-20260816T131253Z/logs/2026-08-16T13-12-55-00-00_compaction-task_kxW6jjL2fC2xY5HVVxMJ4S.eval`
-- `/Users/danielpuri/Desktop/Projects/agentlab/results/experiment-20260816T131253Z/logs/2026-08-16T13-15-06-00-00_compaction-task_MgMaYwzKacnfKmwUKMrRjG.eval`
+- `/path/to/agentlab/results/experiment-20260816T131253Z/logs/2026-08-16T13-12-55-00-00_compaction-task_kxW6jjL2fC2xY5HVVxMJ4S.eval`
+- `/path/to/agentlab/results/experiment-20260816T131253Z/logs/2026-08-16T13-15-06-00-00_compaction-task_MgMaYwzKacnfKmwUKMrRjG.eval`

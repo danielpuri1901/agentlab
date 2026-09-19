@@ -53,7 +53,7 @@ def fabric():
         table.wait_until_exists()
         ssm = boto3.client("ssm", region_name=REGION)
         ssm.put_parameter(Name=TOKEN_PARAM, Value="test-token", Type="SecureString")
-        ssm.put_parameter(Name=CHAT_ID_PARAM, Value="6309668956", Type="String")
+        ssm.put_parameter(Name=CHAT_ID_PARAM, Value="123456789", Type="String")
         yield table, ssm
 
 
@@ -113,7 +113,7 @@ def test_notify_daytime_sends_with_buttons(fabric, telegram_calls, monkeypatch):
     assert len(telegram_calls) == 1
     url, kwargs = telegram_calls[0]
     assert url == "https://api.telegram.org/bottest-token/sendMessage"
-    assert kwargs["json"]["chat_id"] == "6309668956"
+    assert kwargs["json"]["chat_id"] == "123456789"
     assert kwargs["json"]["reply_markup"]["inline_keyboard"][0][0] == {
         "text": "APPROVE 1",
         "callback_data": "prop:p1:approve",
@@ -240,7 +240,7 @@ def test_oversized_photo_dropped_from_queue(fabric, telegram_calls, monkeypatch)
 
 
 def _config():
-    return notify_mod.TelegramConfig(token="test-token", chat_id="6309668956")
+    return notify_mod.TelegramConfig(token="test-token", chat_id="123456789")
 
 
 def test_send_video_caption_truncated_and_buttons_present(telegram_calls, tmp_path):

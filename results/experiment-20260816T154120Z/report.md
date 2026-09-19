@@ -37,5 +37,5 @@ The 'codes_first' compaction style retains more of the planted per-fact informat
 ## Replay
 
 Inspect eval logs for this experiment:
-- `/Users/danielpuri/Desktop/Projects/agentlab/results/experiment-20260816T154120Z/logs/2026-08-16T15-41-21-00-00_compaction-task_fYkw2D9J79fmoJLRPXpQd4.eval`
-- `/Users/danielpuri/Desktop/Projects/agentlab/results/experiment-20260816T154120Z/logs/2026-08-16T15-43-03-00-00_compaction-task_4MpvR3nNDBMQUN2fz2LCrm.eval`
+- `/path/to/agentlab/results/experiment-20260816T154120Z/logs/2026-08-16T15-41-21-00-00_compaction-task_fYkw2D9J79fmoJLRPXpQd4.eval`
+- `/path/to/agentlab/results/experiment-20260816T154120Z/logs/2026-08-16T15-43-03-00-00_compaction-task_4MpvR3nNDBMQUN2fz2LCrm.eval`

@@ -31,7 +31,7 @@
   "unpriced_models": [],
   "total_tokens": 733567,
   "log_paths": [
-    "/Users/danielpuri/Desktop/Projects/agentlab/results/pilot-logs/2026-08-16T14-47-04-00-00_compaction-task_dFgRjeQwVCwghV7kBxC6iG.eval",
-    "/Users/danielpuri/Desktop/Projects/agentlab/results/pilot-logs/2026-08-16T14-47-13-00-00_compaction-task_7J2hn36PiSKT2STRq2MAC6.eval"
+    "/path/to/agentlab/results/pilot-logs/2026-08-16T14-47-04-00-00_compaction-task_dFgRjeQwVCwghV7kBxC6iG.eval",
+    "/path/to/agentlab/results/pilot-logs/2026-08-16T14-47-13-00-00_compaction-task_7J2hn36PiSKT2STRq2MAC6.eval"
   ]
 }

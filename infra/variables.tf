@@ -13,7 +13,6 @@ variable "project" {
 variable "alert_email" {
   description = "Email address that receives the monthly budget notification."
   type        = string
-  default     = "danielpuri1901@gmail.com"
 }
 
 variable "monthly_budget_usd" {
@@ -31,7 +30,6 @@ variable "state_table_name" {
 variable "results_bucket_name" {
   description = "S3 bucket for EvalLogs and reports. Globally unique, so suffixed with the account id."
   type        = string
-  default     = "agentlab-results-891377302765"
 }
 
 variable "experiments_queue_name" {
@@ -47,9 +45,24 @@ variable "image_tag" {
 }
 
 variable "telegram_chat_id" {
-  description = "Daniel's Telegram chat/user id. The webhook Lambda accepts taps from this id only. Not a secret."
+  description = "Telegram chat/user id. The webhook Lambda accepts taps from this id only."
   type        = string
-  default     = "6309668956"
+  sensitive   = true
+}
+
+variable "proposer_model" {
+  description = "Bedrock model id used by the proposal task."
+  type        = string
+}
+
+variable "deep_read_model" {
+  description = "Bedrock model id used to read papers and generate videos."
+  type        = string
+}
+
+variable "pick_model" {
+  description = "Bedrock model id used to rank paper candidates."
+  type        = string
 }
 
 variable "video_image_tag" {

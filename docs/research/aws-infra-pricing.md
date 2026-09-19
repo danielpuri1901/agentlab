@@ -408,7 +408,7 @@ The NAT gateway, the idle ALB and the interface endpoints all bill by the hour w
 
 ### 4.4 Infrastructure against model tokens
 
-Model costs are taken from the sibling report at `/Users/danielpuri/Desktop/Projects/agentlab/docs/research/bedrock-model-pricing.md`, using its medium profile of 500k input and 30k output tokens per run.
+Model costs are taken from the sibling report at `/path/to/agentlab/docs/research/bedrock-model-pricing.md`, using its medium profile of 500k input and 30k output tokens per run.
 
 | Workhorse model | 200 runs of model spend | Infra at $12.87 | Infra share of total |
 | --- | --- | --- | --- |
