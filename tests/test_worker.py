@@ -5,7 +5,6 @@ live AWS or makes a network call.
 
 import asyncio
 import json
-import subprocess
 import sys
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -576,8 +575,8 @@ def test_run_arm_failure_ping_failure_does_not_mask_error(moto_fabric, monkeypat
 
 # ---------------------------------------------------------------------------
 # `worker explain`: three tracks (core/classic/novel), fully offline.
-# gather_exploit/gather_explore/pick_paper/deep_read/verify_voice/narrate/
-# render_video are all monkeypatched on `agentlab.worker` (the names looked
+# gather_exploit/gather_explore/pick_paper/deep_read/verify_voice and
+# compose_story_video are monkeypatched on `agentlab.worker` (the names looked
 # up at call time inside explain_command's own module, same pattern as
 # `agentlab.worker._run_arm` above); DynamoDB/S3/Telegram stay real against
 # moto/the monkeypatched httpx.post, so mark_seen/is_seen, the S3 digest
@@ -664,11 +663,6 @@ def _fake_rank_papers(
     return candidates[:limit]
 
 
-def _fake_render_video(plan, clips, out_path):
-    Path(out_path).write_bytes(b"fake-mp4-bytes")
-    return Path(out_path)
-
-
 def _fake_story_failed(*args, **kwargs):
     raise StoryFailed("test: forced fallback")
 
@@ -713,12 +707,7 @@ def _patch_explain_render_stages(monkeypatch, fail_urls=frozenset(), story=None)
     monkeypatch.setattr("agentlab.worker.deep_read", _make_fake_deep_read(fail_urls))
     monkeypatch.setattr("agentlab.worker.verify_voice", lambda polly_client: "Joanna")
     monkeypatch.setattr(
-        "agentlab.worker.narrate",
-        lambda polly_client, texts, voice_id, out_dir: ["clip"],
-    )
-    monkeypatch.setattr("agentlab.worker.render_video", _fake_render_video)
-    monkeypatch.setattr(
-        "agentlab.worker.compose_story_video", story or _fake_story_failed
+        "agentlab.worker.compose_story_video", story or _fake_story_success
     )
 
 
@@ -950,31 +939,33 @@ def test_model_usage_record_uses_dynamodb_decimals():
     assert calls[0]["estimated_cost_usd"] == Decimal("0.00125")
 
 
-def test_explain_story_failure_falls_back_to_template_and_logs(
+def test_explain_story_failure_sends_digest_without_template_video(
     moto_fabric_with_ssm, telegram_calls, monkeypatch
 ):
     _set_daytime(monkeypatch)
     _set_explain_env(monkeypatch, track="core")
     _patch_explain_pools(monkeypatch)
-    _patch_explain_render_stages(monkeypatch)
+    _patch_explain_render_stages(monkeypatch, story=_fake_story_failed)
 
     result = runner.invoke(app, ["worker", "explain"])
     assert result.exit_code == 0, result.output
-    assert "explain: core=sent" in result.output
+    assert "explain: core=failed" in result.output
 
     table = boto3.resource("dynamodb").Table(TABLE)
     items = table.scan()["Items"]
-    row = next(i for i in items if i["experiment_id"].startswith("video#"))
-    assert row["render_path"] == "template"
-    assert row["story_key"] is None
-    fallback = [
+    assert not any(i["experiment_id"].startswith("video#") for i in items)
+    assert not any(call[0].endswith("/sendVideo") for call in telegram_calls)
+    failed = [
         i
         for i in items
-        if i["sk"].startswith("event#") and i["event"] == "STORY_FALLBACK"
+        if i["sk"].startswith("event#") and i["event"] == "STORY_FAILED"
     ]
-    assert len(fallback) == 1
-    assert "forced fallback" in fallback[0]["detail"]
-    assert fallback[0]["arm"] == "core"
+    assert len(failed) == 1
+    assert "forced fallback" in failed[0]["detail"]
+    assert failed[0]["arm"] == "core"
+    text_calls = [call for call in telegram_calls if call[0].endswith("/sendMessage")]
+    assert len(text_calls) == 1
+    assert "Read the full digest instead" in text_calls[0][1]["json"]["text"]
 
 
 @pytest.mark.parametrize(
@@ -1232,34 +1223,18 @@ def test_explain_core_deep_read_failure_pings_fallback_novel_still_sends(
     assert track_failed[0]["arm"] == "core"
 
 
-def test_explain_render_failure_includes_stderr_in_fallback_ping(
+def test_explain_story_failure_reason_appears_in_fallback_ping(
     moto_fabric_with_ssm, telegram_calls, monkeypatch
 ):
-    # A render/ffmpeg/manim subprocess failure raises CalledProcessError
-    # with the real reason on .stderr (video_render.run_subprocess always
-    # passes text=True, so .stderr is str, not bytes); the fallback ping
-    # must surface it, not just a bare exception repr.
     _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
     _set_explain_env(monkeypatch, track="core")
     _set_daytime(monkeypatch)
-    monkeypatch.setattr("agentlab.worker.gather_exploit", lambda: [CORE_CANDIDATE])
-    monkeypatch.setattr("agentlab.worker.gather_explore", lambda: [NOVEL_CANDIDATE])
-    monkeypatch.setattr("agentlab.worker.pick_paper", _fake_pick_paper)
-    monkeypatch.setattr("agentlab.worker.rank_papers", _fake_rank_papers)
-    monkeypatch.setattr("agentlab.worker.deep_read", _make_fake_deep_read())
-    monkeypatch.setattr("agentlab.worker.verify_voice", lambda polly_client: "Joanna")
-    monkeypatch.setattr(
-        "agentlab.worker.narrate",
-        lambda polly_client, plan, voice_id, out_dir: ["clip"],
-    )
+    _patch_explain_pools(monkeypatch)
 
-    def fake_render_video_raises(plan, clips, out_path):
-        raise subprocess.CalledProcessError(
-            1, ["uvx", "manim"], stderr="ffmpeg: No such filter: 'subtitles'"
-        )
+    def fake_story_failure(*args, **kwargs):
+        raise StoryFailed("ffmpeg: No such filter: 'subtitles'")
 
-    monkeypatch.setattr("agentlab.worker.render_video", fake_render_video_raises)
-    monkeypatch.setattr("agentlab.worker.compose_story_video", _fake_story_failed)
+    _patch_explain_render_stages(monkeypatch, story=fake_story_failure)
 
     result = runner.invoke(app, ["worker", "explain"])
     assert result.exit_code == 0, result.output
@@ -1267,7 +1242,6 @@ def test_explain_render_failure_includes_stderr_in_fallback_ping(
     text_calls = [c for c in telegram_calls if c[0].endswith("/sendMessage")]
     assert len(text_calls) == 1
     fallback_text = text_calls[0][1]["json"]["text"]
-    assert "What broke:" in fallback_text
     assert "No such filter: 'subtitles'" in fallback_text
 
     ledger_id = f"explain-{datetime.now(UTC).strftime('%Y%m%d')}"

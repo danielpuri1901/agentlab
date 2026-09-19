@@ -12,10 +12,10 @@ def _model_id(model: str) -> str:
     return model.removeprefix("bedrock/")
 
 
-def _text_blocks(text: str) -> list[dict]:
+def _text_blocks(text: str, *, cache_stable_prefix: bool = False) -> list[dict]:
     """Split scene repair prompts so changing feedback stays after the cache."""
-    if _FIX_ROUND not in text:
-        return [{"text": text}, {"cachePoint": {"type": "default"}}]
+    if not cache_stable_prefix or _FIX_ROUND not in text:
+        return [{"text": text}]
     stable, changing = text.split(_FIX_ROUND, 1)
     return [
         {"text": stable},
@@ -35,9 +35,9 @@ def _image_bytes(url: str) -> tuple[str, bytes]:
     raise ValueError("Bedrock image content requires a data URL")
 
 
-def _content_blocks(content) -> list[dict]:
+def _content_blocks(content, *, cache_stable_prefix: bool = False) -> list[dict]:
     if isinstance(content, str):
-        return _text_blocks(content)
+        return _text_blocks(content, cache_stable_prefix=cache_stable_prefix)
     result = []
     for block in content or []:
         if block.get("type") == "text":
@@ -51,19 +51,25 @@ def _content_blocks(content) -> list[dict]:
     return result
 
 
-def build_converse_request(messages: list[dict], *, model: str, max_tokens: int) -> dict:
+def build_converse_request(
+    messages: list[dict], *, model: str, max_tokens: int
+) -> dict:
     system = []
     converse_messages = []
     first_user = True
     for message in messages:
         role = message["role"]
-        blocks = _content_blocks(message.get("content", ""))
         if role == "system":
+            blocks = _content_blocks(message.get("content", ""))
             system.extend(blocks)
         else:
             if role not in {"user", "assistant"}:
                 raise ValueError(f"unsupported message role: {role}")
-            if role == "user" and first_user:
+            is_first_user = role == "user" and first_user
+            blocks = _content_blocks(
+                message.get("content", ""), cache_stable_prefix=is_first_user
+            )
+            if is_first_user:
                 first_user = False
                 if blocks and not any("cachePoint" in block for block in blocks):
                     blocks.append({"cachePoint": {"type": "default"}})
@@ -87,7 +93,9 @@ def response_from_converse(response: dict):
         cache_creation_tokens=int(usage.get("cacheWriteInputTokens", 0) or 0),
     )
     return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=text), finish_reason="stop")],
+        choices=[
+            SimpleNamespace(message=SimpleNamespace(content=text), finish_reason="stop")
+        ],
         usage=SimpleNamespace(
             prompt_tokens=int(usage.get("inputTokens", 0) or 0),
             completion_tokens=int(usage.get("outputTokens", 0) or 0),
@@ -103,7 +111,9 @@ def converse(model: str, messages: list[dict], *, max_tokens: int, timeout: int)
     client = boto3.client(
         "bedrock-runtime",
         region_name="eu-west-1",
-        config=Config(connect_timeout=10, read_timeout=timeout, retries={"max_attempts": 2}),
+        config=Config(
+            connect_timeout=10, read_timeout=timeout, retries={"max_attempts": 2}
+        ),
     )
     response = client.converse(
         **build_converse_request(messages, model=model, max_tokens=max_tokens)

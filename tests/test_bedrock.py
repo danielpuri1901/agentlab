@@ -30,6 +30,26 @@ def test_build_converse_request_places_cache_points_after_stable_prefixes():
     assert request["inferenceConfig"] == {"maxTokens": 12000}
 
 
+def test_build_converse_request_keeps_retry_history_under_cache_point_limit():
+    request = build_converse_request(
+        [
+            {"role": "system", "content": "stable rules"},
+            {"role": "user", "content": "stable storyboard"},
+            {"role": "assistant", "content": "invalid storyboard one"},
+            {"role": "user", "content": "fix error one"},
+            {"role": "assistant", "content": "invalid storyboard two"},
+            {"role": "user", "content": "fix error two"},
+        ],
+        model="bedrock/arn:aws:bedrock:eu-west-1:123:application-inference-profile/x",
+        max_tokens=12000,
+    )
+
+    blocks = request["system"] + [
+        block for message in request["messages"] for block in message["content"]
+    ]
+    assert sum("cachePoint" in block for block in blocks) == 2
+
+
 def test_response_from_converse_preserves_cache_usage():
     response = response_from_converse(
         {

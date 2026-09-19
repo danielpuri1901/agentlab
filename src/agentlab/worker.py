@@ -61,7 +61,7 @@ from agentlab.scene_plan import (
 from agentlab.sources import gather_exploit, gather_explore
 from agentlab.stats import paired_analysis, verdict
 from agentlab.story_video import StoryFailed, compose_story_video
-from agentlab.video_render import narrate, render_video, scene_texts, verify_voice
+from agentlab.video_render import verify_voice
 
 worker_app = typer.Typer()
 
@@ -770,7 +770,6 @@ def _run_explain_track(
     with tempfile.TemporaryDirectory(prefix=f"agentlab-explain-{track}-") as tmp_dir:
         tmp_path = Path(tmp_dir)
         video_path = tmp_path / "video.mp4"
-        story = None
         try:
             story = compose_story_video(
                 digest,
@@ -786,50 +785,44 @@ def _run_explain_track(
                 recent_visual_directions=_recent_visual_directions(table),
             )
         except StoryFailed as exc:
-            # The worst day equals the old video: log why, render the template.
             transition(
                 table,
                 f"explain-{today}",
-                "STORY_FALLBACK",
+                "STORY_FAILED",
                 track,
                 str(exc)[:200],
             )
-            clips = narrate(
-                polly_client, scene_texts(plan), voice_id, tmp_path / "narration"
-            )
-            render_video(plan, clips, video_path)
+            raise
 
         # Uploaded to S3 before notify so a quiet-hours queue can flush the
         # video later even though this tmp directory will be gone by then.
         video_key = f"videos/{key}.mp4"
         s3_client.upload_file(str(video_path), bucket, video_key)
 
-        story_key = None
-        if story is not None:
-            story_key = f"stories/{key}.json"
-            attempt_records = _upload_attempt_artifacts(
-                s3_client, bucket, key, story.attempt_records
-            )
-            story_record = {
-                "storyboard": story.storyboard.model_dump(),
-                "visual_direction": story.visual_direction,
-                "judgement": story.judgement,
-                "attempts": story.attempts,
-                "timing": story.timing,
-                "selected_attempt": story.selected_attempt,
-                "passed": story.passed,
-                "attempt_records": attempt_records,
-            }
-            s3_client.put_object(
-                Bucket=bucket,
-                Key=story_key,
-                Body=json.dumps(story_record, indent=1).encode("utf-8"),
-            )
-            s3_client.put_object(
-                Bucket=bucket,
-                Key=f"stories/{key}.py",
-                Body=story.scene_source.encode("utf-8"),
-            )
+        story_key = f"stories/{key}.json"
+        attempt_records = _upload_attempt_artifacts(
+            s3_client, bucket, key, story.attempt_records
+        )
+        story_record = {
+            "storyboard": story.storyboard.model_dump(),
+            "visual_direction": story.visual_direction,
+            "judgement": story.judgement,
+            "attempts": story.attempts,
+            "timing": story.timing,
+            "selected_attempt": story.selected_attempt,
+            "passed": story.passed,
+            "attempt_records": attempt_records,
+        }
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=story_key,
+            Body=json.dumps(story_record, indent=1).encode("utf-8"),
+        )
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=f"stories/{key}.py",
+            Body=story.scene_source.encode("utf-8"),
+        )
 
         model_cost, model_calls = _model_usage_record(model_usage)
         cost_lines = [f"Estimated model cost: ${model_cost:.4f}"]
@@ -883,21 +876,15 @@ def _run_explain_track(
                 "feedback_status": feedback_status,
                 "baseline_selection": baseline_selection,
                 "selection_probability": selection_probability,
-                "render_path": "story" if story is not None else "template",
-                "attempts": story.attempts if story is not None else None,
-                "judge_score": story.judge_score if story is not None else None,
+                "render_path": "story",
+                "attempts": story.attempts,
+                "judge_score": story.judge_score,
                 "story_key": story_key,
-                "visual_direction": (
-                    story.visual_direction if story is not None else None
-                ),
-                "visual_focus": story.visual_direction if story is not None else None,
-                "storyboard_visual_focus": (
-                    story.storyboard.visual_focus if story is not None else None
-                ),
-                "selected_attempt": (
-                    story.selected_attempt if story is not None else None
-                ),
-                "judge_passed": story.passed if story is not None else None,
+                "visual_direction": story.visual_direction,
+                "visual_focus": story.visual_direction,
+                "storyboard_visual_focus": story.storyboard.visual_focus,
+                "selected_attempt": story.selected_attempt,
+                "judge_passed": story.passed,
                 "estimated_model_cost_usd": model_cost,
                 "cost_estimated": True,
                 "model_calls": model_calls,
@@ -1014,6 +1001,8 @@ def explain_command() -> None:
                 if isinstance(stderr_text, bytes):
                     stderr_text = stderr_text.decode(errors="replace")
                 stderr_note = f"\nWhat broke: {stderr_text[:400]}"
+            elif partial.get("digest_url"):
+                stderr_note = f"\nWhat broke: {str(exc)[:400]}"
 
             if partial.get("digest_url"):
                 claim = partial.get("claim", "")
