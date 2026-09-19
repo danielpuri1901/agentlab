@@ -514,7 +514,25 @@ def _compose(
     passed = [
         candidate for candidate in candidates if candidate.judgement.verdict == "pass"
     ]
-    pool = passed or candidates
+    if not passed:
+        best_rejected = max(
+            candidates,
+            key=lambda candidate: (candidate.judgement.score, candidate.attempt),
+        )
+        issue = next(
+            (
+                beat.issue
+                for beat in best_rejected.judgement.beats
+                if beat.issue
+            ),
+            best_rejected.judgement.note or "judge requested another fix",
+        )
+        raise StoryFailed(
+            f"quality gate failed after {attempts} attempts: "
+            f"best score {best_rejected.judgement.score}/10; {issue}"
+        )
+
+    pool = passed
     best = max(
         pool, key=lambda candidate: (candidate.judgement.score, candidate.attempt)
     )

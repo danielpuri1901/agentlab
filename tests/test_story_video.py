@@ -308,7 +308,7 @@ def test_raw_total_overrun_above_limit_goes_back_to_the_coder(seams, tmp_path):
     assert "total overrun" in seams["coder"][1]
 
 
-def test_judge_fix_retries_and_ships_best_safe_render(seams, tmp_path):
+def test_judge_fix_retries_then_rejects_every_failed_candidate(seams, tmp_path):
     seams["judgements"] = [
         _judgement(score=7, fix_beat=2),
         _judgement(score=4, fix_beat=3),
@@ -316,11 +316,10 @@ def test_judge_fix_retries_and_ships_best_safe_render(seams, tmp_path):
         _judgement(score=5, fix_beat=4),
     ]
 
-    result = _compose(tmp_path)
+    with pytest.raises(StoryFailed, match="quality gate failed after 4 attempts"):
+        _compose(tmp_path)
 
-    assert result.passed is False
-    assert result.judge_score == 7
-    assert result.selected_attempt == 1
+    assert [quality for quality, _ in seams["renders"]] == ["l"] * 4
     assert "beat 2" in seams["coder"][1]
 
 
@@ -351,7 +350,9 @@ def test_latest_candidate_wins_a_score_tie(seams, tmp_path):
     assert result.scene_source == latest_source
 
 
-def test_later_coder_failure_ships_earlier_safe_candidate(seams, tmp_path):
+def test_later_coder_failure_does_not_ship_earlier_rejected_candidate(
+    seams, tmp_path
+):
     seams["codes"] = [
         GOLDEN_SCENE,
         RuntimeError("coder unavailable"),
@@ -360,11 +361,10 @@ def test_later_coder_failure_ships_earlier_safe_candidate(seams, tmp_path):
     ]
     seams["judgements"] = [_judgement(score=7, fix_beat=2)]
 
-    result = _compose(tmp_path)
+    with pytest.raises(StoryFailed, match="quality gate failed after 4 attempts"):
+        _compose(tmp_path)
 
-    assert result.passed is False
-    assert result.selected_attempt == 1
-    assert [quality for quality, _ in seams["renders"]] == ["l", "m"]
+    assert [quality for quality, _ in seams["renders"]] == ["l"]
 
 
 def test_max_attempts_is_capped_at_four(seams, tmp_path):
