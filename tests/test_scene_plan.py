@@ -273,6 +273,34 @@ def test_deep_read_accepts_percentage_when_html_table_keeps_sign_in_header():
     assert plan.key_numbers[1].value == "62.34%"
 
 
+def test_deep_read_accepts_percentage_for_accuracy_benchmark_table():
+    source = SOURCE_TEXT + (
+        "<p>Fusing both caches increases accuracy by 24.18%.</p>"
+        "<figure><table>"
+        "<tr><td>Method</td><td>MMLU</td><td>Average</td></tr>"
+        "<tr><td>Project</td><td>20.01</td><td>20.70</td></tr>"
+        "<tr><td>+Fuse</td><td>43.36</td><td>44.88</td></tr>"
+        "<tr><td>+Gate</td><td>42.92</td><td>47.95</td></tr>"
+        "</table></figure>"
+    )
+    digest = DIGEST_MD + "\n\nAverage accuracy reaches 47.95%."
+    plan_data = _plan_kwargs(
+        key_numbers=[
+            {"value": "12%", "meaning": "Accuracy gain over raw context."},
+            {"value": "47.95%", "meaning": "Best average benchmark accuracy."},
+        ]
+    )
+
+    returned_digest, plan = deep_read(
+        "https://arxiv.org/abs/2510.03215",
+        lambda url: source,
+        lambda model, messages: _fenced(plan_data, digest=digest),
+    )
+
+    assert "47.95%" in returned_digest
+    assert plan.key_numbers[1].value == "47.95%"
+
+
 def test_deep_read_rejects_percentage_when_source_uses_another_unit():
     source = SOURCE_TEXT + (
         "<table><tr><td>Method</td><td>Duration (seconds)</td></tr>"

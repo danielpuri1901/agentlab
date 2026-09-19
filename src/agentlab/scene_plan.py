@@ -19,9 +19,9 @@ and env overrides.
 import json
 import re
 from collections.abc import Callable
-from html.parser import HTMLParser
 from typing import Literal
 
+from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 DEFAULT_DEEP_READ_MODEL = "bedrock/global.anthropic.claude-sonnet-4-6"
@@ -454,59 +454,48 @@ def _normalise_source_number(value: str) -> str:
     return value.lower().replace(",", "").replace(" ", "").replace("percent", "%")
 
 
-class _HtmlTableParser(HTMLParser):
-    """Collect visible cells from top-level HTML tables."""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.tables: list[list[list[str]]] = []
-        self._depth = 0
-        self._rows: list[list[str]] | None = None
-        self._row: list[str] | None = None
-        self._cell: list[str] | None = None
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        del attrs
-        if tag == "table":
-            if self._depth == 0:
-                self._rows = []
-            self._depth += 1
-        elif self._depth == 1 and tag == "tr":
-            self._row = []
-        elif self._depth == 1 and tag in {"td", "th"} and self._row is not None:
-            self._cell = []
-
-    def handle_data(self, data: str) -> None:
-        if self._depth == 1 and self._cell is not None:
-            self._cell.append(data)
-
-    def handle_endtag(self, tag: str) -> None:
-        if self._depth == 1 and tag in {"td", "th"} and self._cell is not None:
-            if self._row is not None:
-                self._row.append(" ".join("".join(self._cell).split()))
-            self._cell = None
-        elif self._depth == 1 and tag == "tr" and self._row is not None:
-            if self._rows is not None and self._row:
-                self._rows.append(self._row)
-            self._row = None
-        elif tag == "table" and self._depth:
-            self._depth -= 1
-            if self._depth == 0 and self._rows:
-                self.tables.append(self._rows)
-                self._rows = None
-
-
 def _percentage_table_numbers(source_text: str) -> set[str]:
-    parser = _HtmlTableParser()
-    parser.feed(source_text)
+    soup = BeautifulSoup(source_text, "html.parser")
     grounded: set[str] = set()
-    for rows in parser.tables:
+    for table in soup.find_all("table"):
+        rows = [
+            [cell.get_text(" ", strip=True) for cell in row.find_all(["td", "th"])]
+            for row in table.find_all("tr")
+        ]
+        rows = [row for row in rows if row]
+        if not rows:
+            continue
         percentage_columns = {
             index
             for index, heading in enumerate(rows[0])
             if "%" in heading
             or re.search(r"\bpercent(?:age)?\b", heading, re.IGNORECASE)
         }
+        if not percentage_columns:
+            figure = table.find_parent("figure")
+            context_root = figure or table
+            previous_paragraph = context_root.find_previous("p")
+            context = (
+                previous_paragraph.get_text(" ", strip=True)
+                if previous_paragraph is not None
+                else ""
+            )
+            headings = " ".join(rows[0])
+            has_percentage_metric = (
+                "%" in context
+                or re.search(r"\bpercent(?:age)?\b", context, re.IGNORECASE)
+            ) and re.search(
+                r"\b(?:accuracy|accuracies|performance|score|scores)\b",
+                context,
+                re.IGNORECASE,
+            )
+            has_other_unit = re.search(
+                r"\b(?:seconds?|milliseconds?|minutes?|hours?|bytes?|tokens?|parameters?|latency|time)\b",
+                headings,
+                re.IGNORECASE,
+            )
+            if has_percentage_metric and not has_other_unit:
+                percentage_columns = set(range(1, max(len(row) for row in rows)))
         for row in rows[1:]:
             for index in percentage_columns:
                 if index >= len(row):
