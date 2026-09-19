@@ -3,7 +3,7 @@
 # system-library dependencies, Amazon Polly narration via the `video` uv
 # dependency group) that only the explain task definition (infra/ecs.tf)
 # needs. Built and pushed separately by
-# scripts/build_and_push_video_image.sh, tagged "<git-sha>-video" in the
+# scripts/build_and_push_video_image.sh, tagged "video-<git-sha>" in the
 # same ECR repo as the main image - never :latest, never the main image's
 # tag, so a plain `terraform apply` cannot accidentally cross-wire the two.
 #

@@ -1149,6 +1149,43 @@ def test_explain_uses_gated_feedback_and_collects_clarity(
     assert row["clarity"] is None
 
 
+def test_explain_operator_replay_bypasses_seen_filter(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    replay_url = "https://arxiv.org/abs/2510.03215"
+    replay_title = "Cache-to-Cache"
+    _set_explain_env(monkeypatch, track="core")
+    monkeypatch.setenv("EXPLAIN_URL", replay_url)
+    monkeypatch.setenv("EXPLAIN_TITLE", replay_title)
+    _set_daytime(monkeypatch)
+    table.put_item(
+        Item={
+            "experiment_id": "seen_paper#arxiv:2510.03215",
+            "sk": "paper",
+            "url": replay_url,
+            "title": replay_title,
+            "source": "arxiv",
+            "track": "core",
+            "first_seen": "2026-09-19T08:30:00Z",
+            "picked": True,
+        }
+    )
+    monkeypatch.setattr(
+        "agentlab.worker.gather_exploit",
+        lambda: pytest.fail("operator replay must bypass candidate gathering"),
+    )
+    _patch_explain_render_stages(monkeypatch, story=_fake_story_success)
+
+    result = runner.invoke(app, ["worker", "explain"])
+
+    assert result.exit_code == 0, result.output
+    video = next(item for item in table.scan()["Items"] if item.get("sk") == "video")
+    assert video["url"] == replay_url
+    assert video["title"] == replay_title
+    assert video["feedback_status"] == "operator-replay"
+
+
 def test_explain_core_deep_read_failure_pings_fallback_novel_still_sends(
     moto_fabric_with_ssm, telegram_calls, monkeypatch
 ):

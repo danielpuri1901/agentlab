@@ -14,15 +14,15 @@ Nothing here has been applied yet.
 - `dynamodb.tf` - the `agentlab-state` table (PK `experiment_id`, SK `sk`, both String, on-demand billing), matching the shape `src/agentlab/worker.py` already reads and writes.
 - `s3.tf` - the `agentlab-results-891377302765` bucket: versioning explicitly off, all public access blocked, and a lifecycle rule that aborts abandoned multipart uploads after 7 days.
 - `sqs.tf` - the `agentlab-experiments` queue plus its dead-letter queue, with a redrive policy and the visibility-timeout reasoning cited inline.
-- `ecr.tf` - the `agentlab` ECR repository (scan on push) and a lifecycle policy keeping the last 10 images, tagged with the git short SHA by `scripts/build_and_push_image.sh`.
+- `ecr.tf` - the `agentlab` ECR repository (scan on push) and lifecycle rules that independently keep the last 10 `app-` images and the last 10 `video-` images.
 - `.gitignore` - ignores `.terraform/`, Terraform state files, and `image_tag.auto.tfvars` (see "image_tag bootstrap" below); the `.terraform.lock.hcl` provider lock file is committed as normal.
 
 ## image_tag bootstrap
 
-`variables.tf`'s `image_tag` defaults to `"latest"`, but `scripts/build_and_push_image.sh` deliberately never pushes a mutable `:latest` tag to ECR - only immutable git-short-SHA tags, one per commit, so a given image build is always reproducible from the commit that produced it.
+`variables.tf`'s `image_tag` defaults to `"latest"`, but `scripts/build_and_push_image.sh` deliberately never pushes a mutable `:latest` tag to ECR - only `app-<git-short-SHA>` tags, one per commit, so a given image build is always reproducible from the commit that produced it.
 That means a plain `terraform apply` with no override would try to run an image tag (`:latest`) that was never pushed, or - worse, if `:latest` happened to exist from some earlier manual push - silently redeploy stale task definitions without anyone noticing.
 
-The mechanism that prevents this: every successful run of `scripts/build_and_push_image.sh` writes `infra/image_tag.auto.tfvars` with `image_tag = "<git short sha>"` for the commit it just built and pushed.
+The mechanism that prevents this: every successful run of `scripts/build_and_push_image.sh` writes `infra/image_tag.auto.tfvars` with `image_tag = "app-<git short sha>"` for the commit it just built and pushed.
 Terraform automatically loads `image_tag.auto.tfvars` from the working directory on every plan/apply, with no `-var` flag needed, so a plain `terraform apply` after a push always picks up the exact image that was just built - never `:latest`, never a stale pin.
 `image_tag.auto.tfvars` is gitignored on purpose: it is a local build artifact recording "what did I last push," not a checked-in value, and it will differ between whoever last ran the build script.
 

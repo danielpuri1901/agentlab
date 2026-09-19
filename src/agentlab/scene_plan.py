@@ -19,6 +19,7 @@ and env overrides.
 import json
 import re
 from collections.abc import Callable
+from html.parser import HTMLParser
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -453,6 +454,71 @@ def _normalise_source_number(value: str) -> str:
     return value.lower().replace(",", "").replace(" ", "").replace("percent", "%")
 
 
+class _HtmlTableParser(HTMLParser):
+    """Collect visible cells from top-level HTML tables."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.tables: list[list[list[str]]] = []
+        self._depth = 0
+        self._rows: list[list[str]] | None = None
+        self._row: list[str] | None = None
+        self._cell: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        if tag == "table":
+            if self._depth == 0:
+                self._rows = []
+            self._depth += 1
+        elif self._depth == 1 and tag == "tr":
+            self._row = []
+        elif self._depth == 1 and tag in {"td", "th"} and self._row is not None:
+            self._cell = []
+
+    def handle_data(self, data: str) -> None:
+        if self._depth == 1 and self._cell is not None:
+            self._cell.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._depth == 1 and tag in {"td", "th"} and self._cell is not None:
+            if self._row is not None:
+                self._row.append(" ".join("".join(self._cell).split()))
+            self._cell = None
+        elif self._depth == 1 and tag == "tr" and self._row is not None:
+            if self._rows is not None and self._row:
+                self._rows.append(self._row)
+            self._row = None
+        elif tag == "table" and self._depth:
+            self._depth -= 1
+            if self._depth == 0 and self._rows:
+                self.tables.append(self._rows)
+                self._rows = None
+
+
+def _percentage_table_numbers(source_text: str) -> set[str]:
+    parser = _HtmlTableParser()
+    parser.feed(source_text)
+    grounded: set[str] = set()
+    for rows in parser.tables:
+        percentage_columns = {
+            index
+            for index, heading in enumerate(rows[0])
+            if "%" in heading
+            or re.search(r"\bpercent(?:age)?\b", heading, re.IGNORECASE)
+        }
+        for row in rows[1:]:
+            for index in percentage_columns:
+                if index >= len(row):
+                    continue
+                for value in _SOURCE_NUMBER_RE.findall(row[index]):
+                    normalised = _normalise_source_number(value)
+                    grounded.add(
+                        normalised if normalised.endswith("%") else normalised + "%"
+                    )
+    return grounded
+
+
 def _ungrounded_source_numbers(
     digest: str, plan: ScenePlan, source_text: str
 ) -> list[str]:
@@ -460,6 +526,7 @@ def _ungrounded_source_numbers(
         _normalise_source_number(value)
         for value in _SOURCE_NUMBER_RE.findall(source_text)
     }
+    grounded.update(_percentage_table_numbers(source_text))
     plan_text = "\n".join(
         [
             plan.title,

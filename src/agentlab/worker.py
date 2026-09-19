@@ -669,6 +669,7 @@ def _run_explain_track(
     judge_model: str,
     partial: dict,
     aws_mtd_cost: Decimal | None = None,
+    forced_candidate: dict | None = None,
 ) -> str:
     """Run one explain track end to end. Returns "sent" or "empty" (no
     candidate left to pick). Raises on any other failure; `partial`
@@ -678,7 +679,15 @@ def _run_explain_track(
     complete = bind(_complete, usage_sink=model_usage)
     complete_long = bind(_complete_long, usage_sink=model_usage)
 
-    if track == "classic":
+    if forced_candidate is not None:
+        candidate = forced_candidate
+        candidate_set = [_candidate_record(candidate, 1, 1)]
+        baseline_rank = 1
+        baseline_selection = candidate_set[0]
+        exploration_status = "operator-replay"
+        feedback_status = "operator-replay"
+        selection_probability = 1
+    elif track == "classic":
         candidate = _next_unseen_classic(table)
         if candidate is None:
             return "empty"
@@ -740,7 +749,8 @@ def _run_explain_track(
     # New candidates are recorded as seen the moment they are picked, not
     # when fetched, so an unpicked candidate can resurface later.
     identity = paper_identity(url, title)
-    mark_seen(table, identity, url, title, candidate.get("source", track), track)
+    if forced_candidate is None:
+        mark_seen(table, identity, url, title, candidate.get("source", track), track)
 
     digest, plan = deep_read(url, _fetch_text, complete, model=deep_read_model)
     partial["claim"] = plan.one_line_claim
@@ -932,6 +942,19 @@ def explain_command() -> None:
         )
         raise typer.Exit(1)
 
+    replay_url = os.environ.get("EXPLAIN_URL", "").strip()
+    forced_candidate = None
+    if replay_url:
+        if tracks != ["core"]:
+            typer.echo("error: EXPLAIN_URL requires TRACK=core", err=True)
+            raise typer.Exit(1)
+        forced_candidate = {
+            "source": "operator",
+            "pool": "exploit",
+            "title": os.environ.get("EXPLAIN_TITLE", "").strip() or replay_url,
+            "url": replay_url,
+        }
+
     table = boto3.resource("dynamodb").Table(state_table)
     ssm_client = boto3.client("ssm")
     s3_client = boto3.client("s3")
@@ -963,6 +986,7 @@ def explain_command() -> None:
                 judge_model,
                 partial,
                 aws_mtd_cost,
+                forced_candidate,
             )
         except Exception as exc:  # noqa: BLE001 - one track's failure must not sink the others
             statuses[track] = "failed"

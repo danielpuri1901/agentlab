@@ -4,9 +4,9 @@
 # https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecr_lifecycle_policy
 # on 2026-08-16.
 #
-# Images are tagged with the git short SHA (see scripts/build_and_push_image.sh),
-# not a shared prefix like "v", so the lifecycle rule matches tagStatus "any"
-# rather than filtering on a tag prefix.
+# Runtime and video images share this repository but use separate tag prefixes.
+# Their lifecycle rules count each class independently, so frequent video builds
+# cannot delete the image used by the proposer and experiment workers.
 resource "aws_ecr_repository" "agentlab" {
   name = "agentlab"
 
@@ -22,11 +22,38 @@ resource "aws_ecr_lifecycle_policy" "agentlab" {
     rules = [
       {
         rulePriority = 1
-        description  = "Keep last 10 images"
+        description  = "Keep last 10 runtime images"
         selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = 10
+          tagStatus     = "tagged"
+          tagPrefixList = ["app-"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 10
+        }
+        action = {
+          type = "expire"
+        }
+      },
+      {
+        rulePriority = 2
+        description  = "Keep last 10 video images"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["video-"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 10
+        }
+        action = {
+          type = "expire"
+        }
+      },
+      {
+        rulePriority = 3
+        description  = "Remove untagged build artifacts after one day"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 1
         }
         action = {
           type = "expire"

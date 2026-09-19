@@ -101,6 +101,7 @@ resource "aws_scheduler_schedule" "proposer" {
   for_each = local.proposer_schedules
 
   name                         = "agentlab-${each.key}"
+  state                        = each.key == "propose-midday" ? "DISABLED" : "ENABLED"
   schedule_expression          = each.value.cron
   schedule_expression_timezone = "Europe/Amsterdam"
 

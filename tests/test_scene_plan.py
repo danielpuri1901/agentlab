@@ -244,6 +244,56 @@ def test_deep_read_retries_numbers_missing_from_fetched_source():
     assert plan.key_numbers[0].value == "12%"
 
 
+def test_deep_read_accepts_percentage_when_html_table_keeps_sign_in_header():
+    calls = []
+    source = SOURCE_TEXT + (
+        "<table><tr><td>Method</td><td>Performance (%)</td></tr>"
+        "<tr><td>Oracle</td><td>62.34</td></tr></table>"
+    )
+    digest = DIGEST_MD + "\n\nPerformance reaches 62.34%."
+    plan_data = _plan_kwargs(
+        key_numbers=[
+            {"value": "12%", "meaning": "Accuracy gain over raw context."},
+            {"value": "62.34%", "meaning": "Performance reported in the table."},
+        ]
+    )
+
+    def fake_complete(model, messages):
+        calls.append(messages)
+        return _fenced(plan_data, digest=digest)
+
+    returned_digest, plan = deep_read(
+        "https://arxiv.org/abs/2510.03215",
+        lambda url: source,
+        fake_complete,
+    )
+
+    assert len(calls) == 1
+    assert "62.34%" in returned_digest
+    assert plan.key_numbers[1].value == "62.34%"
+
+
+def test_deep_read_rejects_percentage_when_source_uses_another_unit():
+    source = SOURCE_TEXT + (
+        "<table><tr><td>Method</td><td>Duration (seconds)</td></tr>"
+        "<tr><td>Oracle</td><td>62.34</td></tr></table>"
+    )
+    digest = DIGEST_MD + "\n\nPerformance reaches 62.34%."
+    plan_data = _plan_kwargs(
+        key_numbers=[
+            {"value": "12%", "meaning": "Accuracy gain over raw context."},
+            {"value": "62.34%", "meaning": "Performance reported in the table."},
+        ]
+    )
+
+    with pytest.raises(ValueError, match=r"numbers missing.*62\.34%"):
+        deep_read(
+            "https://arxiv.org/abs/2510.03215",
+            lambda url: source,
+            lambda model, messages: _fenced(plan_data, digest=digest),
+        )
+
+
 def test_deep_read_passes_fetched_text_and_url_into_prompt():
     seen = {}
 
