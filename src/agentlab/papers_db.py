@@ -96,6 +96,39 @@ def mark_seen(
     )
 
 
+FAILURE_SK = "failure"
+MAX_PAPER_FAILURES = 2
+
+
+def record_failure(table, identity: str) -> int:
+    """Count this paper's failed runs and return the new total."""
+    response = table.update_item(
+        Key={"experiment_id": f"failed_paper#{identity}", "sk": FAILURE_SK},
+        UpdateExpression="ADD failures :one",
+        ExpressionAttributeValues={":one": 1},
+        ReturnValues="UPDATED_NEW",
+    )
+    return int(response["Attributes"]["failures"])
+
+
+def release_after_failure(table, identity: str) -> bool:
+    """Give a paper back after the track that picked it failed, once.
+
+    A paper is marked seen the moment it is picked, so one run cannot pick it
+    twice. That also spent it for good on a failed run: BERT was picked on
+    2026-09-23, the storyboard guard killed the track, and it could never be
+    shown again. Releasing every time is no better, because a paper that
+    always breaks would be picked and paid for again every single day. So a
+    paper gets exactly one more chance, then it stays seen.
+
+    Returns True when the paper went back in the pool.
+    """
+    if record_failure(table, identity) >= MAX_PAPER_FAILURES:
+        return False
+    table.delete_item(Key={"experiment_id": f"seen_paper#{identity}", "sk": SEEN_SK})
+    return True
+
+
 def recent_seen_titles(table, limit: int = 200) -> list[str]:
     items = table.scan(FilterExpression=Attr("sk").eq(SEEN_SK))["Items"]
     items.sort(key=lambda i: i["first_seen"], reverse=True)

@@ -186,8 +186,18 @@ resource "aws_ecs_task_definition" "explain" {
       command                = ["chmod 1777 /tmp"]
       user                   = "0"
       readonlyRootFilesystem = true
+      # AWS returns these empty collections on every read, so leaving them out
+      # made the task definition differ from its own state on every plan and
+      # be replaced on every apply, churning a revision and the schedule that
+      # points at it. Spelling them out makes the config match what AWS
+      # stores.
+      environment            = []
+      portMappings           = []
+      systemControls         = []
+      volumesFrom            = []
       linuxParameters = {
         capabilities = {
+          add  = []
           drop = ["ALL"]
         }
       }
@@ -220,9 +230,13 @@ resource "aws_ecs_task_definition" "explain" {
       ]
       user                   = "999:999"
       readonlyRootFilesystem = true
+      portMappings           = []
+      systemControls         = []
+      volumesFrom            = []
       linuxParameters = {
         initProcessEnabled = true
         capabilities = {
+          add  = []
           drop = ["ALL"]
         }
       }

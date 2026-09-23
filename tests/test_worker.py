@@ -1207,7 +1207,9 @@ def test_explain_core_deep_read_failure_pings_fallback_novel_still_sends(
     # candidate is picked, before deep_read, so a failed deep-read must not
     # leave the candidate eligible to resurface tomorrow.
     seen_items = [i for i in table.scan()["Items"] if i.get("sk") == "paper"]
-    assert {i["track"] for i in seen_items} == {"core", "classic", "novel"}
+    # The failed core track gives its paper back, so it can be picked again
+    # tomorrow instead of being spent on a run that produced nothing.
+    assert {i["track"] for i in seen_items} == {"classic", "novel"}
 
     assert "explain: core=failed classic=sent novel=sent" in result.output
 

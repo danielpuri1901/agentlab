@@ -234,3 +234,21 @@ def test_non_ascii_titles_do_not_collide():
     b = paper_identity("https://example.com/b", "強化学習と探索")
     assert a != b
     assert a.startswith("title:x") and b.startswith("title:x")
+
+
+def test_release_after_failure_gives_a_paper_one_more_chance(fabric):
+    table, _ = fabric
+    papers_db_mod.mark_seen(table, "id-1", "https://x/1", "Paper One", "arxiv", "core")
+
+    assert papers_db_mod.release_after_failure(table, "id-1") is True
+    assert papers_db_mod.is_seen(table, "id-1") is False
+
+
+def test_release_after_failure_keeps_a_paper_that_failed_twice(fabric):
+    table, _ = fabric
+    papers_db_mod.mark_seen(table, "id-1", "https://x/1", "Paper One", "arxiv", "core")
+    papers_db_mod.release_after_failure(table, "id-1")
+    papers_db_mod.mark_seen(table, "id-1", "https://x/1", "Paper One", "arxiv", "core")
+
+    assert papers_db_mod.release_after_failure(table, "id-1") is False
+    assert papers_db_mod.is_seen(table, "id-1") is True

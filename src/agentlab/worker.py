@@ -43,7 +43,13 @@ from agentlab.costs import (
 )
 from agentlab.eval_runner import _run_arm, hypothesis_for
 from agentlab.notify import flush_pending, notify
-from agentlab.papers_db import is_seen, mark_seen, paper_identity, recent_seen_titles
+from agentlab.papers_db import (
+    is_seen,
+    mark_seen,
+    paper_identity,
+    recent_seen_titles,
+    release_after_failure,
+)
 from agentlab.preferences import (
     POLICY_VERSION,
     candidate_topics,
@@ -790,6 +796,7 @@ def _run_explain_track(
     identity = paper_identity(url, title)
     if forced_candidate is None:
         mark_seen(table, identity, url, title, candidate.get("source", track), track)
+        partial["identity"] = identity
 
     digest, plan = deep_read(url, _fetch_text, complete, model=deep_read_model)
     partial["claim"] = plan.one_line_claim
@@ -1016,6 +1023,17 @@ def explain_command() -> None:
             )
         except Exception as exc:  # noqa: BLE001 - one track's failure must not sink the others
             statuses[track] = "failed"
+
+            # Give the paper back for one more try. See
+            # papers_db.release_after_failure for why it is one and not
+            # always.
+            if partial.get("identity"):
+                try:
+                    release_after_failure(table, partial["identity"])
+                except Exception as release_exc:  # noqa: BLE001 - never mask the track error
+                    typer.echo(
+                        f"could not release the {track} paper: {release_exc}", err=True
+                    )
 
             # Every failed track writes a ledger event, same shape as
             # run-arm's ARM_FAILED, before the fallback ping - a failure
