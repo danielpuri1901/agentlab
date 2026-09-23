@@ -137,6 +137,24 @@ def make_event(
     }
 
 
+def _ecs_recorder(real_client, runs, run=None):
+    """Stand in for boto3.client("ecs") and record run_task calls."""
+
+    class _Ecs:
+        def run_task(self, **kwargs):
+            if run is not None:
+                return run(**kwargs)
+            runs.append(kwargs)
+            return {"tasks": [{"taskArn": "arn:task/1"}]}
+
+    def factory(name, *args, **kwargs):
+        if name == "ecs":
+            return _Ecs()
+        return real_client(name, *args, **kwargs)
+
+    return factory
+
+
 def _file_proposal(table, pid, submit_body=None):
     """Raw put_item mirroring src/agentlab/proposals.py file_proposal's shape."""
     item = {
@@ -322,6 +340,79 @@ def test_double_tap_answers_already_decided(fabric, recorder):
     method, payload = recorder[0]
     assert method == "answerCallbackQuery"
     assert "already decided" in payload["text"]
+
+
+def test_approve_without_submit_body_builds_a_video_of_the_citation(
+    fabric, recorder, monkeypatch
+):
+    """Approving an idea has to build something, not just change a status."""
+    table, _sqs, _queue_url = fabric
+    _file_proposal(table, "p1")
+    monkeypatch.setenv("EXPLAIN_CLUSTER", "agentlab")
+    monkeypatch.setenv("EXPLAIN_TASK_DEFINITION", "agentlab-explain")
+    monkeypatch.setenv("EXPLAIN_SUBNETS", "subnet-a,subnet-b")
+    monkeypatch.setenv("EXPLAIN_SECURITY_GROUP", "sg-1")
+    runs = []
+    monkeypatch.setattr(
+        webhook.boto3, "client", _ecs_recorder(webhook.boto3.client, runs)
+    )
+
+    response = webhook.handler(make_event(), None)
+
+    assert response["statusCode"] == 200
+    assert _get_proposal(table, "p1")["status"] == "APPROVED"
+    assert len(runs) == 1
+    env = runs[0]["overrides"]["containerOverrides"][0]["environment"]
+    assert {"name": "TRACK", "value": "core"} in env
+    assert {"name": "EXPLAIN_URL", "value": "https://example.com/paper"} in env
+    toasts = [c[1]["text"] for c in recorder if c[0] == "answerCallbackQuery"]
+    assert any("Building the video" in t for t in toasts)
+
+
+def test_approve_does_not_build_a_video_when_the_citation_is_not_a_url(
+    fabric, recorder, monkeypatch
+):
+    table, _sqs, _queue_url = fabric
+    _file_proposal(table, "p1")
+    table.update_item(
+        Key={"experiment_id": "proposal#p1", "sk": "proposal"},
+        UpdateExpression="SET citation = :c",
+        ExpressionAttributeValues={":c": "see the paper"},
+    )
+    monkeypatch.setenv("EXPLAIN_CLUSTER", "agentlab")
+    monkeypatch.setenv("EXPLAIN_TASK_DEFINITION", "agentlab-explain")
+    monkeypatch.setenv("EXPLAIN_SUBNETS", "subnet-a")
+    monkeypatch.setenv("EXPLAIN_SECURITY_GROUP", "sg-1")
+    runs = []
+    monkeypatch.setattr(
+        webhook.boto3, "client", _ecs_recorder(webhook.boto3.client, runs)
+    )
+
+    webhook.handler(make_event(), None)
+
+    assert _get_proposal(table, "p1")["status"] == "APPROVED"
+    assert runs == []
+
+
+def test_a_failed_video_build_never_loses_the_verdict(fabric, recorder, monkeypatch):
+    table, _sqs, _queue_url = fabric
+    _file_proposal(table, "p1")
+    monkeypatch.setenv("EXPLAIN_CLUSTER", "agentlab")
+    monkeypatch.setenv("EXPLAIN_TASK_DEFINITION", "agentlab-explain")
+    monkeypatch.setenv("EXPLAIN_SUBNETS", "subnet-a")
+    monkeypatch.setenv("EXPLAIN_SECURITY_GROUP", "sg-1")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("ecs unavailable")
+
+    monkeypatch.setattr(
+        webhook.boto3, "client", _ecs_recorder(webhook.boto3.client, [], run=boom)
+    )
+
+    response = webhook.handler(make_event(), None)
+
+    assert response["statusCode"] == 200
+    assert _get_proposal(table, "p1")["status"] == "APPROVED"
 
 
 def test_approve_with_submit_body_auto_submits(fabric, recorder):

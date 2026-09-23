@@ -107,6 +107,55 @@ def _auto_submit(table, pid: str) -> str | None:
     return experiment_id
 
 
+def _build_video(table, pid: str) -> str | None:
+    """Start a video build for an approved proposal's cited source.
+
+    A proposal with no prepared experiment used to end at its verdict: the
+    status changed and nothing happened, which is what "I accept the
+    proposals and they build" expects to work. Every proposal cites exactly
+    one source URL (proposer.py enforces it), and the explain task already
+    builds a video from any URL through EXPLAIN_URL, so the approval starts
+    that task. Returns the citation it started, or None.
+    """
+    cluster = os.environ.get("EXPLAIN_CLUSTER")
+    task_definition = os.environ.get("EXPLAIN_TASK_DEFINITION")
+    subnets = [s for s in os.environ.get("EXPLAIN_SUBNETS", "").split(",") if s]
+    security_group = os.environ.get("EXPLAIN_SECURITY_GROUP")
+    if not (cluster and task_definition and subnets and security_group):
+        return None
+    item = table.get_item(
+        Key={"experiment_id": f"proposal#{pid}", "sk": "proposal"}
+    ).get("Item") or {}
+    citation = str(item.get("citation") or "").strip()
+    if not citation.startswith("http"):
+        return None
+    boto3.client("ecs").run_task(
+        cluster=cluster,
+        taskDefinition=task_definition,
+        launchType="FARGATE",
+        networkConfiguration={
+            "awsvpcConfiguration": {
+                "subnets": subnets,
+                "securityGroups": [security_group],
+                "assignPublicIp": "ENABLED",
+            }
+        },
+        overrides={
+            "containerOverrides": [
+                {
+                    "name": "explain",
+                    "command": ["worker", "explain"],
+                    "environment": [
+                        {"name": "TRACK", "value": "core"},
+                        {"name": "EXPLAIN_URL", "value": citation},
+                    ],
+                }
+            ]
+        },
+    )
+    return citation
+
+
 def _strip_buttons(markup: dict, pid: str) -> list:
     prefix = f"prop:{pid}:"
     rows = markup.get("inline_keyboard") or []
@@ -266,6 +315,7 @@ def handler(event, context):
 
     submitted = None
     submit_failed = False
+    building = None
     if decided and verdict == "APPROVED":
         # The verdict is already written; an SQS/DynamoDB failure here must
         # not 5xx the handler, or Telegram's retry hits "already decided" and
@@ -276,6 +326,14 @@ def handler(event, context):
         except Exception as exc:  # noqa: BLE001
             submit_failed = True
             print(f"auto-submit failed after verdict write: pid={pid} {exc}")
+        if submitted is None and not submit_failed:
+            # No prepared experiment, so build a video of what it cited.
+            # Same rule as auto-submit: the verdict is already written, so a
+            # failure here is reported, never raised.
+            try:
+                building = _build_video(table, pid)
+            except Exception as exc:  # noqa: BLE001
+                print(f"video build failed after verdict write: pid={pid} {exc}")
 
     if not decided:
         toast = f"{pid} was already decided"
@@ -283,6 +341,8 @@ def handler(event, context):
         toast = f"APPROVED but submit FAILED: {pid}. Resubmit manually."
     elif submitted:
         toast = f"APPROVED and submitted: {submitted}"
+    elif building:
+        toast = "APPROVED. Building the video now."
     else:
         toast = f"{verdict}: {pid}"
 
@@ -297,6 +357,8 @@ def handler(event, context):
             decision_line = f"\n\n{verdict}: {pid}"
             if submitted:
                 decision_line += f"\nsubmitted: {submitted}"
+            elif building:
+                decision_line += "\nbuilding the video now"
             edit = {
                 "chat_id": message["chat"]["id"],
                 "message_id": message["message_id"],

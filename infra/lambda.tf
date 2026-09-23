@@ -65,6 +65,27 @@ resource "aws_iam_role_policy" "approvals_webhook" {
         Action   = ["sqs:SendMessage"]
         Resource = aws_sqs_queue.experiments.arn
       },
+      # An approved proposal with no prepared experiment builds a video of
+      # its cited source, so the webhook starts the explain task the same
+      # way the scheduler does.
+      {
+        Sid      = "BuildApprovedProposalVideo"
+        Effect   = "Allow"
+        Action   = ["ecs:RunTask"]
+        Resource = ["${aws_ecs_task_definition.explain.arn_without_revision}:*"]
+      },
+      {
+        Sid    = "PassExplainRoles"
+        Effect = "Allow"
+        Action = ["iam:PassRole"]
+        Resource = [
+          aws_iam_role.ecs_execution.arn,
+          aws_iam_role.explain_task.arn,
+        ]
+        Condition = {
+          StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" }
+        }
+      },
     ]
   })
 }
@@ -86,6 +107,11 @@ resource "aws_lambda_function" "approvals_webhook" {
       ALLOWED_USER_ID = var.telegram_chat_id
       TOKEN_PARAM     = local.telegram_token_param
       SECRET_PARAM    = local.telegram_secret_param
+
+      EXPLAIN_CLUSTER         = aws_ecs_cluster.agentlab.name
+      EXPLAIN_TASK_DEFINITION = aws_ecs_task_definition.explain.arn
+      EXPLAIN_SUBNETS         = join(",", data.aws_subnets.default_public.ids)
+      EXPLAIN_SECURITY_GROUP  = aws_security_group.fargate_egress.id
     }
   }
 
