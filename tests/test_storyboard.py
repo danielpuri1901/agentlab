@@ -68,6 +68,30 @@ def test_parse_storyboard_accepts_mapping_term_grounded_in_digest(golden, plan):
     assert board is not None
 
 
+def test_parse_storyboard_accepts_a_term_recomposed_from_grounded_words(golden, plan):
+    """The digest says "SQuAD v1.1" and "Test F1" in different sentences; the
+    storyboard names the benchmark column "SQuAD v1.1 Test F1". Every word is
+    the paper's own (this killed the classic track on 2026-09-23).
+    """
+    golden["mapping"][0]["paper_term"] = "SQuAD v1.1 Test F1"
+    digest = DIGEST + "\nOn SQuAD v1.1 the model is judged by Test F1."
+
+    board, error = sb.parse_storyboard(_fenced(golden), digest, plan)
+
+    assert error == ""
+    assert board is not None
+
+
+def test_parse_storyboard_rejects_a_term_with_one_invented_word(golden, plan):
+    golden["mapping"][0]["paper_term"] = "SQuAD v1.1 Neuroflux"
+    digest = DIGEST + "\nOn SQuAD v1.1 the model is judged by Test F1."
+
+    board, error = sb.parse_storyboard(_fenced(golden), digest, plan)
+
+    assert board is None
+    assert "neuroflux" in error.lower()
+
+
 def test_parse_storyboard_rejects_mapping_term_missing_from_digest_and_plan(golden, plan):
     golden["mapping"][0]["paper_term"] = "invented hidden classifier"
 

@@ -215,12 +215,19 @@ def _structure_error(board: Storyboard, plan: ScenePlan, digest: str) -> str:
         _plain(value) for node in plan.diagram.nodes for value in (node.id, node.label)
     } | {_plain(step.label) for step in plan.mechanism_steps}
     grounded_text = _plain(digest + " " + plan.model_dump_json())
+    # Word by word, not phrase by phrase. The storyboard legitimately names a
+    # benchmark column the paper reports in pieces: the digest said "SQuAD
+    # v1.1" in one sentence and "Test F1" in another, and demanding the whole
+    # phrase contiguously killed the classic track on 2026-09-23. A term with
+    # one invented word in it still fails.
+    grounded_words = set(grounded_text.split())
     unknown = [
         item.paper_term
         for item in board.mapping
         if (
             _plain(item.paper_term) not in allowed_terms
             and _plain(item.paper_term) not in grounded_text
+            and not set(_plain(item.paper_term).split()) <= grounded_words
         )
     ]
     if unknown:
