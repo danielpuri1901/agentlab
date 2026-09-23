@@ -24,6 +24,8 @@ from typing import Literal
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from agentlab.source_text import prepare_source
+
 DEFAULT_DEEP_READ_MODEL = "bedrock/global.anthropic.claude-sonnet-4-6"
 DEFAULT_PICK_MODEL = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -60,6 +62,7 @@ _NODE_ID_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*$"
 _SOURCE_NUMBER_RE = re.compile(
     r"(?<![A-Za-z])\d+(?:[.,]\d+)*(?:\s*(?:%|percent))?", re.IGNORECASE
 )
+_VERSION_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])[vV](\d+(?:\.\d+)+)")
 
 
 class DiagramNode(BaseModel):
@@ -451,7 +454,11 @@ def parse_scene_plan(raw: str) -> ScenePlan | None:
 
 
 def _normalise_source_number(value: str) -> str:
-    return value.lower().replace(",", "").replace(" ", "").replace("percent", "%")
+    # All whitespace, not just spaces: the number regex spans a newline, so a
+    # digest that wraps between "74.2" and "percent" must still read as
+    # "74.2%" (it did not, and killed a track on 2026-09-21).
+    collapsed = re.sub(r"\s+", "", value.lower())
+    return collapsed.replace(",", "").replace("percent", "%")
 
 
 def _percentage_table_numbers(source_text: str) -> set[str]:
@@ -508,15 +515,39 @@ def _percentage_table_numbers(source_text: str) -> set[str]:
     return grounded
 
 
-def _ungrounded_source_numbers(
-    digest: str, plan: ScenePlan, source_text: str
-) -> list[str]:
-    grounded = {
-        _normalise_source_number(value)
-        for value in _SOURCE_NUMBER_RE.findall(source_text)
-    }
+def _grounded_source_numbers(source_text: str) -> set[str]:
+    grounded: set[str] = set()
+    for value in _SOURCE_NUMBER_RE.findall(source_text):
+        normalised = _normalise_source_number(value)
+        grounded.add(normalised)
+        # A source that writes "22.9%" also grounds a plan that writes
+        # "22.9": dropping a unit is not inventing a number, and treating it
+        # as one killed four real tracks between 2026-09-21 and 2026-09-23.
+        if normalised.endswith("%"):
+            grounded.add(normalised[:-1])
+    # "v0.1.1" grounds "0.1.1". _SOURCE_NUMBER_RE refuses a number preceded by
+    # a letter (so "gpt4" never grounds "4"), which also hides every version
+    # string behind its own "v".
+    grounded.update(_VERSION_NUMBER_RE.findall(source_text))
     grounded.update(_percentage_table_numbers(source_text))
-    plan_text = "\n".join(
+    return grounded
+
+
+def _ungrounded_in(text: str, grounded: set[str]) -> list[str]:
+    missing: list[str] = []
+    for value in _SOURCE_NUMBER_RE.findall(text):
+        if _normalise_source_number(value) not in grounded and value not in missing:
+            missing.append(value)
+    return missing
+
+
+def _plan_prose(plan: ScenePlan) -> str:
+    """Every part of the plan a viewer reads or hears, except key_numbers.
+
+    key_numbers is the one field the template can drop: video_scenes.py
+    renders the numbers card only when the list is non-empty.
+    """
+    return "\n".join(
         [
             plan.title,
             plan.one_line_claim,
@@ -530,18 +561,40 @@ def _ungrounded_source_numbers(
                 for step in plan.mechanism_steps
                 for text in (step.label, step.detail, step.narration)
             ),
-            *(
-                text
-                for number in plan.key_numbers
-                for text in (number.value, number.meaning)
-            ),
         ]
     )
-    missing: list[str] = []
-    for value in _SOURCE_NUMBER_RE.findall(digest + "\n" + plan_text):
-        if _normalise_source_number(value) not in grounded and value not in missing:
-            missing.append(value)
-    return missing
+
+
+def _ungrounded_source_numbers(
+    digest: str, plan: ScenePlan, source_text: str
+) -> list[str]:
+    grounded = _grounded_source_numbers(source_text)
+    key_number_text = "\n".join(
+        text for number in plan.key_numbers for text in (number.value, number.meaning)
+    )
+    return _ungrounded_in(
+        "\n".join([digest, _plan_prose(plan), key_number_text]), grounded
+    )
+
+
+def drop_ungrounded_key_numbers(
+    digest: str, plan: ScenePlan, source_text: str
+) -> list[str]:
+    """Strip key_numbers that carry an ungrounded number. Returns what is left
+    ungrounded in the digest and the spoken plan, which is never droppable.
+
+    A stray figure in the numbers card is not worth losing the whole video:
+    the card is optional in the template, so it goes and the video ships. A
+    number inside the digest or the narration is a claim Daniel reads or
+    hears, so that still fails the run.
+    """
+    grounded = _grounded_source_numbers(source_text)
+    plan.key_numbers = [
+        number
+        for number in plan.key_numbers
+        if not _ungrounded_in(f"{number.value}\n{number.meaning}", grounded)
+    ]
+    return _ungrounded_in("\n".join([digest, _plan_prose(plan)]), grounded)
 
 
 def deep_read(
@@ -558,9 +611,16 @@ def deep_read(
     model can fix only the JSON.
     """
     source_text = fetch_text(url)
+    # The model reads the visible prose, capped to fit the context window.
+    # The grounding guard below keeps checking the FULL fetched source: the
+    # model can only cite what it was shown, so a smaller prompt can only
+    # make the guard easier to satisfy, never harder.
     messages = [
         {"role": "system", "content": DEEP_READ_SYSTEM},
-        {"role": "user", "content": build_deep_read_prompt(url, source_text)},
+        {
+            "role": "user",
+            "content": build_deep_read_prompt(url, prepare_source(source_text)),
+        },
     ]
     raw = complete(model, messages)
     digest, plan_raw = split_digest_and_plan(raw)
@@ -589,8 +649,15 @@ def deep_read(
         if plan is not None:
             missing = _ungrounded_source_numbers(digest, plan, source_text)
             if missing:
-                plan = None
-                error = "numbers missing from fetched source: " + ", ".join(missing)
+                # The model had its retry and still wrote a number the source
+                # does not contain. Drop what is droppable rather than losing
+                # the day's video to the numbers card.
+                still_missing = drop_ungrounded_key_numbers(digest, plan, source_text)
+                if still_missing:
+                    plan = None
+                    error = "numbers missing from fetched source: " + ", ".join(
+                        still_missing
+                    )
     if plan is None:
         raise ValueError(f"scene plan invalid after retry for {url}: {error}")
     # The model never writes the citation: the fetch URL is ground truth

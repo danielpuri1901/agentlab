@@ -9,6 +9,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from agentlab import source_text
 from agentlab.scene_plan import (
     ScenePlan,
     build_pick_prompt,
@@ -320,6 +321,194 @@ def test_deep_read_rejects_percentage_when_source_uses_another_unit():
             lambda url: source,
             lambda model, messages: _fenced(plan_data, digest=digest),
         )
+
+
+def test_deep_read_grounds_a_bare_number_against_a_percentage_in_the_source():
+    """The source writes "22.9%", the plan writes "22.9". Same number, so the
+    guard must not call it invented (this killed the novel track on 2026-09-23).
+    """
+    source = SOURCE_TEXT + " It outperforms the prior baseline by up to 22.9%."
+    digest = DIGEST_MD + "\n\nThe gain reaches 22.9 over the baseline."
+    plan_data = _plan_kwargs(
+        key_numbers=[
+            {"value": "12%", "meaning": "Accuracy gain over raw context."},
+            {"value": "22.9", "meaning": "Gain over the prior baseline."},
+        ]
+    )
+    calls = []
+
+    def fake_complete(model, messages):
+        calls.append(messages)
+        return _fenced(plan_data, digest=digest)
+
+    _digest, plan = deep_read(
+        "https://arxiv.org/abs/2609.24972", lambda url: source, fake_complete
+    )
+
+    assert len(calls) == 1
+    assert plan.key_numbers[1].value == "22.9"
+
+
+def test_deep_read_grounds_a_version_written_without_its_v_prefix():
+    """The source writes "v0.1.1", the plan writes "0.1.1" (this killed the
+    core track on 2026-09-22).
+    """
+    source = SOURCE_TEXT + " Released as harness-python/v0.1.1 today."
+    digest = DIGEST_MD + "\n\nThe release is 0.1.1."
+    plan_data = _plan_kwargs(
+        key_numbers=[
+            {"value": "12%", "meaning": "Accuracy gain over raw context."},
+            {"value": "0.1.1", "meaning": "The released version."},
+        ]
+    )
+    calls = []
+
+    def fake_complete(model, messages):
+        calls.append(messages)
+        return _fenced(plan_data, digest=digest)
+
+    _digest, plan = deep_read(
+        "https://github.com/strands-agents/harness-sdk/releases/tag/v0.1.1",
+        lambda url: source,
+        fake_complete,
+    )
+
+    assert len(calls) == 1
+    assert plan.key_numbers[1].value == "0.1.1"
+
+
+def test_deep_read_grounds_a_percentage_split_across_a_line_break():
+    """The digest wraps between "74.2" and "percent". The number regex spans
+    the newline, so the normaliser has to treat it like any other space (this
+    killed the novel track on 2026-09-21).
+    """
+    source = SOURCE_TEXT + " Accuracy reaches 74.2% on the held-out split."
+    digest = DIGEST_MD + "\n\nAccuracy reaches 74.2\npercent on the split."
+    plan_data = _plan_kwargs(
+        key_numbers=[{"value": "74.2%", "meaning": "Held-out split accuracy."}]
+    )
+    calls = []
+
+    def fake_complete(model, messages):
+        calls.append(messages)
+        return _fenced(plan_data, digest=digest)
+
+    _digest, plan = deep_read(
+        "https://arxiv.org/abs/2609.19969", lambda url: source, fake_complete
+    )
+
+    assert len(calls) == 1
+    assert plan.key_numbers[0].value == "74.2%"
+
+
+def test_deep_read_drops_an_ungrounded_key_number_instead_of_losing_the_video():
+    """The numbers card is optional in the template, so a stray figure there
+    costs the card, not the whole day's video.
+    """
+    plan_data = _plan_kwargs(
+        key_numbers=[
+            {"value": "12%", "meaning": "Accuracy gain over raw context."},
+            {"value": "91%", "meaning": "Not in the source."},
+        ]
+    )
+    calls = []
+
+    def fake_complete(model, messages):
+        calls.append(messages)
+        return _fenced(plan_data)
+
+    _digest, plan = deep_read(
+        "https://arxiv.org/abs/2601.00001", lambda url: SOURCE_TEXT, fake_complete
+    )
+
+    # One retry first: the model gets a chance to fix its own number.
+    assert len(calls) == 2
+    assert [number.value for number in plan.key_numbers] == ["12%"]
+
+
+def test_deep_read_keeps_failing_when_the_bad_number_is_in_the_digest():
+    """A number in the digest is a claim Daniel reads. Not droppable."""
+    digest = DIGEST_MD + "\n\nThe method reaches 91% accuracy."
+    plan_data = _plan_kwargs(
+        key_numbers=[{"value": "12%", "meaning": "Accuracy gain over raw context."}]
+    )
+
+    with pytest.raises(ValueError, match=r"numbers missing.*91%"):
+        deep_read(
+            "https://arxiv.org/abs/2601.00001",
+            lambda url: SOURCE_TEXT,
+            lambda model, messages: _fenced(plan_data, digest=digest),
+        )
+
+
+def test_deep_read_keeps_failing_when_the_bad_number_is_in_the_narration():
+    """Narration is spoken in the video. Not droppable either."""
+    plan_data = _plan_kwargs()
+    plan_data["mechanism_steps"][0]["narration"] = "First, split the 91% of turns."
+
+    with pytest.raises(ValueError, match=r"numbers missing.*91%"):
+        deep_read(
+            "https://arxiv.org/abs/2601.00001",
+            lambda url: SOURCE_TEXT,
+            lambda model, messages: _fenced(plan_data),
+        )
+
+
+def test_deep_read_still_rejects_a_number_absent_from_the_source():
+    """The grounding guard keeps its teeth: 91% appears nowhere in the source."""
+    plan_data = _plan_kwargs(
+        key_numbers=[{"value": "91%", "meaning": "Invented gain."}]
+    )
+    digest = DIGEST_MD.replace("12%", "91%")
+
+    with pytest.raises(ValueError, match=r"numbers missing.*91%"):
+        deep_read(
+            "https://arxiv.org/abs/2601.00001",
+            lambda url: SOURCE_TEXT,
+            lambda model, messages: _fenced(plan_data, digest=digest),
+        )
+
+
+def test_deep_read_caps_an_oversized_source_before_prompting(monkeypatch):
+    """A 2.2M-token page must never reach the model (this killed the core
+    track on 2026-09-23 with "prompt is too long").
+    """
+    monkeypatch.setattr(source_text, "count_tokens", lambda text: len(text) // 4)
+    source = SOURCE_TEXT + (" filler words here." * 200_000)
+    seen = {}
+
+    def fake_complete(model, messages):
+        seen["prompt"] = messages[-1]["content"]
+        return _fenced(VALID_PLAN_DICT)
+
+    deep_read("https://arxiv.org/abs/2601.00002", lambda url: source, fake_complete)
+
+    assert source_text.TRUNCATION_NOTICE in seen["prompt"]
+    assert len(seen["prompt"]) < len(source)
+
+
+def test_deep_read_grounds_numbers_from_the_part_it_truncated(monkeypatch):
+    """Truncation shrinks what the model reads, never what the guard checks:
+    the model can only cite what it saw, so grounding stays on the full source.
+    """
+    monkeypatch.setattr(source_text, "count_tokens", lambda text: len(text) // 4)
+    source = (
+        SOURCE_TEXT
+        + (" filler words here." * 200_000)
+        + " The final table reports 88%."
+    )
+    digest = DIGEST_MD + "\n\nThe final table reports 88%."
+    plan_data = _plan_kwargs(
+        key_numbers=[{"value": "88%", "meaning": "Reported in the final table."}]
+    )
+
+    _digest, plan = deep_read(
+        "https://arxiv.org/abs/2601.00003",
+        lambda url: source,
+        lambda model, messages: _fenced(plan_data, digest=digest),
+    )
+
+    assert plan.key_numbers[0].value == "88%"
 
 
 def test_deep_read_passes_fetched_text_and_url_into_prompt():

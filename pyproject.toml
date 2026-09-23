@@ -6,6 +6,7 @@ readme = "README.md"
 authors = [{ name = "Daniel Puri" }]
 requires-python = ">=3.12"
 dependencies = [
+    "beautifulsoup4>=4.15.0",
     "boto3>=1.40.61",
     "faker>=40.36.0",
     "httpx>=0.28.1",
