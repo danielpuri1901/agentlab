@@ -22,6 +22,16 @@ FRAMES_PER_BEAT = 3
 FRAME_SAMPLE_TIMEOUT_SECONDS = 15
 MAX_MISSING_VISUALS = 0
 MIN_PASS_SCORE = 7
+MIN_SHIP_SCORE = 5
+"""The floor for shipping a video the judge did not pass outright.
+
+A defect is either substantive (the frame is not grounded in the storyboard,
+or the whole video is weak) or cosmetic (overlap, a cut-off label, a beat
+that does not show its visual). Only substantive defects are worth paying
+another scene-coder call and another render for: between 2026-08-25 and
+2026-09-23 the retry loop tripled the median video cost, from 0.49 to 1.56
+USD, and still ended in a discarded run whenever nothing reached a clean
+pass. Cosmetic defects ship."""
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +57,33 @@ class Judgement(BaseModel):
     score: int = Field(ge=0, le=10)
     verdict: Literal["pass", "fix"] = "pass"
     note: str | None = None
+
+
+def blocking_defect(judgement: "Judgement") -> str | None:
+    """Why this candidate must not ship, or None if it is shippable as it is.
+
+    Grounding is the one visual property that cannot be waved through: a beat
+    that does not match the storyboard shows Daniel something the source never
+    said, the same failure the scene-plan number guard exists to stop.
+    """
+    if any(not beat.grounded for beat in judgement.beats):
+        return "a beat is not grounded in the storyboard"
+    if judgement.score < MIN_SHIP_SCORE:
+        return f"score {judgement.score}/10 is below the ship floor"
+    return None
+
+
+def cosmetic_only(judgement: "Judgement") -> bool:
+    """True when the judge asked for a fix but every defect is cosmetic.
+
+    The video is already at pass-level quality overall, so another attempt
+    buys a tidier frame at the price of a full coder call plus a render.
+    """
+    return (
+        judgement.verdict != "pass"
+        and blocking_defect(judgement) is None
+        and judgement.score >= MIN_PASS_SCORE
+    )
 
 
 def verdict_from_beats(beats: list[BeatJudgement], score: int = 10) -> str:

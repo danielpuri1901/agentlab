@@ -82,6 +82,21 @@ def _judgement(score=8, fix_beat=None):
     return judgement
 
 
+def _ungrounded(score=6, beat=1):
+    """A substantive defect: the frame does not match the storyboard."""
+    judgement = _judgement(score=score)
+    judgement.beats[beat - 1] = BeatJudgement(
+        beat=beat,
+        grounded=False,
+        shows_visual=True,
+        legible=True,
+        clean=True,
+        issue="shows a different mechanism",
+    )
+    judgement.verdict = "fix"
+    return judgement
+
+
 @pytest.fixture
 def seams(monkeypatch):
     """Fake external steps while leaving the compose logic real."""
@@ -308,19 +323,60 @@ def test_raw_total_overrun_above_limit_goes_back_to_the_coder(seams, tmp_path):
     assert "total overrun" in seams["coder"][1]
 
 
-def test_judge_fix_retries_then_rejects_every_failed_candidate(seams, tmp_path):
-    seams["judgements"] = [
-        _judgement(score=7, fix_beat=2),
-        _judgement(score=4, fix_beat=3),
-        _judgement(score=6, fix_beat=1),
-        _judgement(score=5, fix_beat=4),
-    ]
+def test_cosmetic_defect_ships_on_the_first_attempt(seams, tmp_path):
+    """A beat with overlap is not worth a second coder call and render."""
+    seams["judgements"] = [_judgement(score=7, fix_beat=2)]
+
+    result = _compose(tmp_path)
+
+    assert result.attempts == 1
+    assert result.passed is False
+    assert result.judge_score == 7
+    assert [quality for quality, _ in seams["renders"]] == ["l", "m"]
+
+
+def test_substantive_defect_still_goes_back_to_the_coder(seams, tmp_path):
+    seams["judgements"] = [_ungrounded(score=7), _judgement(score=8)]
+
+    result = _compose(tmp_path)
+
+    assert result.attempts == 2
+    assert "beat 1" in seams["coder"][1]
+    assert result.passed is True
+
+
+def test_every_candidate_ungrounded_still_fails_the_gate(seams, tmp_path):
+    seams["judgements"] = [_ungrounded(score=score) for score in (7, 4, 6, 5)]
 
     with pytest.raises(StoryFailed, match="quality gate failed after 4 attempts"):
         _compose(tmp_path)
 
     assert [quality for quality, _ in seams["renders"]] == ["l"] * 4
-    assert "beat 2" in seams["coder"][1]
+
+
+def test_best_shippable_candidate_wins_when_nothing_passes(seams, tmp_path):
+    """Exhaustion ships the best clean-enough render instead of discarding
+    four of them and paying for a template video on top."""
+    seams["judgements"] = [
+        _ungrounded(score=8),
+        _judgement(score=5, fix_beat=3),
+        _ungrounded(score=9),
+        _judgement(score=6, fix_beat=2),
+    ]
+
+    result = _compose(tmp_path)
+
+    assert result.passed is False
+    assert result.judge_score == 6
+    assert result.selected_attempt == 4
+
+
+def test_a_weak_score_never_ships(seams, tmp_path):
+    """Below the ship floor is substantive, not cosmetic."""
+    seams["judgements"] = [_judgement(score=4, fix_beat=2)] * 4
+
+    with pytest.raises(StoryFailed, match="quality gate failed after 4 attempts"):
+        _compose(tmp_path)
 
 
 def test_low_quality_judgement_retries_with_a_fresh_visual_concept(seams, tmp_path):
@@ -340,7 +396,7 @@ def test_latest_candidate_wins_a_score_tie(seams, tmp_path):
     latest_source = GOLDEN_SCENE + "\n# latest candidate\n"
     seams["codes"] = [GOLDEN_SCENE, latest_source]
     seams["judgements"] = [
-        _judgement(score=7, fix_beat=2),
+        _ungrounded(score=7),
         _judgement(score=7),
     ]
 
@@ -350,16 +406,14 @@ def test_latest_candidate_wins_a_score_tie(seams, tmp_path):
     assert result.scene_source == latest_source
 
 
-def test_later_coder_failure_does_not_ship_earlier_rejected_candidate(
-    seams, tmp_path
-):
+def test_later_coder_failure_does_not_ship_earlier_rejected_candidate(seams, tmp_path):
     seams["codes"] = [
         GOLDEN_SCENE,
         RuntimeError("coder unavailable"),
         RuntimeError("coder unavailable"),
         RuntimeError("coder unavailable"),
     ]
-    seams["judgements"] = [_judgement(score=7, fix_beat=2)]
+    seams["judgements"] = [_ungrounded(score=7)]
 
     with pytest.raises(StoryFailed, match="quality gate failed after 4 attempts"):
         _compose(tmp_path)

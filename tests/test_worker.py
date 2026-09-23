@@ -1283,6 +1283,58 @@ def test_explain_classic_track_advances_to_next_unseen_entry_across_two_runs(
     assert len(sendvideo_calls) == 2
 
 
+def test_explain_pings_once_when_the_classic_corpus_runs_out(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    """An exhausted classic track said "empty" silently for a week."""
+    _s3, _dynamodb, _table, _ssm = moto_fabric_with_ssm
+    _set_explain_env(monkeypatch, track="classic")
+    _set_daytime(monkeypatch)
+    _patch_explain_render_stages(monkeypatch)
+    monkeypatch.setattr(worker_mod, "_load_classics", list)
+
+    assert runner.invoke(app, ["worker", "explain"]).exit_code == 0
+    warnings = [
+        c
+        for c in telegram_calls
+        if c[0].endswith("/sendMessage") and "out of papers" in str(c[1])
+    ]
+    assert len(warnings) == 1
+
+    assert runner.invoke(app, ["worker", "explain"]).exit_code == 0
+    warnings = [
+        c
+        for c in telegram_calls
+        if c[0].endswith("/sendMessage") and "out of papers" in str(c[1])
+    ]
+    assert len(warnings) == 1, "the warning must not nag every day"
+
+
+def test_explain_warns_again_after_the_classic_corpus_grows(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    _set_explain_env(monkeypatch, track="classic")
+    _set_daytime(monkeypatch)
+    _patch_explain_render_stages(monkeypatch)
+
+    monkeypatch.setattr(worker_mod, "_load_classics", list)
+    assert runner.invoke(app, ["worker", "explain"]).exit_code == 0
+
+    # Daniel adds a paper, it gets sent, and the track empties again.
+    monkeypatch.setattr(
+        worker_mod, "_load_classics", lambda: [{"title": "x", "url": "u"}]
+    )
+    worker_mod._warn_classics_exhausted(table, boto3.client("ssm"))
+
+    warnings = [
+        c
+        for c in telegram_calls
+        if c[0].endswith("/sendMessage") and "out of papers" in str(c[1])
+    ]
+    assert len(warnings) == 2
+
+
 def test_explain_invalid_track_env_exits_nonzero(moto_fabric_with_ssm, monkeypatch):
     _s3, _dynamodb, _table, _ssm = moto_fabric_with_ssm
     _set_explain_env(monkeypatch, track="bogus")

@@ -507,6 +507,45 @@ def _load_interests() -> str:
     return INTERESTS_PATH.read_text(encoding="utf-8")
 
 
+CLASSICS_EXHAUSTED_ID = "explain-classics-exhausted"
+
+
+def _warn_classics_exhausted(table, ssm_client) -> bool:
+    """Ping once when the classic track has sent every paper it has.
+
+    "empty" is silent and permanent: the track answered empty every day from
+    2026-09-17 to 2026-09-23 and nothing ever said why. The marker records the
+    corpus size it warned about, so adding entries to docs/classics.json arms
+    the warning again without any manual reset.
+    """
+    try:
+        size = len(_load_classics())
+        item = table.get_item(
+            Key={"experiment_id": CLASSICS_EXHAUSTED_ID, "sk": "marker"}
+        ).get("Item")
+        if item and int(item.get("corpus_size", 0)) >= size:
+            return False
+        table.put_item(
+            Item={
+                "experiment_id": CLASSICS_EXHAUSTED_ID,
+                "sk": "marker",
+                "corpus_size": size,
+                "ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            }
+        )
+        notify(
+            table,
+            ssm_client,
+            "The classic track is out of papers. It has sent all "
+            f"{size} entries in docs/classics.json. Add more entries to "
+            "start it again.",
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 - a warning must never fail the run
+        typer.echo(f"classics-exhausted warning failed: {exc}", err=True)
+        return False
+
+
 def _next_unseen_classic(table) -> dict | None:
     """First docs/classics.json entry not already in the seen-papers store,
     in file order; None once every classic has been sent."""
@@ -1019,6 +1058,9 @@ def explain_command() -> None:
                 notify(table, ssm_client, fallback)
             except Exception as ping_exc:  # noqa: BLE001 - never mask the track error
                 typer.echo(f"fallback ping failed for {track}: {ping_exc}", err=True)
+
+    if statuses.get("classic") == "empty":
+        _warn_classics_exhausted(table, ssm_client)
 
     summary = " ".join(f"{t}={statuses[t]}" for t in EXPLAIN_TRACKS if t in statuses)
     typer.echo(f"explain: {summary}")

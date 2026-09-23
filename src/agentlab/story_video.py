@@ -17,7 +17,9 @@ from pathlib import Path
 from agentlab import story_scene
 from agentlab.frame_judge import (
     FRAME_SAMPLE_TIMEOUT_SECONDS,
+    blocking_defect,
     contact_sheet_frames,
+    cosmetic_only,
     judge_frames,
     judgement_feedback,
     sample_frames,
@@ -498,6 +500,15 @@ def _compose(
         )
         if judgement.verdict == "pass":
             break
+        if cosmetic_only(judgement):
+            # Ship it. Another attempt would buy a tidier frame for a coder
+            # call plus a render, and the video is already at pass quality.
+            logger.info(
+                "attempt %d ships with cosmetic defects only (score %d)",
+                attempt,
+                judgement.score,
+            )
+            break
         feedback = judgement_feedback(judgement)
         has_technical_problem = any(
             not beat.grounded or not beat.legible or not beat.clean
@@ -514,25 +525,30 @@ def _compose(
     passed = [
         candidate for candidate in candidates if candidate.judgement.verdict == "pass"
     ]
-    if not passed:
-        best_rejected = max(
-            candidates,
-            key=lambda candidate: (candidate.judgement.score, candidate.attempt),
-        )
-        issue = next(
-            (
-                beat.issue
-                for beat in best_rejected.judgement.beats
-                if beat.issue
-            ),
-            best_rejected.judgement.note or "judge requested another fix",
-        )
-        raise StoryFailed(
-            f"quality gate failed after {attempts} attempts: "
-            f"best score {best_rejected.judgement.score}/10; {issue}"
-        )
-
     pool = passed
+    if not passed:
+        # Nothing reached a clean pass. Ship the best candidate that carries no
+        # substantive defect rather than throwing away every render and paying
+        # for a template video on top (18 such fallbacks by 2026-09-23).
+        shippable = [
+            candidate
+            for candidate in candidates
+            if blocking_defect(candidate.judgement) is None
+        ]
+        if not shippable:
+            best_rejected = max(
+                candidates,
+                key=lambda candidate: (candidate.judgement.score, candidate.attempt),
+            )
+            issue = next(
+                (beat.issue for beat in best_rejected.judgement.beats if beat.issue),
+                best_rejected.judgement.note or "judge requested another fix",
+            )
+            raise StoryFailed(
+                f"quality gate failed after {attempts} attempts: "
+                f"best score {best_rejected.judgement.score}/10; {issue}"
+            )
+        pool = shippable
     best = max(
         pool, key=lambda candidate: (candidate.judgement.score, candidate.attempt)
     )
