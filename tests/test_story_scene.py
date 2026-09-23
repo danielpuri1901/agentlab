@@ -154,3 +154,60 @@ def test_fractional_narration_durations_are_padded_to_whole_frames(tmp_path):
         actual_seconds = beat["end"] - beat["start"]
         assert actual_seconds >= narration_seconds - 1e-6
         assert actual_seconds < narration_seconds + frame_seconds + 1e-6
+
+
+def test_layout_problems_passes_a_frame_inside_the_stage():
+    boxes = [("title", -2.0, 2.0, 2.0, 3.0), ("diagram", -3.0, 3.0, -1.0, 1.0)]
+
+    assert story_scene.layout_problems(boxes, caption_top=-2.0) == []
+
+
+def test_layout_problems_names_the_element_that_leaves_the_stage():
+    """The hexagons spilled outside the context-window panel on 2026-09-23."""
+    boxes = [("hexagons", story_scene.STAGE_LEFT - 0.6, -2.0, 0.0, 1.0)]
+
+    problems = story_scene.layout_problems(boxes)
+
+    assert problems == ["hexagons runs off the left edge"]
+
+
+def test_layout_problems_catches_every_edge():
+    far = 99.0
+    problems = story_scene.layout_problems([("blob", -far, far, -far, far)])
+
+    assert len(problems) == 4
+
+
+def test_layout_problems_catches_the_caption_band():
+    """The judge called this "the rectangle clips the caption band"."""
+    boxes = [("'Fine-tuning not evaluated'", -1.0, 1.0, -2.2, -1.6)]
+
+    problems = story_scene.layout_problems(boxes, caption_top=-2.0)
+
+    assert problems == ["'Fine-tuning not evaluated' sits on the caption band"]
+
+
+def test_layout_problems_allows_a_box_resting_above_the_caption():
+    boxes = [("bar", -1.0, 1.0, -1.8, -1.0)]
+
+    assert story_scene.layout_problems(boxes, caption_top=-2.0) == []
+
+
+def test_layout_problems_tolerates_stroke_width_at_the_edge():
+    boxes = [("panel", story_scene.STAGE_LEFT - 0.01, 1.0, 0.0, 1.0)]
+
+    assert story_scene.layout_problems(boxes) == []
+
+
+def test_layout_problems_ignores_the_caption_band_before_a_caption_exists():
+    boxes = [("intro", -1.0, 1.0, story_scene.STAGE_BOTTOM, -1.0)]
+
+    assert story_scene.layout_problems(boxes, caption_top=None) == []
+
+
+def test_layout_problems_ignores_mobjects_that_draw_nothing():
+    """A ValueTracker is a point whose x coordinate is the value it holds, so
+    a counter running to 175 parks it far off stage while drawing nothing."""
+    boxes = [("ValueTracker", 175.0, 175.0, 0.0, 0.0)]
+
+    assert story_scene.layout_problems(boxes) == []

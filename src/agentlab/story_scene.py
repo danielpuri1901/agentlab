@@ -70,6 +70,55 @@ def wrap_text(s: str, width: int = 44) -> str:
     return "\n".join(textwrap.wrap(s, width)) or s
 
 
+LAYOUT_TOLERANCE = 0.05
+"""Slack before a box counts as off-stage. Anti-aliasing and stroke width
+put a few hundredths of a unit outside a mobject's nominal bounds."""
+
+CAPTION_CLEARANCE = 0.12
+"""Gap a mobject must keep above the caption band."""
+
+MAX_REPORTED_PROBLEMS = 4
+
+
+def layout_problems(boxes, caption_top=None) -> list[str]:
+    """Name every box that leaves the stage or sits on the caption band.
+
+    Pure geometry, deliberately. The frame judge described these in prose
+    ("the context window rectangle clips the caption band", "the label box
+    overlaps the accuracy bar") after a render, a frame sample and a judge
+    call had all been paid for, and the coder then guessed at new
+    coordinates. On 2026-09-23 four attempts in a row failed this way on
+    every video. The same faults are exact rectangle arithmetic, so they are
+    caught during the render, before a single judge token is spent, and the
+    coder is told which element and which edge.
+
+    `boxes` is [(name, left, right, bottom, top)]. `caption_top` is the top
+    of the caption band, or None when there is no caption yet.
+    """
+    problems: list[str] = []
+    for name, left, right, bottom, top in boxes:
+        # A box with no extent draws nothing. ValueTracker is the one that
+        # matters: it is a single point whose x coordinate IS the number it
+        # stores, so a counter running to 175 parks it far off the stage.
+        if right - left < LAYOUT_TOLERANCE and top - bottom < LAYOUT_TOLERANCE:
+            continue
+        if left < STAGE_LEFT - LAYOUT_TOLERANCE:
+            problems.append(f"{name} runs off the left edge")
+        if right > STAGE_RIGHT + LAYOUT_TOLERANCE:
+            problems.append(f"{name} runs off the right edge")
+        if top > STAGE_TOP + LAYOUT_TOLERANCE:
+            problems.append(f"{name} runs off the top edge")
+        if bottom < STAGE_BOTTOM - LAYOUT_TOLERANCE:
+            problems.append(f"{name} runs off the bottom edge")
+        if (
+            caption_top is not None
+            and bottom < caption_top + CAPTION_CLEARANCE
+            and top > caption_top - LAYOUT_TOLERANCE
+        ):
+            problems.append(f"{name} sits on the caption band")
+    return problems
+
+
 def beat_record(index: int, start: float, end: float, narration_seconds: float) -> dict:
     return {
         "beat": index,
@@ -133,6 +182,28 @@ except ImportError:  # pragma: no cover - only hit without manim installed
 
 if _MANIM_AVAILABLE:
 
+    def _describe_mobject(mobject) -> str:
+        """A name the scene coder can act on.
+
+        Its own text when it has some, otherwise the text of the first label
+        inside it, so a group reads as "the group holding 'Context window'"
+        instead of the bare "VGroup" that tells the coder nothing.
+        """
+        own = getattr(mobject, "text", None)
+        if isinstance(own, str) and own.strip():
+            return repr(" ".join(own.split())[:40])
+        for child in mobject.get_family():
+            text = getattr(child, "text", None)
+            if isinstance(text, str) and text.strip():
+                label = repr(" ".join(text.split())[:40])
+                return f"the group holding {label}"
+        shapes = [type(c).__name__ for c in mobject.submobjects]
+        if shapes:
+            kinds = sorted(set(shapes))
+            return f"the {type(mobject).__name__} of {len(shapes)} {'/'.join(kinds[:2])}"
+        return type(mobject).__name__
+
+
     class StoryScene(Scene):
         """Subclass as PaperStory, define beat_1 .. beat_n, never override
         construct. See the API cheat-sheet in agentlab.scene_code."""
@@ -165,6 +236,7 @@ if _MANIM_AVAILABLE:
                         frame_seconds + FRAME_TIME_TOLERANCE,
                         frozen_frame=True,
                     )
+                self._audit_layout(i + 1)
                 self._timing.append(beat_record(i + 1, start, self.time, durations[i]))
             self._write_timing()
 
@@ -217,6 +289,39 @@ if _MANIM_AVAILABLE:
             self.wait(max(float(seconds), 0.01))
 
         # -- owned by the base class -------------------------------------------
+
+        def _audit_layout(self, beat: int):
+            """Fail the render when this beat's final frame is off-stage or on
+            the caption band. Runs after the beat method returns, so every
+            mobject is at its resting position."""
+            caption_top = None
+            if self._caption is not None:
+                caption_top = float(self._caption.get_top()[1])
+            boxes = []
+            for mobject in self.mobjects:
+                if mobject is self._caption:
+                    continue
+                if not mobject.get_all_points().size:
+                    continue
+                boxes.append(
+                    (
+                        _describe_mobject(mobject),
+                        float(mobject.get_left()[0]),
+                        float(mobject.get_right()[0]),
+                        float(mobject.get_bottom()[1]),
+                        float(mobject.get_top()[1]),
+                    )
+                )
+            problems = layout_problems(boxes, caption_top)
+            if problems:
+                raise ValueError(
+                    f"beat {beat} layout: "
+                    + "; ".join(problems[:MAX_REPORTED_PROBLEMS])
+                    + f". The stage is x {STAGE_LEFT} to {STAGE_RIGHT}, y "
+                    f"{STAGE_BOTTOM} to {STAGE_TOP}, and the caption band is "
+                    "below that. Place every element inside the stage and call "
+                    "self.fit on it."
+                )
 
         def _swap_caption(self, text: str):
             new = self.fit(

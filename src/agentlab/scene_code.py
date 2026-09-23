@@ -349,6 +349,14 @@ Constants (import them from story_scene): BACKGROUND, ACCENT (#2f6fd6, the one a
 colour), GOLD, GREEN, RED, GREY_A, GREY_B, GREY_C, GREY_D, WHITE, STAGE_TOP (3.6), \
 STAGE_BOTTOM (-2.3), STAGE_LEFT (-6.4), STAGE_RIGHT (6.4).
 
+Layout is checked, not judged. At the end of every beat the render fails if \
+any element is outside the stage or sits on the caption band, and the error \
+names the element and the edge. So keep every element between STAGE_LEFT and \
+STAGE_RIGHT, and between STAGE_BOTTOM and STAGE_TOP. The caption band lives \
+below STAGE_BOTTOM: nothing you place may reach into it. Remember that a \
+group grows as you add to it, so call self.fit on the finished group and \
+place the group, not each piece.
+
 Methods:
 - self.fit(mobject, max_w=None, max_h=None): shrink to the stage or the given bounds; returns the mobject. Call it on every text block and every group before placing it.
 - self.label(text, size=28, color=WHITE, width=44, bold=False): a wrapped, fitted Text. Place it with next_to / move_to / to_edge.
