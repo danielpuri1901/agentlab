@@ -147,8 +147,12 @@ resource "aws_scheduler_schedule" "proposer" {
 # entries, neither of which holds here (different task definition,
 # container name "explain") - a clone of the same block shape, targeting
 # the explain task definition instead.
+#
+# Disabled 2026-09-24: videos now come only from approved proposals
+# (approvals_webhook.py starts the explain task on the cited URL).
 resource "aws_scheduler_schedule" "explain" {
   name                         = "agentlab-explain"
+  state                        = "DISABLED"
   schedule_expression          = "cron(30 10 * * ? *)"
   schedule_expression_timezone = "Europe/Amsterdam"
 
