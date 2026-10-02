@@ -63,5 +63,5 @@ Note: URLs get verified and attached at build time; titles are enough here.
 
 ## Your own additions
 
-26. model collapse
+26. The Curse of Recursion: Training on Generated Data Makes Models Forget
     Label: seems cool.implement

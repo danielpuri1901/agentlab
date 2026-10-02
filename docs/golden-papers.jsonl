@@ -1,0 +1,26 @@
+{"title": "Recursive Self-Improvement in AI", "url": "https://arxiv.org/abs/2607.07663", "rating": "COOL", "why": "adopted as the lab's design rubric; the verification hierarchy now gates our architecture decisions."}
+{"title": "SPADE: self-play in synthetic executable environments", "url": "https://arxiv.org/abs/2608.19197", "rating": "COOL", "why": "became pre-registered experiment 003 (regret-curated curriculum)."}
+{"title": "Covert coordination detection in multi-agent systems", "url": "https://arxiv.org/abs/2608.19161", "rating": "COOL", "why": "became pre-registered experiment 004; directly relevant to fleet honesty."}
+{"title": "Voyager: an open-ended embodied agent", "url": "https://arxiv.org/abs/2305.16291", "rating": "COOL", "why": "its skill library is the blueprint for our learned-state architecture."}
+{"title": "Eureka-style meta-agent orchestration", "url": "https://arxiv.org/abs/2608.19047", "rating": "MEH", "why": "approved on a claimed connection the paper does not support; interesting frame, nothing directly implementable survived scrutiny."}
+{"title": "Attention Is All You Need", "url": "https://arxiv.org/abs/1706.03762", "rating": "COOL", "why": "The GOAT paper, basically the most revolutionary paper of all time. This allowed LMs to have scaling laws."}
+{"title": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models", "url": "https://arxiv.org/abs/2201.11903", "rating": "COOL", "why": "Very important: chain-of-thought reasoning, similar to REACT, is very important."}
+{"title": "ReAct: Synergizing Reasoning and Acting in Language Models", "url": "https://arxiv.org/abs/2210.03629", "rating": "COOL", "why": "it's a GOAT thing. I should know about this."}
+{"title": "Reflexion: Language Agents with Verbal Reinforcement Learning", "url": "https://arxiv.org/abs/2303.11366", "rating": "COOL", "why": "I've heard about it, and I want to learn about it. It's a topic that I've known about."}
+{"title": "Toolformer: Language Models Can Teach Themselves to Use Tools", "url": "https://arxiv.org/abs/2302.04761", "rating": "COOL", "why": "Sounds interesting."}
+{"title": "Tree of Thoughts: Deliberate Problem Solving with LLMs", "url": "https://arxiv.org/abs/2305.10601", "rating": "COOL", "why": "Sounds very interesting."}
+{"title": "Self-Refine: Iterative Refinement with Self-Feedback", "url": null, "rating": "COOL", "why": "Sounds pretty cool."}
+{"title": "Let's Verify Step by Step", "url": "https://arxiv.org/abs/2305.20050", "rating": "COOL", "why": "Seems foundational, and I should learn about it."}
+{"title": "Training Language Models to Follow Instructions", "url": null, "rating": "COOL", "why": "Instruct GPT heard about that one and RLHF."}
+{"title": "Constitutional AI: Harmlessness from AI Feedback", "url": "https://arxiv.org/abs/2212.08073", "rating": "SKIP", "why": "Doesn't really have a catchy title. I don't really know what harmlessness from AI feedback means."}
+{"title": "Training Compute-Optimal Large Language Models", "url": "https://arxiv.org/abs/2203.15556", "rating": "COOL", "why": "Seems very interesting."}
+{"title": "Generative Agents: Interactive Simulacra of Human Behavior", "url": "https://arxiv.org/abs/2304.03442", "rating": "COOL", "why": "sounds cool"}
+{"title": "MemGPT: Towards LLMs as Operating Systems", "url": "https://arxiv.org/abs/2310.08560", "rating": "COOL", "why": "Like an old goat model."}
+{"title": "SWE-bench: Can Language Models Resolve Real-World GitHub Issues?", "url": "https://arxiv.org/abs/2310.06770", "rating": "COOL", "why": "I've heard of SWE bench. We love to get deep into it."}
+{"title": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena", "url": "https://arxiv.org/abs/2306.05685", "rating": "COOL", "why": "Yeah, we'll have to know about this more."}
+{"title": "Self-Consistency Improves Chain of Thought Reasoning", "url": null, "rating": "COOL", "why": "__Yeah, let's do it. _"}
+{"title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP", "url": "https://arxiv.org/abs/2005.11401", "rating": "COOL", "why": "It was interesting."}
+{"title": "STaR: Self-Taught Reasoner", "url": null, "rating": "COOL", "why": "This seems cool."}
+{"title": "Evaluating Large Language Models Trained on Code", "url": "https://arxiv.org/abs/2107.03374", "rating": "COOL", "why": "seems cool"}
+{"title": "DSPy: Compiling Declarative Language Model Calls into Pipelines", "url": "https://arxiv.org/abs/2310.03714", "rating": "COOL", "why": "dspy ive heard of"}
+{"title": "The Curse of Recursion: Training on Generated Data Makes Models Forget", "url": "https://arxiv.org/abs/2305.17493", "rating": "COOL", "why": ""}
