@@ -307,7 +307,7 @@ About 80 items times 2 profiles means about 160 Haiku-sized calls a week.
 `_run_explain_track` loads the profile text through `profile.load_profile_text` and passes it where `interests.md` was passed.
 The gated `build_preference_context`, `load_preference_context`, `merge_feedback`, and `load_live_feedback` are deleted from `preferences.py` with their tests.
 `candidate_topics` and the topic taxonomy stay, because the video item still records `topics`.
-`GOLDEN_PAPERS_PATH` moves to `episodes.py`.
+`GOLDEN_PAPERS_PATH`, `CLASSICS_PATH`, and `INTERESTS_PATH` move to a small `repo_files.py` module that both the worker and the proposer import.
 
 ## Golden sheet converter
 
