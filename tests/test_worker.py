@@ -23,6 +23,8 @@ from agentlab.cli import app
 from agentlab.costs import ModelCallUsage
 from agentlab.eval_runner import _run_arm
 from agentlab.notify import CHAT_ID_PARAM, TOKEN_PARAM, notify
+from agentlab.profile import set_pointer, write_profile
+from agentlab.proposals import file_proposal, get_proposal
 from agentlab.results import extract_results, mean_score
 from agentlab.scene_plan import ScenePlan
 from agentlab.stats import paired_analysis
@@ -316,6 +318,39 @@ def test_propose_command_flushes_then_proposes(monkeypatch):
     assert "filed 2 proposals" in result.output
 
 
+def test_consolidate_command_wires_env_and_dry_run(monkeypatch):
+    seen = {}
+
+    def fake_run(table, s3_client, ssm_client, bucket, model, probe_model, golden_path, seed_path, now=None, dry_run=False):
+        seen.update(bucket=bucket, model=model, probe_model=probe_model, dry_run=dry_run)
+        seen["golden"] = str(golden_path)
+        seen["seed"] = str(seed_path)
+        return {"text": "Taste profile update.\nApplied: no. test", "candidate": "# Daniel's taste profile\nx"}
+
+    monkeypatch.setattr("agentlab.consolidate.run_consolidate", fake_run)
+
+    result = runner.invoke(
+        app,
+        ["worker", "consolidate", "--dry-run"],
+        env={
+            "STATE_TABLE": TABLE,
+            "RESULTS_BUCKET": BUCKET,
+            "CONSOLIDATE_MODEL": "bedrock/sonnet-x",
+            "PROPOSER_MODEL": "bedrock/probe-x",
+        },
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen["bucket"] == BUCKET
+    assert seen["model"] == "bedrock/sonnet-x"
+    assert seen["probe_model"] == "bedrock/probe-x"
+    assert seen["dry_run"] is True
+    assert seen["golden"].endswith("docs/golden-papers.jsonl")
+    assert seen["seed"].endswith("docs/interests.md")
+    assert "Applied: no. test" in result.output
+    assert "candidate profile" in result.output
+
+
 def test_finalize_sends_ping_with_chart(
     moto_fabric_with_ssm, telegram_calls, monkeypatch, tmp_path
 ):
@@ -575,7 +610,7 @@ def test_run_arm_failure_ping_failure_does_not_mask_error(moto_fabric, monkeypat
 
 # ---------------------------------------------------------------------------
 # `worker explain`: three tracks (core/classic/novel), fully offline.
-# gather_exploit/gather_explore/pick_paper/deep_read/verify_voice and
+# gather_exploit/gather_explore/rank_papers/deep_read/verify_voice and
 # compose_story_video are monkeypatched on `agentlab.worker` (the names looked
 # up at call time inside explain_command's own module, same pattern as
 # `agentlab.worker._run_arm` above); DynamoDB/S3/Telegram stay real against
@@ -653,10 +688,6 @@ def _make_fake_deep_read(fail_urls=frozenset()):
     return fake_deep_read
 
 
-def _fake_pick_paper(candidates, interests_text, complete, mode="core", model=None):
-    return candidates[0]
-
-
 def _fake_rank_papers(
     candidates, interests_text, complete, mode="core", model=None, limit=3
 ):
@@ -714,7 +745,6 @@ def _patch_explain_render_stages(monkeypatch, fail_urls=frozenset(), story=None)
 def _patch_explain_pools(monkeypatch):
     monkeypatch.setattr("agentlab.worker.gather_exploit", lambda: [CORE_CANDIDATE])
     monkeypatch.setattr("agentlab.worker.gather_explore", lambda: [NOVEL_CANDIDATE])
-    monkeypatch.setattr("agentlab.worker.pick_paper", _fake_pick_paper)
     monkeypatch.setattr("agentlab.worker.rank_papers", _fake_rank_papers)
 
 
@@ -1054,7 +1084,6 @@ def test_explain_track_core_runs_only_core(
         "agentlab.worker.gather_explore",
         lambda: novel_pool_calls.append(1) or [NOVEL_CANDIDATE],
     )
-    monkeypatch.setattr("agentlab.worker.pick_paper", _fake_pick_paper)
     monkeypatch.setattr("agentlab.worker.rank_papers", _fake_rank_papers)
     _patch_explain_render_stages(monkeypatch)
 
@@ -1072,29 +1101,22 @@ def test_explain_track_core_runs_only_core(
     assert result.output.strip().endswith("explain: core=sent")
 
 
-def test_explain_uses_gated_feedback_and_collects_clarity(
+def test_explain_ranks_with_the_profile_and_collects_clarity(
     moto_fabric_with_ssm, telegram_calls, monkeypatch
 ):
-    _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
     _set_explain_env(monkeypatch, track="core")
     _set_daytime(monkeypatch)
+    write_profile(s3, BUCKET, "profile/v3.md", "PROFILE V3 TEXT")
+    set_pointer(table, "v3", "profile/v3.md", None, "consolidate", {}, datetime(2026, 8, 18, 16, 0, tzinfo=UTC))
     monkeypatch.setattr("agentlab.worker.gather_exploit", lambda: [CORE_CANDIDATE])
-    monkeypatch.setattr(
-        "agentlab.worker.load_preference_context",
-        lambda table_arg, path: "Preference evidence (topic-feedback-v1).",
-    )
-    captured = {"calls": []}
+    captured = {}
 
     def rank(candidates, interests_text, complete, mode="core", model=None, limit=3):
-        captured["calls"].append(list(candidates))
+        captured["interests"] = interests_text
+        captured["mode"] = mode
         return candidates[:limit]
 
-    def pick(candidates, interests_text, complete, mode="core", model=None):
-        captured["calls"].append(list(candidates))
-        captured["interests"] = interests_text
-        return candidates[0]
-
-    monkeypatch.setattr("agentlab.worker.pick_paper", pick)
     monkeypatch.setattr("agentlab.worker.rank_papers", rank)
     _patch_explain_render_stages(monkeypatch, story=_fake_story_success)
     real_notify = worker_mod.notify
@@ -1108,36 +1130,44 @@ def test_explain_uses_gated_feedback_and_collects_clarity(
     result = runner.invoke(app, ["worker", "explain"])
 
     assert result.exit_code == 0, result.output
-    assert "Preference evidence (topic-feedback-v1)." in captured["interests"]
-    assert len(captured["calls"]) == 2
-    assert len(captured["calls"][1]) <= 3
-    _url, kwargs = next(
-        call for call in telegram_calls if call[0].endswith("/sendVideo")
-    )
+    assert captured["interests"] == "PROFILE V3 TEXT"
+    assert captured["mode"] == "core"
+    _url, kwargs = next(call for call in telegram_calls if call[0].endswith("/sendVideo"))
     assert kwargs["data"]["caption"].startswith("[CORE] Core Candidate Paper\n")
     keyboard = json.loads(kwargs["data"]["reply_markup"])["inline_keyboard"]
     assert [button["text"] for button in keyboard[0]] == ["COOL", "MEH", "SKIP"]
     assert [button["text"] for button in keyboard[1]] == ["CLEAR", "UNCLEAR"]
     row = next(item for item in table.scan()["Items"] if item.get("sk") == "video")
     assert row["topics"]
-    assert row["selection_policy"] == "topic-feedback-v1"
-    assert row["candidate_set"] == [
-        {
-            "baseline_rank": 1,
-            "pool": "exploit",
-            "source": "arxiv",
-            "source_rank": 1,
-            "title": "Core Candidate Paper",
-            "topics": ["other"],
-            "url": CORE_CANDIDATE["url"],
-        }
-    ]
+    assert row["selection_policy"] == "taste-profile-v1"
+    assert row["feedback_status"] == "profile:v3"
     assert row["baseline_rank"] == 1
-    assert row["baseline_selection"] == row["candidate_set"][0]
-    assert row["feedback_status"] == "bounded-tiebreak"
-    assert row["exploration_status"] == "none"
-    assert row["selection_probability"] is None
+    assert row["pid"] is None
     assert row["clarity"] is None
+
+
+def test_explain_falls_back_to_the_seed_profile_without_a_pointer(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    _set_explain_env(monkeypatch, track="core")
+    _set_daytime(monkeypatch)
+    monkeypatch.setattr("agentlab.worker.gather_exploit", lambda: [CORE_CANDIDATE])
+    captured = {}
+
+    def rank(candidates, interests_text, complete, mode="core", model=None, limit=3):
+        captured["interests"] = interests_text
+        return candidates[:limit]
+
+    monkeypatch.setattr("agentlab.worker.rank_papers", rank)
+    _patch_explain_render_stages(monkeypatch, story=_fake_story_success)
+
+    result = runner.invoke(app, ["worker", "explain"])
+
+    assert result.exit_code == 0, result.output
+    assert "Daniel wants the single best new paper" in captured["interests"]
+    row = next(item for item in table.scan()["Items"] if item.get("sk") == "video")
+    assert row["feedback_status"] == "profile:seed"
 
 
 def test_explain_operator_replay_bypasses_seen_filter(
@@ -1175,6 +1205,27 @@ def test_explain_operator_replay_bypasses_seen_filter(
     assert video["url"] == replay_url
     assert video["title"] == replay_title
     assert video["feedback_status"] == "operator-replay"
+
+
+def test_explain_operator_replay_links_video_to_proposal(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    replay_url = "https://arxiv.org/abs/2510.03215"
+    _set_explain_env(monkeypatch, track="core")
+    monkeypatch.setenv("EXPLAIN_URL", replay_url)
+    monkeypatch.setenv("EXPLAIN_TITLE", "Cache-to-Cache")
+    monkeypatch.setenv("PID", "prop-1")
+    _set_daytime(monkeypatch)
+    file_proposal(table, "prop-1", "Cache-to-Cache", "why", replay_url, "d", "new_hypothesis")
+    _patch_explain_render_stages(monkeypatch, story=_fake_story_success)
+
+    result = runner.invoke(app, ["worker", "explain"])
+
+    assert result.exit_code == 0, result.output
+    video = next(item for item in table.scan()["Items"] if item.get("sk") == "video")
+    assert video["pid"] == "prop-1"
+    assert get_proposal(table, "prop-1")["video_key"] == video["video_key"]
 
 
 def test_explain_core_deep_read_failure_pings_fallback_novel_still_sends(

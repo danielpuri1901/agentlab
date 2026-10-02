@@ -50,18 +50,16 @@ from agentlab.papers_db import (
     recent_seen_titles,
     release_after_failure,
 )
-from agentlab.preferences import (
-    POLICY_VERSION,
-    candidate_topics,
-    load_preference_context,
-)
+from agentlab.preferences import candidate_topics
+from agentlab.profile import POLICY_VERSION, load_profile_text
+from agentlab.proposals import set_video_key
+from agentlab.repo_files import CLASSICS_PATH, GOLDEN_PAPERS_PATH, INTERESTS_PATH
 from agentlab.report import render_report
 from agentlab.results import extract_results, mean_score, total_cost, total_tokens
 from agentlab.scene_plan import (
     DEFAULT_DEEP_READ_MODEL,
     DEFAULT_PICK_MODEL,
     deep_read,
-    pick_paper,
     rank_papers,
 )
 from agentlab.sources import gather_exploit, gather_explore
@@ -70,16 +68,6 @@ from agentlab.story_video import StoryFailed, compose_story_video
 from agentlab.video_render import verify_voice
 
 worker_app = typer.Typer()
-
-# `docs/` lives at the repo root, not under src/agentlab/, so this walks up
-# from this module's location (src/agentlab/worker.py -> src/agentlab ->
-# src -> repo root) rather than relying on the process cwd; the Dockerfile's
-# `COPY . .` puts the whole repo under /app, so this resolves the same way
-# in the worker container as it does locally.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-CLASSICS_PATH = _REPO_ROOT / "docs" / "classics.json"
-INTERESTS_PATH = _REPO_ROOT / "docs" / "interests.md"
-GOLDEN_PAPERS_PATH = _REPO_ROOT / "docs" / "golden-papers.jsonl"
 
 _ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5})")
 EXPLAIN_TRACKS = ("core", "classic", "novel")
@@ -225,6 +213,37 @@ def propose_command() -> None:
         flushed = 0
     count = run_propose(table, ssm_client, s3_client, results_bucket, model)
     typer.echo(f"flushed {flushed} pending pings, filed {count} proposals")
+
+
+@worker_app.command("consolidate")
+def consolidate_command(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print the candidate profile and eval. Write nothing. Ping nobody."
+    ),
+) -> None:
+    """Weekly taste profile rewrite (Sunday 18:00 Amsterdam), gated by the probe eval."""
+    from agentlab.consolidate import DEFAULT_CONSOLIDATE_MODEL, run_consolidate
+    from agentlab.proposer import DEFAULT_PROPOSER_MODEL
+
+    state_table = _require_env("STATE_TABLE")
+    results_bucket = _require_env("RESULTS_BUCKET")
+    model = os.environ.get("CONSOLIDATE_MODEL", DEFAULT_CONSOLIDATE_MODEL)
+    probe_model = os.environ.get("PROPOSER_MODEL", DEFAULT_PROPOSER_MODEL)
+    table = boto3.resource("dynamodb").Table(state_table)
+    result = run_consolidate(
+        table,
+        boto3.client("s3"),
+        boto3.client("ssm"),
+        results_bucket,
+        model,
+        probe_model,
+        GOLDEN_PAPERS_PATH,
+        INTERESTS_PATH,
+        dry_run=dry_run,
+    )
+    typer.echo(result["text"])
+    if result.get("candidate"):
+        typer.echo("\n--- candidate profile ---\n" + result["candidate"])
 
 
 @worker_app.command("run-arm")
@@ -509,10 +528,6 @@ def _load_classics() -> list[dict]:
     return json.loads(CLASSICS_PATH.read_text(encoding="utf-8"))
 
 
-def _load_interests() -> str:
-    return INTERESTS_PATH.read_text(encoding="utf-8")
-
-
 CLASSICS_EXHAUSTED_ID = "explain-classics-exhausted"
 
 
@@ -715,6 +730,7 @@ def _run_explain_track(
     partial: dict,
     aws_mtd_cost: Decimal | None = None,
     forced_candidate: dict | None = None,
+    pid: str | None = None,
 ) -> str:
     """Run one explain track end to end. Returns "sent" or "empty" (no
     candidate left to pick). Raises on any other failure; `partial`
@@ -748,27 +764,14 @@ def _run_explain_track(
         if not fresh:
             return "empty"
         mode = "novel" if track == "novel" else "core"
-        interests = _load_interests()
-        preference_context = load_preference_context(table, GOLDEN_PAPERS_PATH)
+        profile_text, profile_version = load_profile_text(table, s3_client, bucket, INTERESTS_PATH)
         baseline_ranking = rank_papers(
-            fresh, interests, complete, mode=mode, model=pick_model, limit=len(fresh)
+            fresh, profile_text, complete, mode=mode, model=pick_model, limit=len(fresh)
         )
         if not baseline_ranking:
             return "empty"
-        baseline_candidate = baseline_ranking[0]
-        candidate = baseline_candidate
-        feedback_status = "baseline"
-        if preference_context:
-            guided = pick_paper(
-                baseline_ranking[:3],
-                f"{interests}\n\n{preference_context}",
-                complete,
-                mode=mode,
-                model=pick_model,
-            )
-            if guided is not None:
-                candidate = guided
-            feedback_status = "bounded-tiebreak"
+        candidate = baseline_ranking[0]
+        feedback_status = f"profile:{profile_version}"
         candidate_set = [
             _candidate_record(
                 item,
@@ -780,7 +783,7 @@ def _run_explain_track(
         baseline_selection = next(
             record for record in candidate_set if record["baseline_rank"] == 1
         )
-        baseline_rank = baseline_ranking.index(candidate) + 1
+        baseline_rank = 1
         exploration_status = "none"
         # The model ranker does not expose a calibrated choice probability.
         # Store that fact explicitly instead of inventing a propensity.
@@ -905,6 +908,7 @@ def _run_explain_track(
                 "experiment_id": f"video#{key}",
                 "sk": "video",
                 "track": track,
+                "pid": pid,
                 "url": url,
                 "title": title,
                 "digest_key": digest_key,
@@ -945,6 +949,8 @@ def _run_explain_track(
             video_path=str(video_path),
             video_s3_key=video_key,
         )
+        if pid:
+            set_video_key(table, pid, video_key)
     return "sent"
 
 
@@ -987,6 +993,9 @@ def explain_command() -> None:
             "title": os.environ.get("EXPLAIN_TITLE", "").strip() or replay_url,
             "url": replay_url,
         }
+    pid = os.environ.get("PID", "").strip() or None
+    if forced_candidate is None:
+        pid = None
 
     table = boto3.resource("dynamodb").Table(state_table)
     ssm_client = boto3.client("ssm")
@@ -1020,6 +1029,7 @@ def explain_command() -> None:
                 partial,
                 aws_mtd_cost,
                 forced_candidate,
+                pid=pid,
             )
         except Exception as exc:  # noqa: BLE001 - one track's failure must not sink the others
             statuses[track] = "failed"
