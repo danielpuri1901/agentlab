@@ -5,7 +5,8 @@ header IS the auth, validated first thing). Telegram calls it on every
 update. The handler acts only on callback-query taps that carry the right
 secret header AND come from Daniel's Telegram user id; everything else is
 logged and ignored with a 200 (Telegram retries non-200s, and a retry storm
-on garbage is worthless).
+on garbage is worthless). Three callback namespaces: prop:* verdicts, vid:*
+video ratings, prof:* taste profile revert.
 
 A valid tap writes the verdict to the proposals ledger with a conditional
 update (first tap wins; a second tap gets an "already decided" toast). An
@@ -127,6 +128,7 @@ def _build_video(table, pid: str) -> str | None:
         Key={"experiment_id": f"proposal#{pid}", "sk": "proposal"}
     ).get("Item") or {}
     citation = str(item.get("citation") or "").strip()
+    title = str(item.get("title") or "").strip() or citation
     if not citation.startswith("http"):
         return None
     boto3.client("ecs").run_task(
@@ -148,6 +150,8 @@ def _build_video(table, pid: str) -> str | None:
                     "environment": [
                         {"name": "TRACK", "value": "core"},
                         {"name": "EXPLAIN_URL", "value": citation},
+                        {"name": "EXPLAIN_TITLE", "value": title},
+                        {"name": "PID", "value": pid},
                     ],
                 }
             ]
@@ -277,6 +281,81 @@ def _handle_vid(callback, table, video_key: str, action: str) -> dict:
     return _ok()
 
 
+# prof:<version>:revert - the taste profile REVERT tap. The pointer item
+# mirrors src/agentlab/profile.py (profile#current / profile); the flip
+# below is the only write path that does not go through that module, so
+# change both in the same commit or neither.
+_POINTER_KEY = {"experiment_id": "profile#current", "sk": "profile"}
+
+
+def _revert_profile(table, version: str) -> str | None:
+    """Flip the pointer back to its previous version. Returns the version
+    now current, or None when the tap names a stale version or there is
+    nothing to go back to. The conditional update makes a double tap safe."""
+    item = table.get_item(Key=_POINTER_KEY).get("Item") or {}
+    previous_version = item.get("previous_version")
+    previous_key = item.get("previous_s3_key")
+    if item.get("version") != version or not previous_version or not previous_key:
+        return None
+    try:
+        table.update_item(
+            Key=_POINTER_KEY,
+            UpdateExpression=(
+                "SET #v = :pv, s3_key = :pk, previous_version = :none, "
+                "previous_s3_key = :none, applied_ts = :ts, #src = :src"
+            ),
+            ConditionExpression="#v = :cur",
+            ExpressionAttributeNames={"#v": "version", "#src": "source"},
+            ExpressionAttributeValues={
+                ":pv": previous_version,
+                ":pk": previous_key,
+                ":none": None,
+                ":ts": _now(),
+                ":src": "revert",
+                ":cur": version,
+            },
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return None
+        raise
+    return previous_version
+
+
+def _strip_prof_buttons(markup: dict) -> list:
+    rows = markup.get("inline_keyboard") or []
+    return [
+        row
+        for row in rows
+        if not any(str(button.get("callback_data", "")).startswith("prof:") for button in row)
+    ]
+
+
+def _handle_prof(callback, table, version: str) -> dict:
+    reverted = _revert_profile(table, version)
+    toast = f"Reverted to {reverted}" if reverted else "Nothing to revert"
+    try:
+        _telegram(
+            "answerCallbackQuery",
+            {"callback_query_id": callback["id"], "text": toast[:200]},
+        )
+        message = callback.get("message")
+        if message and reverted:
+            _telegram(
+                "editMessageReplyMarkup",
+                {
+                    "chat_id": message["chat"]["id"],
+                    "message_id": message["message_id"],
+                    "reply_markup": {
+                        "inline_keyboard": _strip_prof_buttons(message.get("reply_markup") or {})
+                    },
+                },
+            )
+    except Exception as exc:  # noqa: BLE001 - message cosmetics must never undo a recorded flip
+        print(f"telegram call failed after profile revert: {exc}")
+    return _ok()
+
+
 def handler(event, context):
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
     if headers.get("x-telegram-bot-api-secret-token") != _param(
@@ -303,6 +382,10 @@ def handler(event, context):
     if len(parts) == 3 and parts[0] == "vid" and parts[2] in video_actions:
         table = boto3.resource("dynamodb").Table(os.environ["STATE_TABLE"])
         return _handle_vid(callback, table, parts[1], parts[2])
+
+    if len(parts) == 3 and parts[0] == "prof" and parts[2] == "revert":
+        table = boto3.resource("dynamodb").Table(os.environ["STATE_TABLE"])
+        return _handle_prof(callback, table, parts[1])
 
     if len(parts) != 3 or parts[0] != "prop" or parts[2] not in ("approve", "reject"):
         print(f"unknown callback data ignored: {callback.get('data')!r}")

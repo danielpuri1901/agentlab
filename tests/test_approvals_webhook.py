@@ -215,6 +215,28 @@ def _vid_keyboard(key):
     ]
 
 
+_POINTER_KEY = {"experiment_id": "profile#current", "sk": "profile"}
+
+
+def _file_pointer(table, version, previous_version):
+    table.put_item(
+        Item={
+            **_POINTER_KEY,
+            "version": version,
+            "s3_key": f"profile/{version}.md",
+            "previous_version": previous_version,
+            "previous_s3_key": f"profile/{previous_version}.md" if previous_version else None,
+            "applied_ts": "2026-10-05T16:00:00.000000Z",
+            "source": "consolidate",
+            "eval": "{}",
+        }
+    )
+
+
+def _get_pointer(table):
+    return table.get_item(Key=_POINTER_KEY).get("Item")
+
+
 def test_wrong_secret_403(fabric, recorder):
     table, _sqs, _queue_url = fabric
     _file_proposal(table, "p1")
@@ -365,6 +387,8 @@ def test_approve_without_submit_body_builds_a_video_of_the_citation(
     env = runs[0]["overrides"]["containerOverrides"][0]["environment"]
     assert {"name": "TRACK", "value": "core"} in env
     assert {"name": "EXPLAIN_URL", "value": "https://example.com/paper"} in env
+    assert {"name": "PID", "value": "p1"} in env
+    assert {"name": "EXPLAIN_TITLE", "value": "Title"} in env
     toasts = [c[1]["text"] for c in recorder if c[0] == "answerCallbackQuery"]
     assert any("Building the video" in t for t in toasts)
 
@@ -779,3 +803,62 @@ def test_verdict_write_stays_in_sync_with_proposals_module():
     ):
         assert literal in lambda_src, f"lambda lost: {literal}"
         assert literal in module_src, f"proposals.py lost: {literal}"
+
+
+def test_prof_revert_flips_pointer_to_previous(fabric, recorder):
+    table, _sqs, _queue_url = fabric
+    _file_pointer(table, "v2", "v1")
+    keyboard = [[{"text": "REVERT", "callback_data": "prof:v2:revert"}]]
+
+    response = webhook.handler(make_event(data="prof:v2:revert", keyboard=keyboard), None)
+
+    assert response["statusCode"] == 200
+    item = _get_pointer(table)
+    assert item["version"] == "v1"
+    assert item["s3_key"] == "profile/v1.md"
+    assert item["previous_version"] is None
+    assert item["previous_s3_key"] is None
+    assert item["source"] == "revert"
+    toasts = [c[1]["text"] for c in recorder if c[0] == "answerCallbackQuery"]
+    assert toasts == ["Reverted to v1"]
+    edits = [c[1] for c in recorder if c[0] == "editMessageReplyMarkup"]
+    assert edits == [{"chat_id": 123456789, "message_id": 7, "reply_markup": {"inline_keyboard": []}}]
+
+
+def test_prof_revert_stale_version_or_second_tap_does_nothing(fabric, recorder):
+    table, _sqs, _queue_url = fabric
+    _file_pointer(table, "v2", "v1")
+
+    webhook.handler(make_event(data="prof:v1:revert"), None)
+    assert _get_pointer(table)["version"] == "v2"
+
+    webhook.handler(make_event(data="prof:v2:revert"), None)
+    assert _get_pointer(table)["version"] == "v1"
+
+    webhook.handler(make_event(data="prof:v2:revert"), None)
+    assert _get_pointer(table)["version"] == "v1"
+
+    toasts = [c[1]["text"] for c in recorder if c[0] == "answerCallbackQuery"]
+    assert toasts == ["Nothing to revert", "Reverted to v1", "Nothing to revert"]
+
+
+def test_prof_revert_without_previous_does_nothing(fabric, recorder):
+    table, _sqs, _queue_url = fabric
+    _file_pointer(table, "v1", None)
+
+    webhook.handler(make_event(data="prof:v1:revert"), None)
+
+    assert _get_pointer(table)["version"] == "v1"
+    toasts = [c[1]["text"] for c in recorder if c[0] == "answerCallbackQuery"]
+    assert toasts == ["Nothing to revert"]
+
+
+def test_prof_revert_foreign_user_ignored(fabric, recorder):
+    table, _sqs, _queue_url = fabric
+    _file_pointer(table, "v2", "v1")
+
+    response = webhook.handler(make_event(data="prof:v2:revert", from_id=999), None)
+
+    assert response["statusCode"] == 200
+    assert _get_pointer(table)["version"] == "v2"
+    assert recorder == []
