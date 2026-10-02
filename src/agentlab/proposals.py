@@ -20,6 +20,8 @@ from datetime import UTC, datetime
 from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 
+from agentlab.episodes import source_type_from_url
+
 PROPOSAL_SK = "proposal"
 DAILY_CAP = 3
 
@@ -51,6 +53,11 @@ def file_proposal(
     distance: str,
     kind: str,
     submit_body: dict | None = None,
+    *,
+    why: str | None = None,
+    lens: str | None = None,
+    source_type: str | None = None,
+    profile_version: str | None = None,
 ) -> None:
     item = {
         "experiment_id": f"proposal#{pid}",
@@ -59,9 +66,14 @@ def file_proposal(
         "status": "PROPOSED",
         "title": title,
         "headline": headline,
+        "why": why or headline,
         "citation": citation,
         "distance": distance,
         "kind": kind,
+        "lens": lens,
+        "source_type": source_type or source_type_from_url(citation),
+        "profile_version": profile_version,
+        "video_key": None,
         "created_ts": now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
     }
     if submit_body is not None:
@@ -96,8 +108,21 @@ def set_verdict(table, pid: str, verdict: str, source: str) -> None:
         raise
 
 
+def set_video_key(table, pid: str, video_key: str) -> None:
+    """Record the video an approved proposal produced, so a rating can reach it."""
+    table.update_item(
+        Key={"experiment_id": f"proposal#{pid}", "sk": PROPOSAL_SK},
+        UpdateExpression="SET video_key = :k",
+        ExpressionAttributeValues={":k": video_key},
+    )
+
+
+def list_all(table) -> list[dict]:
+    return table.scan(FilterExpression=Attr("sk").eq(PROPOSAL_SK))["Items"]
+
+
 def list_recent(table, limit: int = 20) -> list[dict]:
-    items = table.scan(FilterExpression=Attr("sk").eq(PROPOSAL_SK))["Items"]
+    items = list_all(table)
     return sorted(items, key=lambda i: i["created_ts"], reverse=True)[:limit]
 
 

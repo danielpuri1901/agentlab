@@ -16,6 +16,7 @@ from agentlab.proposals import (
     get_proposal,
     list_recent,
     set_verdict,
+    set_video_key,
 )
 
 TABLE = "agentlab-state-test"
@@ -77,6 +78,34 @@ def test_submit_body_stored_as_json_string(fabric):
     )
     body = json.loads(get_proposal(table, "prop-2")["submit_body"])
     assert body["experiment_id"] == "exp-1"
+
+
+def test_file_proposal_stores_taste_fields(fabric):
+    table, _ = fabric
+    file_proposal(
+        table,
+        "p-taste",
+        "Real Title",
+        "Why line",
+        "https://arxiv.org/abs/2501.00001",
+        "d",
+        "new_hypothesis",
+        lens="frontier",
+        profile_version="v1",
+    )
+    item = get_proposal(table, "p-taste")
+    assert item["why"] == "Why line"
+    assert item["lens"] == "frontier"
+    assert item["source_type"] == "arxiv"
+    assert item["profile_version"] == "v1"
+    assert item["video_key"] is None
+
+
+def test_set_video_key(fabric):
+    table, _ = fabric
+    file_proposal(table, "p-vid", "T", "H", "https://x", "d", "new_hypothesis")
+    set_video_key(table, "p-vid", "videos/core-1.mp4")
+    assert get_proposal(table, "p-vid")["video_key"] == "videos/core-1.mp4"
 
 
 def test_set_verdict_once_then_already_decided(fabric):
