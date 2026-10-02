@@ -94,6 +94,10 @@ locals {
       cron    = "cron(0 12 * * ? *)"
       command = ["worker", "propose"]
     }
+    consolidate-weekly = {
+      cron    = "cron(0 18 ? * SUN *)"
+      command = ["worker", "consolidate"]
+    }
   }
 }
 

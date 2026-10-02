@@ -379,11 +379,12 @@ resource "aws_iam_role_policy" "proposer_task" {
         Resource = [local.telegram_token_param_arn, local.telegram_chat_id_param_arn]
       },
       {
-        # No GetItem: get_proposal() is never called under this role (fix round 1 -
-        # only PutItem/DeleteItem/Query/Scan are used by propose/flush-pings).
+        # GetItem reads the taste profile pointer (profile.py get_pointer);
+        # PutItem/Scan/Query/Delete cover propose, flush-pings, and consolidate.
         Sid    = "Ledger"
         Effect = "Allow"
         Action = [
+          "dynamodb:GetItem",
           "dynamodb:PutItem",
           "dynamodb:DeleteItem",
           "dynamodb:Query",
@@ -394,8 +395,16 @@ resource "aws_iam_role_policy" "proposer_task" {
       {
         Sid      = "ProposalDocs"
         Effect   = "Allow"
-        Action   = ["s3:PutObject"]
+        Action   = ["s3:PutObject", "s3:GetObject"]
         Resource = "${aws_s3_bucket.results.arn}/proposals/*"
+      },
+      {
+        # The taste profile: consolidate writes versions and candidates,
+        # propose reads the current version named by the pointer.
+        Sid      = "TasteProfile"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject"]
+        Resource = "${aws_s3_bucket.results.arn}/profile/*"
       },
     ]
   })
@@ -492,6 +501,7 @@ resource "aws_iam_role_policy" "explain_task" {
           "${aws_s3_bucket.results.arn}/digests/*",
           "${aws_s3_bucket.results.arn}/videos/*",
           "${aws_s3_bucket.results.arn}/stories/*",
+          "${aws_s3_bucket.results.arn}/profile/*",
         ]
       },
       {
