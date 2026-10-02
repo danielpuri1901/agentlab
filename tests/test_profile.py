@@ -149,6 +149,14 @@ def test_validate_profile_accepts_and_cleans():
     assert sections["Prefer"].count("\n- ") + sections["Prefer"].startswith("- ") == 3
 
 
+def test_validate_profile_replaces_em_dashes():
+    dashed = GOOD_PROFILE.replace("SDK release notes and changelogs", "SDK release notes \u2014 changelogs")
+    sections, problems = validate_profile(dashed, TRAIN_TITLES)
+    assert problems == []
+    assert "\u2014" not in sections["Avoid"]
+    assert "SDK release notes - changelogs" in sections["Avoid"]
+
+
 def test_validate_profile_strips_fences_and_leading_text():
     wrapped = "Here is the profile:\n```markdown\n" + GOOD_PROFILE + "\n```\n"
     sections, problems = validate_profile(wrapped, TRAIN_TITLES)

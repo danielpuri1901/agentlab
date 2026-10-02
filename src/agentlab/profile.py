@@ -171,6 +171,7 @@ def _known_title(line: str, train_titles: list[str]) -> bool:
 def validate_profile(text: str, train_titles: list[str]) -> tuple[dict[str, str] | None, list[str]]:
     """Cleaned sections keyed by heading, or None with the list of problems."""
     problems: list[str] = []
+    text = text.replace("\u2014", "-").replace("\u2013", "-")  # no em or en dashes on Daniel's phone
     sections = split_sections(text)
     for heading in SECTIONS:
         if heading not in sections:
