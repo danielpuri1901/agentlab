@@ -2,13 +2,13 @@
 
 from agentlab.sources import (
     fetch_arxiv,
-    fetch_github_releases,
     fetch_hf_daily,
     fetch_hn_explore,
     fetch_hn_front,
     gather,
     gather_exploit,
     gather_explore,
+    gather_proposer_pool,
 )
 
 
@@ -44,48 +44,6 @@ class FakeClient:
         return FakeResponse(404)
 
 
-def test_github_releases_normalized():
-    """Test GitHub releases fetcher with mixed success/failure."""
-    fake_client = FakeClient(
-        {
-            "inspect_ai": FakeResponse(
-                200,
-                json_data=[
-                    {
-                        "name": "v1.0.0",
-                        "tag_name": "v1.0.0",
-                        "html_url": "https://github.com/UKGovernmentBEIS/inspect_ai/releases/tag/v1.0.0",
-                        "published_at": "2026-01-01T00:00:00Z",
-                        "body": "Major release with agent eval improvements",
-                    },
-                    {
-                        "name": "v0.9.0",
-                        "tag_name": "v0.9.0",
-                        "html_url": "https://github.com/UKGovernmentBEIS/inspect_ai/releases/tag/v0.9.0",
-                        "published_at": "2025-12-01T00:00:00Z",
-                        "body": "Minor bug fixes",
-                    },
-                ],
-            ),
-            "langgraph": FakeResponse(404),  # This repo should be silently skipped
-        }
-    )
-
-    repos = [
-        "UKGovernmentBEIS/inspect_ai",
-        "langchain-ai/langgraph",
-    ]
-    result = fetch_github_releases(fake_client, repos=repos)
-
-    # Should have exactly 2 releases from the successful repo, langgraph skipped
-    assert len(result) == 2
-    assert all(r["source"] == "github" for r in result)
-    assert result[0]["repo"] == "UKGovernmentBEIS/inspect_ai"
-    assert result[0]["title"] == "v1.0.0"
-    assert "v1.0.0" in result[0]["url"]
-    assert result[1]["title"] == "v0.9.0"
-
-
 def test_arxiv_filters_by_keyword():
     """Test arXiv fetcher filters by keywords and collapses whitespace."""
     arxiv_xml = """<?xml version="1.0" encoding="UTF-8"?>
@@ -103,13 +61,23 @@ def test_arxiv_filters_by_keyword():
   </entry>
 </feed>"""
 
-    fake_client = FakeClient(
+    seen = {}
+
+    class RecordingClient(FakeClient):
+        def get(self, url, **kwargs):
+            seen["params"] = kwargs.get("params")
+            return super().get(url, **kwargs)
+
+    fake_client = RecordingClient(
         {
             "export.arxiv.org": FakeResponse(200, text=arxiv_xml),
         }
     )
 
     result = fetch_arxiv(fake_client)
+
+    assert seen["params"]["search_query"] == "cat:cs.CL OR cat:cs.AI OR cat:cs.LG OR cat:cs.MA"
+    assert seen["params"]["max_results"] == 40
 
     # Should only match the first entry (contains "agent" and "evaluation")
     assert len(result) == 1
@@ -325,22 +293,20 @@ class NetworkError(Exception):
 
 
 def test_gather_survives_total_network_failure():
-    """Test gather (the gather_exploit alias) returns empty list on complete
-    network failure.
-    """
+    """gather (the proposer pool alias) returns an empty list on complete network failure."""
 
     def raise_exception(*args, **kwargs):
         raise NetworkError("Network error")
 
     fake_client = FakeClient(
         {
-            "api.github.com": raise_exception,
             "export.arxiv.org": raise_exception,
+            "huggingface.co/api/daily_papers": raise_exception,
             "hn.algolia.com": raise_exception,
         }
     )
 
-    assert gather is gather_exploit
+    assert gather is gather_proposer_pool
 
     result = gather(client=fake_client)
 
@@ -364,3 +330,50 @@ def test_gather_explore_survives_total_network_failure():
     result = gather_explore(client=fake_client)
 
     assert result == []
+
+
+def test_gather_proposer_pool_merges_arxiv_hf_hn_and_dedups():
+    """The proposer pool has no GitHub releases and no duplicate papers."""
+    arxiv_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.00001v1</id>
+    <title>Agent Memory Paper</title>
+    <summary>An agent memory method.</summary>
+  </entry>
+</feed>"""
+    fake_client = FakeClient(
+        {
+            "export.arxiv.org": FakeResponse(200, text=arxiv_xml),
+            "huggingface.co/api/daily_papers": FakeResponse(
+                200,
+                json_data=[
+                    {"paper": {"id": "2401.00001", "title": "Agent Memory Paper", "upvotes": 9}},
+                    {"paper": {"id": "2401.00002", "title": "World Model Paper", "upvotes": 3}},
+                ],
+            ),
+            "hn.algolia.com": FakeResponse(
+                200,
+                json_data={
+                    "hits": [
+                        {
+                            "title": "New agent harness released",
+                            "url": "https://example.com/harness",
+                            "objectID": "1",
+                            "points": 10,
+                        }
+                    ]
+                },
+            ),
+        }
+    )
+
+    result = gather_proposer_pool(client=fake_client)
+
+    assert [r["source"] for r in result] == ["arxiv", "hf", "hn"]
+    assert [r["title"] for r in result] == [
+        "Agent Memory Paper",
+        "World Model Paper",
+        "New agent harness released",
+    ]
+    assert all(r["pool"] == "proposer" for r in result)

@@ -1,33 +1,29 @@
-"""Fresh external sources for the proposer: GitHub releases, arXiv, HN, HF.
+"""Fresh external sources: arXiv, HN, Hugging Face daily papers.
 
-Each fetcher normalizes to small dicts and fails soft: a non-200,
-a malformed payload, or a network error yields fewer sources, never an
-exception out of gather_exploit()/gather_explore(). The proposer treats an
-empty list as "no fresh sources today" and says so instead of inventing work
-(anti-collapse rule: fresh-external-source anchoring).
+Each fetcher normalizes to small dicts and fails soft: a non-200, a
+malformed payload, or a network error yields fewer sources, never an
+exception out of a gather call. The proposer treats an empty list as "no
+fresh sources today" and says so instead of inventing work (anti-collapse
+rule: fresh-external-source anchoring).
 
-Two pools:
-- exploit: the keyword-filtered GitHub/arXiv/HN sweep (agent/eval/harness
-  territory Daniel already tracks). Every dict is tagged "pool": "exploit".
-- explore: high-signal picks with no keyword filter, meant to surface
-  things outside the tracked keyword set - HN front-page hits with
-  points >= 80, and the Hugging Face daily papers list. Every dict is
-  tagged "pool": "explore".
+GitHub release notes were removed on 2026-10-02: the ledger showed 10 of 12
+release-note proposals rejected and three changelog videos nobody rated.
+
+Three pools:
+- proposer: arXiv + HF daily + HN keyword hits, deduplicated by paper
+  identity. What `worker propose` reads.
+- exploit: arXiv + HN keyword hits. What the core video track reads.
+- explore: HN front page above a points threshold and HF daily, no keyword
+  filter. What the novel video track reads.
 """
 
 import xml.etree.ElementTree as ET
 
 import httpx
 
-TRACKED_REPOS = [
-    # verified in Task 4 Step 1; the DeepSeek harness slug comes from the
-    # Tournament 001 entrant citation
-    "UKGovernmentBEIS/inspect_ai",
-    "langchain-ai/langgraph",
-    "anthropics/claude-agent-sdk-python",
-    "strands-agents/harness-sdk",
-    "deepseek-ai/deepseek-harness",
-]
+from agentlab.papers_db import paper_identity
+
+ARXIV_QUERY = "cat:cs.CL OR cat:cs.AI OR cat:cs.LG OR cat:cs.MA"
 KEYWORDS = (
     "agent",
     "eval",
@@ -41,41 +37,12 @@ KEYWORDS = (
 )
 
 
-def fetch_github_releases(client, repos=None) -> list[dict]:
-    out = []
-    for repo in repos if repos is not None else TRACKED_REPOS:
-        try:
-            response = client.get(
-                f"https://api.github.com/repos/{repo}/releases",
-                params={"per_page": 3},
-                headers={"Accept": "application/vnd.github+json"},
-                timeout=30,
-            )
-            if response.status_code != 200:
-                continue
-            releases = response.json()
-        except Exception:  # noqa: BLE001, S112 - one dead repo must not sink the run
-            continue
-        for release in releases:
-            out.append(
-                {
-                    "source": "github",
-                    "repo": repo,
-                    "title": release.get("name") or release.get("tag_name") or "",
-                    "url": release.get("html_url") or "",
-                    "published": release.get("published_at") or "",
-                    "notes": (release.get("body") or "")[:500],
-                }
-            )
-    return out
-
-
-def fetch_arxiv(client, max_results: int = 25) -> list[dict]:
+def fetch_arxiv(client, max_results: int = 40) -> list[dict]:
     try:
         response = client.get(
             "https://export.arxiv.org/api/query",
             params={
-                "search_query": "cat:cs.CL OR cat:cs.AI",
+                "search_query": ARXIV_QUERY,
                 "sortBy": "submittedDate",
                 "sortOrder": "descending",
                 "max_results": max_results,
@@ -183,14 +150,30 @@ def fetch_hf_daily(client) -> list[dict]:
 
 def gather_exploit(client=None) -> list[dict]:
     client = client or httpx.Client()
-    items = fetch_github_releases(client) + fetch_arxiv(client) + fetch_hn_front(client)
+    items = fetch_arxiv(client) + fetch_hn_front(client)
     for item in items:
         item["pool"] = "exploit"
     return items
 
 
-# The proposer imports `gather`; keep it as a working alias for gather_exploit.
-gather = gather_exploit
+def gather_proposer_pool(client=None) -> list[dict]:
+    """Everything the proposer may cite today, one entry per paper."""
+    client = client or httpx.Client()
+    items = fetch_arxiv(client) + fetch_hf_daily(client) + fetch_hn_front(client)
+    seen: set[str] = set()
+    unique = []
+    for item in items:
+        identity = paper_identity(item.get("url", ""), item.get("title", ""))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        item["pool"] = "proposer"
+        unique.append(item)
+    return unique
+
+
+# The proposer imports `gather`; keep it as a working alias of the proposer pool.
+gather = gather_proposer_pool
 
 
 def gather_explore(client=None) -> list[dict]:
