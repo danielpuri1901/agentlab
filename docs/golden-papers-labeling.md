@@ -21,47 +21,47 @@ Note: URLs get verified and attached at build time; titles are enough here.
 ## For you to label
 
 6. Attention Is All You Need (the Transformer paper)
-   Label: ___. Why: ___
+   Label: yes. Why: The GOAT paper, basically the most revolutionary paper of all time. This allowed LMs to have scaling laws. 
 7. Chain-of-Thought Prompting Elicits Reasoning in Large Language Models
-   Label: ___. Why: ___
+   Label: Yes. . Why: Very important: chain-of-thought reasoning, similar to REACT, is very important. 
 8. ReAct: Synergizing Reasoning and Acting in Language Models
-   Label: ___. Why: ___
+   Label: Yeah,  . Why: it's a GOAT thing. I should know about this.
 9. Reflexion: Language Agents with Verbal Reinforcement Learning
-   Label: ___. Why: ___
+   Label: yes. Why: I've heard about it, and I want to learn about it. It's a topic that I've known about. 
 10. Toolformer: Language Models Can Teach Themselves to Use Tools
-    Label: ___. Why: ___
+    Label: yes. Why: Sounds interesting. 
 11. Tree of Thoughts: Deliberate Problem Solving with LLMs
-    Label: ___. Why: ___
+    Label: yes. Why: Sounds very interesting. 
 12. Self-Refine: Iterative Refinement with Self-Feedback
-    Label: ___. Why: ___
+    Label: yes. Why: Sounds pretty cool. 
 13. Let's Verify Step by Step (process reward models)
-    Label: ___. Why: ___
+    Label: yes. Why: Seems foundational, and I should learn about it. 
 14. Training Language Models to Follow Instructions (InstructGPT / RLHF)
-    Label: ___. Why: ___
+    Label: yes. Why: Instruct GPT heard about that one and RLHF. 
 15. Constitutional AI: Harmlessness from AI Feedback
-    Label: ___. Why: ___
+    Label: no. Why: Doesn't really have a catchy title. I don't really know what harmlessness from AI feedback means. 
 16. Training Compute-Optimal Large Language Models (Chinchilla scaling laws)
-    Label: ___. Why: ___
+    Label: yes. Why: Seems very interesting. 
 17. Generative Agents: Interactive Simulacra of Human Behavior
-    Label: ___. Why: ___
+    Label: Yeah, . . Why: sounds cool
 18. MemGPT: Towards LLMs as Operating Systems
-    Label: ___. Why: ___
+    Label: yes. Why: Like an old goat model. 
 19. SWE-bench: Can Language Models Resolve Real-World GitHub Issues?
-    Label: ___. Why: ___
+    Label: yes. Why: I've heard of SWE bench. We love to get deep into it. 
 20. Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena
-    Label: ___. Why: ___
+    Label: yes. Why: Yeah, we'll have to know about this more. 
 21. Self-Consistency Improves Chain of Thought Reasoning
-    Label: ___. Why: ___
+    Label: yes. Why: __Yeah, let's do it. _
 22. Retrieval-Augmented Generation for Knowledge-Intensive NLP
-    Label: ___. Why: ___
+    Label: Yeah,  . Why: It was interesting. 
 23. STaR: Self-Taught Reasoner (bootstrapping reasoning with reasoning)
-    Label: ___. Why: ___
+    Label: yes. Why: This seems cool. 
 24. Evaluating Large Language Models Trained on Code (Codex / HumanEval)
-    Label: ___. Why: ___
+    Label: yes. Why: seems cool
 25. DSPy: Compiling Declarative Language Model Calls into Pipelines
-    Label: ___. Why: ___
+    Label: yes. Why: dspy ive heard of 
 
 ## Your own additions
 
-26. ___
-    Label: ___. Why: ___
+26. model collapse
+    Label: seems cool.implement
