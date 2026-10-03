@@ -576,10 +576,12 @@ class Chapter(ExplainerScene):
         stage_name = txt("stage", 16, MUTED).next_to(frame, UP, buff=0.1, aligned_edge=LEFT)
         band = Rectangle(width=4.18, height=0.5, stroke_width=0, fill_color=BACKGROUND, fill_opacity=1).move_to(frame.get_bottom() + UP * 0.31)
         band_text = txt("captions burned in", 16, INK).move_to(band)
-        ball = Circle(radius=0.22, stroke_color=GOLD, stroke_width=2.5, fill_color=GOLD, fill_opacity=0.35).move_to([1.85, 0.75, 0])
+        ball = Circle(radius=0.22, stroke_color=GOLD, stroke_width=2.5, fill_color=GOLD, fill_opacity=0.35).move_to([1.8, 0.4, 0])
+        square = RoundedRectangle(corner_radius=0.06, width=0.48, height=0.48, stroke_color=INK, stroke_width=2, fill_color=PANEL, fill_opacity=1)
+        square.move_to([3.05, 0.4, 0])
+        pointer = arrow(ball.get_right() + RIGHT * 0.12, square.get_left() + LEFT * 0.12)
         box = VGroup(RoundedRectangle(corner_radius=0.08, width=1.05, height=0.46, stroke_color=INK, stroke_width=2, fill_color=PANEL, fill_opacity=1), txt("label", 16, INK))
-        box.move_to([3.4, 0.75, 0])
-        pointer = arrow(ball.get_right() + RIGHT * 0.12, box.get_left() + LEFT * 0.12)
+        box.move_to([4.35, 1.0, 0])
         fail = chip("render fails", RED, 16).next_to(frame, DOWN, buff=0.3)
 
         self.play(FadeIn(polly), LaggedStart(*[FadeIn(v, shift=RIGHT * 0.1) for v in voices], lag_ratio=0.25), run_time=0.8)
@@ -590,7 +592,7 @@ class Chapter(ExplainerScene):
         self.play(*[GrowFromEdge(h, LEFT) for h in holds], run_time=0.4)
         self.play(*[Create(g) for g in guides], FadeIn(legend), run_time=0.35)
         self.cue("burns")
-        self.play(FadeIn(frame), FadeIn(stage_name), FadeIn(ball), Create(pointer), FadeIn(box), run_time=0.5)
+        self.play(FadeIn(frame), FadeIn(stage_name), FadeIn(ball), Create(pointer), FadeIn(square), FadeIn(box), run_time=0.5)
         self.play(FadeIn(band, shift=UP * 0.2), FadeIn(band_text, shift=UP * 0.2), run_time=0.4)
         self.cue("and fails")
         self.play(box.animate.set_x(5.62), run_time=0.8)
@@ -690,14 +692,14 @@ class Chapter(ExplainerScene):
         self.play(FadeIn(names, lag_ratio=0.2), FadeIn(boards), FadeIn(tries), FadeIn(clock), Create(bar), run_time=0.5)
         self.cue("three storyboards")
         self.play(
-            LaggedStart(*[b.animate.set_fill(GOLD, opacity=0.45) for b in boards], lag_ratio=0.3),
+            LaggedStart(*[b.animate.set_fill(GOLD, opacity=0.8) for b in boards], lag_ratio=0.3),
             Create(caps[0]),
             *look(self.stages[1], "active"),
             run_time=0.6,
         )
         self.cue("four scene")
         self.play(
-            LaggedStart(*[t.animate.set_fill(GOLD, opacity=0.45) for t in tries], lag_ratio=0.3),
+            LaggedStart(*[t.animate.set_fill(GOLD, opacity=0.8) for t in tries], lag_ratio=0.3),
             Create(caps[1]),
             *look(self.stages[1], "idle"),
             *look(self.stages[2], "active"),
