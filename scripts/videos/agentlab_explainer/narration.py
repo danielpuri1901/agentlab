@@ -86,7 +86,7 @@ CHAPTERS = [
             "Claude rewrites the taste profile from the rest: what Daniel prefers and avoids, with evidence counts and real examples. Code checks the format and drops any example it cannot find.",
             "Then the gate. For every held-out paper, a probe asks: would Daniel approve this? Once with the old profile, once with the new one.",
             "The new profile ships only if its F1 score drops by no more than two points, and recall on the golden papers does not drop at all.",
-            "On the live ledger, the first run moved F1 from 0.20 to 0.25, and golden recall from 0.71 to 0.75.",
+            "The first real run scored F1 0.14 for the new profile and 0.19 for the old one. The gate kept the old profile. With eight held-out positives, more taps beat a smarter prompt.",
             "Each version lives in S3 behind one pointer. Daniel gets a summary of what changed, and one REVERT tap flips the pointer back.",
         ],
     },
@@ -124,10 +124,8 @@ SPOKEN_FIXES = {
     "9:30": "nine thirty",
     "ARM64": "arm 64",
     "t-test": "t test",
-    "0.20": "point two zero",
-    "0.25": "point two five",
-    "0.71": "point seven one",
-    "0.75": "point seven five",
+    "0.14": "point one four",
+    "0.19": "point one nine",
 }
 
 
