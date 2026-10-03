@@ -167,8 +167,8 @@ def _fake_complete(profile_output=MODEL_PROFILE, new_says_yes=None, old_says_yes
     unless an override callable is given per profile text."""
     calls = []
 
-    def complete(model, messages):
-        calls.append((model, messages))
+    def complete(model, messages, **kwargs):
+        calls.append((model, messages, kwargs))
         system = messages[0]["content"]
         if system.startswith("You maintain Daniel's taste profile"):
             return profile_output
@@ -203,8 +203,9 @@ def test_first_run_applies_profile_and_pings_with_revert(fabric, telegram_calls,
     assert "SEED PROFILE TEXT" in user_prompt
     assert "Good Eval Paper (approved, arxiv" in user_prompt  # arxiv:2509.00002 hashes into the training split
     assert "Attention Is All You Need (golden_yes, classic" in user_prompt
-    probe_models = {c[0] for c in fake.calls if not c[1][0]["content"].startswith("You maintain")}
-    assert probe_models == {"bedrock/haiku"}
+    probe_calls = [c for c in fake.calls if not c[1][0]["content"].startswith("You maintain")]
+    assert {c[0] for c in probe_calls} == {"bedrock/haiku"}
+    assert all(c[2].get("temperature") == 0 for c in probe_calls)
 
     pointer = get_pointer(table)
     assert pointer.version == "20261005T160000Z"
@@ -235,7 +236,7 @@ def test_tally_only_when_fewer_than_five_new_episodes(fabric, telegram_calls, mo
     set_pointer(table, "v1", "profile/v1.md", None, "consolidate", {}, datetime(2026, 10, 4, 12, 0, tzinfo=UTC))
     _proposal(table, "new1", "APPROVED", "After pointer", "https://arxiv.org/abs/2510.00001", created="2026-10-05T09:30:00.000000Z")
 
-    def exploding(model, messages):
+    def exploding(model, messages, **kwargs):
         raise AssertionError("no model call on a tally-only run")
 
     monkeypatch.setattr(consolidate_mod, "_complete", exploding)
@@ -305,3 +306,21 @@ def test_worse_eval_keeps_old_profile(fabric, telegram_calls, monkeypatch, tmp_p
     assert get_pointer(table).version == "v1"
     assert "Applied: no" in telegram_calls[0][1]["json"]["text"]
     assert table.get_item(Key=POINTER_KEY)["Item"]["version"] == "v1"
+
+
+def test_ping_fits_one_telegram_message_with_long_bullets():
+    from agentlab.consolidate import ping_text
+
+    long = "x" * 380 + " (evidence: 9 approved)"
+    diff = {
+        "Prefer": {"added": [f"prefer {i} {long}" for i in range(8)], "removed": []},
+        "Avoid": {"added": [f"avoid {i} {long}" for i in range(8)], "removed": []},
+    }
+    stats = {"weeks": [], "sources": {}, "totals": {"positives": 0, "negatives": 0, "golden": 0}}
+
+    text = ping_text(stats, "v9", True, "ok", None, None, diff, [], full_key="profile/v9.md")
+
+    assert len(text) <= 4096
+    assert "more changes" in text
+    assert "profile/v9.md" in text
+    assert "(evidence" not in text

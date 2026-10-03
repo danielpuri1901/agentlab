@@ -67,8 +67,29 @@ def _inline_keyboard(buttons) -> dict:
     }
 
 
+TELEGRAM_TEXT_LIMIT = 4096
+"""Telegram rejects a sendMessage text longer than this with a 400."""
+
+
+class TelegramError(RuntimeError):
+    """A failed Bot API call, described without the request URL."""
+
+
+def _check(response, method: str) -> None:
+    """Raise on a Telegram error status. httpx puts the request URL in its
+    error message, and that URL carries the bot token, so the original error
+    is dropped (`from None`) and only the status and Telegram's reply remain.
+    The token leaked into a traceback this way on 2026-10-03."""
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise TelegramError(
+            f"Telegram {method} failed: {exc.response.status_code} {exc.response.text[:300]}"
+        ) from None
+
+
 def send_message(config: TelegramConfig, text: str, buttons=None) -> None:
-    payload = {"chat_id": config.chat_id, "text": text}
+    payload = {"chat_id": config.chat_id, "text": text[:TELEGRAM_TEXT_LIMIT]}
     if buttons:
         payload["reply_markup"] = _inline_keyboard(buttons)
     response = httpx.post(
@@ -76,7 +97,7 @@ def send_message(config: TelegramConfig, text: str, buttons=None) -> None:
         json=payload,
         timeout=30,
     )
-    response.raise_for_status()
+    _check(response, "sendMessage")
 
 
 def send_photo(config: TelegramConfig, caption: str, photo_png: bytes) -> None:
@@ -89,7 +110,7 @@ def send_photo(config: TelegramConfig, caption: str, photo_png: bytes) -> None:
         files={"photo": ("chart.png", photo_png, "image/png")},
         timeout=30,
     )
-    response.raise_for_status()
+    _check(response, "sendPhoto")
 
 
 def send_video(config: TelegramConfig, caption: str, video_path, buttons=None) -> None:
@@ -112,7 +133,7 @@ def send_video(config: TelegramConfig, caption: str, video_path, buttons=None) -
             files={"video": (video_path.name, handle, "video/mp4")},
             timeout=120,
         )
-    response.raise_for_status()
+    _check(response, "sendVideo")
 
 
 def _deliver(config: TelegramConfig, text: str, buttons, photo_png, video_path=None) -> None:

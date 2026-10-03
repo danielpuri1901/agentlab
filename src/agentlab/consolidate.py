@@ -24,7 +24,7 @@ from agentlab.episodes import (
     split,
     weekly_stats,
 )
-from agentlab.notify import notify
+from agentlab.notify import notify, queue_ping
 from agentlab.profile import (
     candidate_key,
     diff_bullets,
@@ -41,6 +41,8 @@ from agentlab.profile import (
 from agentlab.taste_eval import EvalResult, decide_swap, evaluate
 
 DEFAULT_CONSOLIDATE_MODEL = "bedrock/global.anthropic.claude-sonnet-4-6"
+MAX_PING_CHANGES = 8
+PING_BULLET_CHARS = 160
 MIN_NEW_EPISODES = 5
 MAX_LINES_PER_SIDE = 75
 RECENT_WEEKS = 8
@@ -79,13 +81,21 @@ version: pending
 - (code fills this section)"""
 
 
-def _complete(model: str, messages: list[dict]) -> str:
+def _complete(model: str, messages: list[dict], **kwargs) -> str:
     """The only litellm touchpoint; tests monkeypatch this."""
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     import litellm
 
-    response = litellm.completion(model=model, messages=messages, max_tokens=4000)
+    kwargs.setdefault("max_tokens", 4000)
+    response = litellm.completion(model=model, messages=messages, **kwargs)
     return response.choices[0].message.content or ""
+
+
+def _probe(model: str, messages: list[dict]) -> str:
+    """A YES/NO probe at temperature 0, so the gate measures the profile and
+    not sampling noise: on 2026-10-02 and 2026-10-03 the same kind of
+    candidate passed once and failed once at the default temperature."""
+    return _complete(model, messages, temperature=0, max_tokens=8)
 
 
 def episode_line(episode: Episode) -> str:
@@ -178,6 +188,7 @@ def ping_text(
     new_eval: EvalResult | None,
     diff: dict | None,
     problems: list[str],
+    full_key: str | None = None,
 ) -> str:
     lines = ["Taste profile update."]
     if applied:
@@ -194,11 +205,24 @@ def ping_text(
     for problem in problems:
         lines.append(f"Problem: {problem}")
     if diff:
-        for heading in ("Prefer", "Avoid"):
-            for change in ("added", "removed"):
-                for bullet in diff[heading][change]:
-                    lines.append(f"{heading} {change}: {bullet}")
+        changes = [
+            f"{heading} {change}: {_short(bullet)}"
+            for heading in ("Prefer", "Avoid")
+            for change in ("added", "removed")
+            for bullet in diff[heading][change]
+        ]
+        lines.extend(changes[:MAX_PING_CHANGES])
+        if len(changes) > MAX_PING_CHANGES:
+            lines.append(f"...and {len(changes) - MAX_PING_CHANGES} more changes.")
+    if full_key:
+        lines.append(f"Full profile: {full_key}")
     return "\n".join(lines)
+
+
+def _short(bullet: str) -> str:
+    """One changed bullet for the phone: the pattern, without its evidence list."""
+    head = bullet.split(" (evidence", 1)[0].strip()
+    return head if len(head) <= PING_BULLET_CHARS else head[: PING_BULLET_CHARS - 3] + "..."
 
 
 def run_consolidate(
@@ -256,8 +280,8 @@ def run_consolidate(
     if sections is not None:
         sections["Source weights"] = source_weights_section(stats)
         candidate = render_profile(version, sections)
-        old_eval = evaluate(held_out, golden, current_text, _complete, probe_model)
-        new_eval = evaluate(held_out, golden, candidate, _complete, probe_model)
+        old_eval = evaluate(held_out, golden, current_text, _probe, probe_model)
+        new_eval = evaluate(held_out, golden, candidate, _probe, probe_model)
         applied, reason = decide_swap(old_eval, new_eval)
         diff = diff_bullets(current_text, candidate)
 
@@ -280,10 +304,14 @@ def run_consolidate(
                 },
                 now,
             )
-    text = ping_text(stats, version, applied, reason, old_eval, new_eval, diff, problems)
+    full_key = profile_key(version) if applied else candidate_key(version)
+    text = ping_text(stats, version, applied, reason, old_eval, new_eval, diff, problems, full_key)
     if not dry_run:
         buttons = [[("REVERT", f"prof:{version}:revert")]] if applied else None
-        notify(table, ssm_client, text, buttons=buttons)
+        try:
+            notify(table, ssm_client, text, buttons=buttons)
+        except Exception:  # noqa: BLE001 - the swap is done; the ping must not be lost
+            queue_ping(table, text, buttons, None)
     return {
         "applied": applied,
         "tally_only": False,

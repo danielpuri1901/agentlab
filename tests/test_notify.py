@@ -7,6 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import boto3
+import httpx
 import pytest
 from moto import mock_aws
 
@@ -450,3 +451,26 @@ def test_flush_video_without_s3_client_degrades_to_text_not_raise(
         i for i in table.scan()["Items"] if i["experiment_id"] == PENDING_PARTITION
     ]
     assert remaining == []
+
+
+def test_send_message_truncates_to_the_telegram_limit(telegram_calls):
+    notify_mod.send_message(_config(), "y" * 5000)
+
+    _url, kwargs = telegram_calls[0]
+    assert len(kwargs["json"]["text"]) == notify_mod.TELEGRAM_TEXT_LIMIT == 4096
+
+
+def test_telegram_error_names_the_status_but_never_the_token(monkeypatch):
+    request = httpx.Request("POST", "https://api.telegram.org/botSECRET-TOKEN/sendMessage")
+    response = httpx.Response(400, request=request, text='{"ok":false,"description":"Bad Request: message is too long"}')
+    monkeypatch.setattr(notify_mod.httpx, "post", lambda url, **kwargs: response)
+
+    with pytest.raises(notify_mod.TelegramError) as caught:
+        notify_mod.send_message(_config(), "hello")
+
+    message = str(caught.value)
+    assert "400" in message
+    assert "message is too long" in message
+    assert "SECRET-TOKEN" not in message
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__ is True
