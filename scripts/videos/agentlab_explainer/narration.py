@@ -106,6 +106,17 @@ CHAPTERS = [
 
 SPOKEN_FIXES = {
     "arXiv": "archive",
+    "AI research": "A I research",
+    "AWS": "A W S",
+    "SQS": "S Q S",
+    "S3": "S three",
+    "SSM": "S S M",
+    "DynamoDB": "Dynamo D B",
+    "EventBridge": "Event Bridge",
+    "GitHub": "Git Hub",
+    "F1": "F one",
+    "URL": "U R L",
+    "proposal id": "proposal I D",
     "PROMOTE": "promote",
     "REJECT": "reject",
     "INCONCLUSIVE": "inconclusive",

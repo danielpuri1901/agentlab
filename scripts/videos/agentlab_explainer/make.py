@@ -5,13 +5,17 @@ Preview one chapter fast (no voice, durations estimated from word count,
 
     uv run python scripts/videos/agentlab_explainer/make.py --preview --chapter 3
 
-Final render (Polly generative voice, 1080p30, every chapter, joined):
+Final render (Kokoro voice af_heart, 1080p30, every chapter, joined):
 
-    AWS_PROFILE=agentlab uv run python scripts/videos/agentlab_explainer/make.py
+    uv run python scripts/videos/agentlab_explainer/make.py
 
-Outputs land in out/explainer/ at the repo root. Polly clips are cached by
-text, so re-rendering a chapter never pays for the same sentence twice.
-Manim runs from the uv cache with --offline, so a render never downloads.
+Kokoro is open weights and runs locally; its model and voice pack live in
+out/explainer/kokoro/ and its package runs in an isolated uv environment
+(kokoro_tts.py). `--voice polly` uses the Polly generative voice instead
+(needs AWS_PROFILE=agentlab). Outputs land in out/explainer/ at the repo
+root. Voice clips are cached by text, so re-rendering a chapter never
+synthesizes the same sentence twice. Manim runs from the uv cache with
+--offline, so a render never downloads.
 """
 
 import argparse
@@ -39,8 +43,12 @@ from agentlab.video_render import (
 
 OUT = REPO / "out" / "explainer"
 CLIP_CACHE = OUT / "voice"
-VOICE = "Matthew"
-ENGINE = "generative"
+VOICES = {
+    "kokoro": "af_heart",  # the only grade A voice in hexgrad/Kokoro-82M VOICES.md
+    "polly": "Matthew",  # Polly generative engine
+}
+KOKORO_DIR = OUT / "kokoro"
+KOKORO_SPEED = 1.0
 POLLY_REGION = "eu-central-1"
 WORDS_PER_SECOND = 2.6
 BREATH_SECONDS = 0.35
@@ -49,22 +57,49 @@ MANIM = ["uvx", "--offline", "--python", "3.12", "manim"]
 SCENE_CLASS = "Chapter"
 
 
-def narrate(texts: list[str]) -> list[NarrationClip]:
-    import boto3
-
+def narrate(texts: list[str], engine: str) -> list[NarrationClip]:
+    """One cached clip per text; only missing clips are synthesized."""
     CLIP_CACHE.mkdir(parents=True, exist_ok=True)
-    polly = None
-    clips = []
+    voice = VOICES[engine]
+    suffix = ".wav" if engine == "kokoro" else ".mp3"
+    paths, jobs = [], []
     for text in texts:
         said = spoken(text)
-        key = hashlib.sha1(f"{VOICE}|{ENGINE}|{said}".encode()).hexdigest()[:16]
-        path = CLIP_CACHE / f"{key}.mp3"
+        key = hashlib.sha1(f"{engine}|{voice}|{said}".encode()).hexdigest()[:16]
+        path = CLIP_CACHE / f"{key}{suffix}"
+        paths.append(path)
         if not path.exists():
-            polly = polly or boto3.client("polly", region_name=POLLY_REGION)
-            response = polly.synthesize_speech(Text=said, OutputFormat="mp3", VoiceId=VOICE, Engine=ENGINE)
-            path.write_bytes(response["AudioStream"].read())
-        clips.append(NarrationClip(path=path, seconds=ffprobe_duration(path), text=text))
-    return clips
+            jobs.append({"text": said, "path": str(path)})
+    if jobs:
+        (synthesize_kokoro if engine == "kokoro" else synthesize_polly)(jobs, voice)
+    return [NarrationClip(path=path, seconds=ffprobe_duration(path), text=text) for path, text in zip(paths, texts, strict=True)]
+
+
+def synthesize_kokoro(jobs: list[dict], voice: str) -> None:
+    spec = OUT / "kokoro-jobs.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "model": str(KOKORO_DIR / "kokoro-v1.0.onnx"),
+                "voices": str(KOKORO_DIR / "voices-v1.0.bin"),
+                "voice": voice,
+                "speed": KOKORO_SPEED,
+                "jobs": jobs,
+            }
+        ),
+        encoding="utf-8",
+    )
+    cmd = ["uv", "run", "--isolated", "--no-project", "--python", "3.12", "--with", "kokoro-onnx==0.6.1"]
+    subprocess.run([*cmd, "python", str(HERE / "kokoro_tts.py"), str(spec)], check=True)
+
+
+def synthesize_polly(jobs: list[dict], voice: str) -> None:
+    import boto3
+
+    polly = boto3.client("polly", region_name=POLLY_REGION)
+    for job in jobs:
+        response = polly.synthesize_speech(Text=job["text"], OutputFormat="mp3", VoiceId=voice, Engine="generative")
+        Path(job["path"]).write_bytes(response["AudioStream"].read())
 
 
 def render(chapter: dict, durations: list[float], preview: bool) -> tuple[Path, dict]:
@@ -127,6 +162,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--chapter", type=int, action="append", help="chapter number, repeatable; default all")
     parser.add_argument("--preview", action="store_true", help="no voice, 480p, estimated timing")
+    parser.add_argument("--voice", choices=sorted(VOICES), default="kokoro", help="narration engine")
     args = parser.parse_args()
     chosen = [c for c in CHAPTERS if not args.chapter or c["number"] in args.chapter]
     OUT.mkdir(parents=True, exist_ok=True)
@@ -137,7 +173,7 @@ def main() -> None:
             clips = None
             durations = [max(2.5, len(text.split()) / WORDS_PER_SECOND) for text in chapter["beats"]]
         else:
-            clips = narrate(chapter["beats"])
+            clips = narrate(chapter["beats"], args.voice)
             durations = [clip.seconds + BREATH_SECONDS for clip in clips]
         durations[-1] += CHAPTER_TAIL_SECONDS
         video, timing = render(chapter, durations, args.preview)
