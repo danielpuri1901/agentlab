@@ -149,10 +149,17 @@ def report(timing: dict, number: int) -> None:
 
 
 def join(paths: list[Path], out_path: Path) -> Path:
+    """Join the chapters with one re-encode. A stream copy leaves duplicate
+    timestamps at chapter seams, because each chapter's length follows its
+    voice and is not a whole number of frames; players can stutter there."""
     listing = OUT / "chapters.txt"
     listing.write_text("".join(f"file '{p}'\n" for p in paths), encoding="utf-8")
     subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(out_path)],
+        [
+            "ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(listing),
+            "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(out_path),
+        ],
         check=True,
     )
     return out_path
