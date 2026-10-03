@@ -41,6 +41,10 @@ from manim import (
 from story_scene import (  # noqa: F401 - re-exported for the chapters
     ACCENT,
     BACKGROUND,
+    CAPTION_FONT_SIZE,
+    CAPTION_MAX_HEIGHT,
+    CAPTION_SWAP_SECONDS,
+    CAPTION_WRAP_WIDTH,
     GOLD,
     GREEN,
     RED,
@@ -48,8 +52,10 @@ from story_scene import (  # noqa: F401 - re-exported for the chapters
     STAGE_LEFT,
     STAGE_RIGHT,
     STAGE_TOP,
+    STAGE_WIDTH,
     StoryScene,
     load_spec,
+    wrap_text,
 )
 
 FONT = "Helvetica Neue"
@@ -302,6 +308,21 @@ class ExplainerScene(StoryScene):
         self.chapter_title = spec.get("title", "")
         self.header = None
         super().construct()
+
+    def _swap_caption(self, text: str):
+        """The base class caption, drawn through txt() so small text keeps
+        normal letter spacing (Pango spaces small sizes too widely)."""
+        new = self.fit(
+            txt(wrap_text(text, CAPTION_WRAP_WIDTH), CAPTION_FONT_SIZE, INK),
+            max_w=STAGE_WIDTH,
+            max_h=CAPTION_MAX_HEIGHT,
+        )
+        new.to_edge(DOWN, buff=0.3)
+        anims = [FadeIn(new)]
+        if self._caption is not None:
+            anims.append(FadeOut(self._caption))
+        self.play(*anims, run_time=CAPTION_SWAP_SECONDS)
+        self._caption = new
 
     def d(self, beat: int) -> float:
         return float(self.durations[beat - 1])
