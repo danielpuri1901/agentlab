@@ -59,6 +59,21 @@ def test_guard_flags_forbidden_things(snippet, needle):
     assert any(needle in f for f in findings), findings
 
 
+def test_guard_allows_the_camera_and_3d_api():
+    source = GOLDEN_SCENE.replace(
+        "self.hold(0.6)",
+        "self.globe = Sphere(radius=1.0, resolution=(16, 16)); "
+        "self.add_fixed_in_frame_mobjects(self.globe); "
+        "self.move_camera(phi=70 * DEGREES, theta=-45 * DEGREES, zoom=1.2, run_time=1); "
+        "self.begin_ambient_camera_rotation(rate=0.2); "
+        "self.stop_ambient_camera_rotation(); "
+        "self.set_camera_orientation(phi=0, theta=-90 * DEGREES); "
+        "self.hold(0.6)",
+    ).replace("from manim import (", "from manim import (\n    DEGREES,\n    Sphere,")
+
+    assert scene_code.check_scene_code(source, BEATS) == []
+
+
 def test_guard_blocks_indirect_dunder_access_to_builtins():
     source = GOLDEN_SCENE.replace(
         "self.hold(0.6)",
@@ -200,18 +215,60 @@ def test_prompt_includes_full_storyboard_and_visual_focus():
 
 
 def test_prompt_requires_scene_to_fit_below_completion_limit():
-    assert "under 7000 output tokens" in scene_code.SCENE_CODE_SYSTEM
+    assert "under 12000 tokens" in scene_code.SCENE_CODE_SYSTEM
 
 
-def test_prompt_gives_the_scene_coder_visual_freedom():
+def test_prompt_opens_with_daniels_brief_verbatim():
+    assert scene_code.SCENE_CODE_SYSTEM.startswith(
+        "Make the most visually striking explanation you can. Invent the visuals. "
+        "Colour, motion, camera moves and 3D are all allowed.\n"
+    )
+
+
+def test_prompt_keeps_only_hard_technical_facts():
     system = scene_code.SCENE_CODE_SYSTEM
-    assert "clearest visual explanation" in system
-    assert "visually compelling" in system
-    assert "abstract" in system
-    assert "Change the composition" in system
-    assert "designed for this paper" in system
-    assert "one visual change per beat" not in system
-    assert "Reuse the central object" not in system
+    api = scene_code.STORY_SCENE_API
+    for fact in ("Manim Community v0.21", "class PaperStory(StoryScene)", "MathTex"):
+        assert fact in system
+    for import_name in sorted(scene_code.ALLOWED_IMPORTS):
+        assert import_name in system
+    for call in (
+        "self.move_camera(",
+        "self.set_camera_orientation(",
+        "self.begin_ambient_camera_rotation(",
+        "self.add_fixed_in_frame_mobjects(",
+        "ThreeDAxes without labels",
+    ):
+        assert call in api
+    assert "The palette is free" in api
+    for old_rule in (
+        "No camera moves",
+        "the one accent colour",
+        "the render fails if",
+        "small intentional colour palette",
+    ):
+        assert old_rule not in system + api
+
+
+def test_write_scene_code_after_a_coder_error_sends_the_error_without_a_file():
+    board = Storyboard(**GOLDEN_BOARD)
+    seen = []
+
+    def complete(model, messages):
+        seen.append(messages)
+        return "```python\n" + GOLDEN_SCENE + "\n```"
+
+    scene_code.write_scene_code(
+        board,
+        [6.0] * BEATS,
+        complete,
+        model="m",
+        feedback="The previous scene coder call failed: ReadTimeoutError",
+    )
+
+    user = seen[0][-1]["content"]
+    assert "ReadTimeoutError" in user
+    assert "<previous_file>" not in user
 
 
 @pytest.mark.parametrize(

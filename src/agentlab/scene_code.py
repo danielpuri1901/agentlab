@@ -19,7 +19,6 @@ from agentlab.storyboard import Storyboard
 
 SCENE_CLASS = "PaperStory"
 BASE_CLASS = "StoryScene"
-MAX_TOKENS = 8000
 BEAT_MARGIN_SECONDS = 0.3
 
 ALLOWED_IMPORTS = frozenset(
@@ -343,77 +342,63 @@ def _dedup(items: list[str]) -> list[str]:
     return out
 
 
-STORY_SCENE_API = """The base class (already written, do not redefine it) gives you:
+STORY_SCENE_API = """The base class is a ThreeDScene (already written, do not redefine \
+it). It gives you:
 
-Constants (import them from story_scene): BACKGROUND, ACCENT (#2f6fd6, the one accent \
-colour), GOLD, GREEN, RED, GREY_A, GREY_B, GREY_C, GREY_D, WHITE, STAGE_TOP (3.6), \
-STAGE_BOTTOM (-2.3), STAGE_LEFT (-6.4), STAGE_RIGHT (6.4).
-
-Layout is checked, not judged. At the end of every beat the render fails if \
-any element is outside the stage or sits on the caption band, and the error \
-names the element and the edge. So keep every element between STAGE_LEFT and \
-STAGE_RIGHT, and between STAGE_BOTTOM and STAGE_TOP. The caption band lives \
-below STAGE_BOTTOM: nothing you place may reach into it. Remember that a \
-group grows as you add to it, so call self.fit on the finished group and \
-place the group, not each piece.
+Constants (import them from story_scene if you want them): BACKGROUND (#05070c, the \
+background), ACCENT, GOLD, GREEN, RED, GREY_A, GREY_B, GREY_C, GREY_D, WHITE, STAGE_TOP \
+(3.6), STAGE_BOTTOM (-2.3), STAGE_LEFT (-6.4), STAGE_RIGHT (6.4). The palette is free: \
+use these colours or any others.
 
 Methods:
-- self.fit(mobject, max_w=None, max_h=None): shrink to the stage or the given bounds; returns the mobject. Call it on every text block and every group before placing it.
-- self.label(text, size=28, color=WHITE, width=44, bold=False): a wrapped, fitted Text. Place it with next_to / move_to / to_edge.
+- self.fit(mobject, max_w=None, max_h=None): shrink to the stage or the given bounds; returns the mobject.
+- self.label(text, size=28, color=WHITE, width=44, bold=False): a wrapped, fitted Text.
 - self.counter(start, end, suffix="", size=44, color=ACCENT, decimals=0): returns (mobject, animation). Place the mobject, then self.play(animation, run_time=...) to count it up. Call self.freeze(mobject) afterwards, before any FadeOut or Transform that includes it.
 - self.freeze(mobject): stop a counter updating.
-- self.clear_stage(run_time=0.4): fade out everything except the caption. Use it when the mechanism changes view.
+- self.clear_stage(run_time=0.4): fade out everything except the caption. The camera stays where it is.
 - self.hold(seconds): wait, to let a change sink in.
 
-The base class already: sets the dark background, draws the caption for each beat in the bottom band, and pads each beat so it lasts exactly its narration. You only write beat_1 .. beat_n."""
+Camera and 3D (angles in radians, for example 70 * DEGREES):
+- self.move_camera(phi=..., theta=..., zoom=..., frame_center=..., run_time=...): animate the camera. added_anims=[...] plays other animations at the same time.
+- self.set_camera_orientation(phi=..., theta=..., zoom=...): set the camera at once.
+- self.begin_ambient_camera_rotation(rate=0.2) and self.stop_ambient_camera_rotation(): a slow orbit that runs until you stop it.
+- self.add_fixed_in_frame_mobjects(mobject): pin text or an overlay to the screen, so camera moves never tilt or move it. It adds the mobject to the scene at once, so call it just before you animate the mobject in.
+- 3D mobjects: Surface, Sphere, Cube, Prism, Cylinder, Line3D, Arrow3D, Dot3D, and ThreeDAxes without labels.
+The camera starts flat, looking straight at the stage (phi=0, theta=-90 * DEGREES), and stays wherever you leave it.
+
+The base class already sets the dark background, pins each beat's caption to the bottom band, and pads each beat so it lasts at least its narration. You only write beat_1 .. beat_n."""
 
 
-SCENE_CODE_SYSTEM = """You are a motion designer who writes one Manim Community v0.21 \
-scene file for a short research-paper video. Make the video visually compelling, clear, \
-and designed for this paper. The storyboard gives the factual meaning and learning arc. \
-You own the exact visual interpretation.
+SCENE_CODE_SYSTEM = """Make the most visually striking explanation you can. Invent the visuals. \
+Colour, motion, camera moves and 3D are all allowed.
 
-Before coding, choose the clearest visual explanation for the whole paper and for each beat.
-The visual language can be abstract, geometric, cinematic, diagrammatic, or a careful mix.
-Use position, motion, transformation, scale, rhythm, contrast, and negative space to show \
-cause and effect. Change the composition when a new view helps. Objects can persist, \
-transform, split, merge, disappear, or be replaced. Use a small intentional colour palette \
-to encode meaning. Avoid a generic row of labelled boxes unless the paper truly calls for it.
-Every movement must explain something. Do not merely decorate or repeat narration as text.
+You write one Manim Community v0.21 scene file for a short research-paper video. The \
+storyboard gives the facts, their order, and a visual metaphor to start from.
 
-Contract:
-- File starts with one `# Visual direction: ...` comment that names the scene's actual \
-composition and motion concept. This must describe what this generated file implements, \
-including fresh retry concepts. The next line is `from manim import (...)` naming only \
-what you use, then `from \
-story_scene import StoryScene` plus any constants you use from it.
-- Exactly one class, `class PaperStory(StoryScene):`. Do not override construct.
-- Keep the complete file under 7000 output tokens. Import only names you use.
-- One method per beat, beat_1 to beat_n, n equal to the storyboard's beat count.
-- Use only factual text and numbers from the storyboard. You may shorten a listed label. \
-Do not invent a claim, value, heading, or technical term. Keep text clear of shapes and captions.
-- Each beat's animations (the sum of run_time values plus any self.hold) must end at \
-least 0.3 s before that beat's narration ends. The budget per beat is listed below. The \
-base class pads the rest.
-- Objects that persist across beats live on self (self.agent, self.evaluator, ...).
-- Everything stays inside the stage: x from -6.4 to 6.4, y from -2.3 to 3.6. The band \
-below y = -2.3 is the caption's; never draw there. Call self.fit on every text block and \
-every group.
-- No LaTeX: never Tex, MathTex, DecimalNumber, Integer, Title, Variable, Matrix, Table, \
-BarChart, axis labels, include_numbers=True. Numbers are Text or self.counter(...).
-- No camera moves (plain Scene): zoom by scaling a group. No emoji, no images, no \
-files, no network, no custom fonts, no sound.
+Hard technical facts:
+- The file starts with one comment line, `# Visual direction: ...`, that names the \
+composition and motion concept this file implements.
+- Exactly one class, `class PaperStory(StoryScene):`, with one method per beat, beat_1 \
+to beat_n, n equal to the storyboard's beat count. Do not override construct. Import \
+StoryScene from story_scene. Keep objects that live across beats on self (self.name, \
+never self._name).
+- No LaTeX: the render image has none. Never use Tex, MathTex, DecimalNumber, Integer, \
+Title, Variable, Matrix, Table, BarChart, axis labels, or include_numbers=True. Write \
+numbers with Text or self.counter(...).
+- No files, network, images, SVG, or sound.
 - Only these imports: manim, story_scene, math, random, itertools, functools, numpy, \
-dataclasses, typing, colorsys.
-- Use real Manim vocabulary: Create for shapes, Write or FadeIn for text, \
-.animate.move_to / .set_fill / .scale for state changes, Transform / ReplacementTransform \
-/ FadeTransform for one thing becoming another, Indicate / Circumscribe / Flash for \
-emphasis, MoveAlongPath for travel, VGroup + arrange / arrange_in_grid for layout, \
-always with explicit run_time.
-- Text sizes: 20 to 30 for labels, 36 to 44 for one headline number. Keep on-screen text \
-brief enough to read on a phone.
-- Prefer showing the change over labelling it: a bar growing to 44% beats the words \
-"44% improvement".
+dataclasses, typing, colorsys. Name every imported name: no wildcard imports. From numpy \
+use plain numeric functions only (np.random is blocked, use the random module). The \
+guard also rejects open, exec, eval, getattr, setattr, type, super, object, and any \
+direct use of self.camera, self.renderer, or config.
+- Every word and number on screen comes from the storyboard. You may shorten a label.
+- The base class draws each beat's caption in the bottom band, below y = -2.3. Keep \
+important content above it.
+- Aim to finish each beat's animations before its narration ends. The base class pads \
+the rest with a still frame.
+- The render must finish within 10 minutes at 1280x720 and 30 fps, so keep 3D meshes \
+coarse (for example resolution=(16, 16)) and updaters light.
+- Keep the file under 12000 tokens.
 
 Answer with exactly one fenced ```python block containing the whole file and nothing \
 else outside it."""
@@ -437,8 +422,8 @@ def build_scene_code_prompt(
             else ""
         )
         beat_lines.append(
-            f"beat_{i}: narration lasts {seconds:.1f} s, so your animations must total at most "
-            f"{budget} s.\n  Narration: {beat.narration}\n  Visual: {beat.visual}{labels}"
+            f"beat_{i}: narration lasts {seconds:.1f} s. Aim for animations that total at "
+            f"most {budget} s.\n  Narration: {beat.narration}\n  Visual: {beat.visual}{labels}"
         )
     storyboard_json = storyboard.model_dump_json(indent=2)
     prompt = (
@@ -455,19 +440,10 @@ def build_scene_code_prompt(
         + STORY_SCENE_API
     )
     if feedback:
+        prompt += "\n\nThe previous attempt failed. Return the full corrected file.\n\n"
         if previous_source:
-            prompt += (
-                "\n\nThis is a technical repair round. Your previous file is below, "
-                "followed by what went wrong. Return the full corrected file.\n\n"
-                f"<previous_file>\n{previous_source}\n</previous_file>\n\n"
-                f"<what_went_wrong>\n{feedback}\n</what_went_wrong>"
-            )
-        else:
-            prompt += (
-                "\n\nThis is a new visual-concept round. Start from the storyboard again. "
-                "Create a substantially different composition and motion system.\n\n"
-                f"<what_went_wrong>\n{feedback}\n</what_went_wrong>"
-            )
+            prompt += f"<previous_file>\n{previous_source}\n</previous_file>\n\n"
+        prompt += f"<what_went_wrong>\n{feedback}\n</what_went_wrong>"
     prompt += "\n\nWrite the complete file now, in one fenced python block."
     return prompt
 
