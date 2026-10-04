@@ -56,6 +56,9 @@ TIMING_ENV = "SCENE_TIMING_OUT"
 SPEC_ENV = "SCENE_SPEC_JSON"
 
 CAPTION_FONT_SIZE = 20
+CAPTION_RENDER_SIZE = 72
+"""Pango drops and squeezes word spaces at small font sizes, so a caption is
+drawn at this size and scaled down to CAPTION_FONT_SIZE."""
 CAPTION_WRAP_WIDTH = 60
 CAPTION_MAX_HEIGHT = 1.4
 CAPTION_SWAP_SECONDS = 0.25
@@ -337,11 +340,13 @@ if _MANIM_AVAILABLE:
                 self._layout_warnings.append(warning)
 
         def _swap_caption(self, text: str):
-            new = self.fit(
-                Text(wrap_text(text, CAPTION_WRAP_WIDTH), font_size=CAPTION_FONT_SIZE, color=WHITE, line_spacing=1.15),
-                max_w=STAGE_WIDTH,
-                max_h=CAPTION_MAX_HEIGHT,
-            )
+            caption = Text(
+                wrap_text(text, CAPTION_WRAP_WIDTH),
+                font_size=CAPTION_RENDER_SIZE,
+                color=WHITE,
+                line_spacing=1.15,
+            ).scale(CAPTION_FONT_SIZE / CAPTION_RENDER_SIZE)
+            new = self.fit(caption, max_w=STAGE_WIDTH, max_h=CAPTION_MAX_HEIGHT)
             new.to_edge(DOWN, buff=0.3)
             self.add_fixed_in_frame_mobjects(new)
             anims = [FadeIn(new)]
