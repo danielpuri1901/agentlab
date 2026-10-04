@@ -19,6 +19,7 @@ and env overrides.
 import json
 import re
 from collections.abc import Callable
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Literal
 
 from bs4 import BeautifulSoup
@@ -63,6 +64,7 @@ _SOURCE_NUMBER_RE = re.compile(
     r"(?<![A-Za-z])\d+(?:[.,]\d+)*(?:\s*(?:%|percent))?", re.IGNORECASE
 )
 _VERSION_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])[vV](\d+(?:\.\d+)+)")
+_DECIMAL_NUMBER_RE = re.compile(r"(\d+\.\d+)(%?)")
 
 
 class DiagramNode(BaseModel):
@@ -515,6 +517,26 @@ def _percentage_table_numbers(source_text: str) -> set[str]:
     return grounded
 
 
+def _rounded_forms(value: str) -> set[str]:
+    """A grounded decimal rounded to a whole number and to one decimal.
+
+    The unit stays as the source wrote it: "26.4%" gives "26%" and "26.4%",
+    and its unitless twin "26.4" gives "26" and "26.4". A bare "26.4" never
+    grounds "26%", the same rule as for the unrounded number.
+    """
+    match = _DECIMAL_NUMBER_RE.fullmatch(value)
+    if not match:
+        return set()
+    number, unit = Decimal(match.group(1)), match.group(2)
+    forms = set()
+    for step in (Decimal(1), Decimal("0.1")):
+        try:
+            forms.add(f"{number.quantize(step, rounding=ROUND_HALF_UP)}{unit}")
+        except InvalidOperation:  # more digits than the decimal context holds
+            continue
+    return forms
+
+
 def _grounded_source_numbers(source_text: str) -> set[str]:
     grounded: set[str] = set()
     for value in _SOURCE_NUMBER_RE.findall(source_text):
@@ -530,6 +552,9 @@ def _grounded_source_numbers(source_text: str) -> set[str]:
     # string behind its own "v".
     grounded.update(_VERSION_NUMBER_RE.findall(source_text))
     grounded.update(_percentage_table_numbers(source_text))
+    # Rounding is not inventing: the source said "26.4 percentage points" and
+    # the plan said "26 percent" in seven of 24 failed runs up to 2026-10-04.
+    grounded.update(form for value in list(grounded) for form in _rounded_forms(value))
     return grounded
 
 

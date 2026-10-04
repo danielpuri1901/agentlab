@@ -377,6 +377,64 @@ def test_deep_read_grounds_a_version_written_without_its_v_prefix():
     assert plan.key_numbers[1].value == "0.1.1"
 
 
+def test_deep_read_grounds_a_number_rounded_to_a_whole_percent():
+    """The source says "26.4 percentage points", the plan says "26 percent"
+    (seven of 24 failed runs up to 2026-10-04 were this kind of rounding).
+    """
+    source = SOURCE_TEXT + " The method gains 26.4 percentage points over the baseline."
+    digest = DIGEST_MD + "\n\nThe method gains about 26 percent over the baseline."
+    plan_data = _plan_kwargs(
+        key_numbers=[
+            {"value": "12%", "meaning": "Accuracy gain over raw context."},
+            {"value": "26 percent", "meaning": "Gain over the baseline."},
+        ]
+    )
+    calls = []
+
+    def fake_complete(model, messages):
+        calls.append(messages)
+        return _fenced(plan_data, digest=digest)
+
+    _digest, plan = deep_read(
+        "https://arxiv.org/abs/2610.00001", lambda url: source, fake_complete
+    )
+
+    assert len(calls) == 1
+    assert plan.key_numbers[1].value == "26 percent"
+
+
+@pytest.mark.parametrize(
+    ("source_number", "plan_number", "grounded"),
+    [
+        ("26.4%", "26.4", True),
+        ("26.45%", "26.5%", True),
+        ("26.5%", "27%", True),
+        ("26.4 points", "26", True),
+        ("26.4%", "27%", False),
+        ("26.4%", "26.3%", False),
+        ("26.4 points", "26%", False),
+    ],
+)
+def test_deep_read_rounding_grounds_only_the_true_rounded_forms(
+    source_number, plan_number, grounded
+):
+    source = SOURCE_TEXT + f" The method gains {source_number} over the baseline."
+    digest = DIGEST_MD + f"\n\nThe method gains {plan_number} over the baseline."
+
+    def read():
+        return deep_read(
+            "https://arxiv.org/abs/2610.00001",
+            lambda url: source,
+            lambda model, messages: _fenced(VALID_PLAN_DICT, digest=digest),
+        )
+
+    if grounded:
+        assert read()[0] == digest
+    else:
+        with pytest.raises(ValueError, match="numbers missing"):
+            read()
+
+
 def test_deep_read_grounds_a_percentage_split_across_a_line_break():
     """The digest wraps between "74.2" and "percent". The number regex spans
     the newline, so the normaliser has to treat it like any other space (this
