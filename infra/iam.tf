@@ -448,7 +448,7 @@ resource "aws_iam_role_policy" "explain_task" {
   # role is not re-scoped every time a future explain-track helper adds one
   # more access pattern), S3 read/write scoped to its own three prefixes
   # (digests/ - the full-digest artifact; videos/ - the rendered mp4;
-  # stories/ - the storyboard, judgement, and generated scene source for
+  # stories/ - the storyboard, timing, and generated scene source for
   # each story-path video), and Polly (voice verification + narration
   # synthesis).
   policy = jsonencode({

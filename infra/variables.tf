@@ -65,6 +65,34 @@ variable "pick_model" {
   type        = string
 }
 
+variable "story_model" {
+  description = "Bedrock model id that writes the video storyboards. An application inference profile ARN takes the Bedrock Converse path, which sends story_effort."
+  type        = string
+}
+
+variable "scene_model" {
+  description = "Bedrock model id that writes the Manim scene code for the videos. An application inference profile ARN takes the Bedrock Converse path, which sends story_effort."
+  type        = string
+}
+
+variable "story_price_model" {
+  description = "Pricing id for story_model, so its calls get a cost estimate even when story_model is an application inference profile ARN."
+  type        = string
+  default     = "global.anthropic.claude-opus-5-5"
+}
+
+variable "scene_price_model" {
+  description = "Pricing id for scene_model, so its calls get a cost estimate even when scene_model is an application inference profile ARN."
+  type        = string
+  default     = "global.anthropic.claude-opus-5-5"
+}
+
+variable "story_effort" {
+  description = "Output effort the storyboard and scene code calls ask for (Bedrock output_config.effort)."
+  type        = string
+  default     = "high"
+}
+
 variable "video_image_tag" {
   description = "Tag of the `agentlab` ECR image the explain task definition runs (same repo as image_tag, different image - it carries the render toolchain from Dockerfile.video). scripts/build_and_push_video_image.sh pushes video-<git-sha>; override with -var video_image_tag=<tag> at apply time to roll out a new build."
   type        = string
