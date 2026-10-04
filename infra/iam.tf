@@ -449,8 +449,11 @@ resource "aws_iam_role_policy" "explain_task" {
   # more access pattern), S3 read/write scoped to its own three prefixes
   # (digests/ - the full-digest artifact; videos/ - the rendered mp4;
   # stories/ - the storyboard, timing, and generated scene source for
-  # each story-path video), and Polly (voice verification + narration
-  # synthesis).
+  # each story-path video; checkpoints/ - each finished stage of a video, so
+  # a retry resumes instead of starting over), and Polly (voice
+  # verification + narration synthesis). There is still no s3:ListBucket:
+  # a missing checkpoint answers 403, which stage_checkpoints.py reads as a
+  # miss.
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -502,6 +505,7 @@ resource "aws_iam_role_policy" "explain_task" {
           "${aws_s3_bucket.results.arn}/videos/*",
           "${aws_s3_bucket.results.arn}/stories/*",
           "${aws_s3_bucket.results.arn}/profile/*",
+          "${aws_s3_bucket.results.arn}/checkpoints/*",
         ]
       },
       {

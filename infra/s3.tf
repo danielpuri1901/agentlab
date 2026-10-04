@@ -49,4 +49,21 @@ resource "aws_s3_bucket_lifecycle_configuration" "results" {
       days_after_initiation = 7
     }
   }
+
+  # A video stage checkpoint only matters while a retry of that paper can
+  # still come (the next day's second chance, or a re-approval). After 30
+  # days a new run should start fresh, so the prefix expires. A key prefix
+  # is enough for this filter; the objects carry no tags.
+  rule {
+    id     = "expire-stage-checkpoints"
+    status = "Enabled"
+
+    filter {
+      prefix = "checkpoints/"
+    }
+
+    expiration {
+      days = 30
+    }
+  }
 }
