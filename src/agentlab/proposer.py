@@ -104,19 +104,35 @@ def build_prompt(
     )
 
 
-def parse_proposals(raw: str) -> list[dict]:
+def _json_array(raw: str) -> list | None:
+    """The first JSON array in a reply, wherever it sits.
+
+    Sonnet writes reasoning prose first and fences the array (2026-10-04);
+    reading from the first bracket to the end of the text then chokes on
+    the closing fence and drops every pick. So take the last fenced block
+    when there is one, then decode from each bracket until one parses.
+    """
     text = raw.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        text = text.removeprefix("json").strip()
+    if "```" in text:
+        fenced = [part for i, part in enumerate(text.split("```")) if i % 2 and part.strip()]
+        if fenced:
+            text = fenced[-1].removeprefix("json").strip()
+    decoder = json.JSONDecoder()
     start = text.find("[")
-    if start == -1:
-        return []
-    try:
-        parsed = json.loads(text[start:])
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, list):
+    while start != -1:
+        try:
+            value, _end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            value = None
+        if isinstance(value, list):
+            return value
+        start = text.find("[", start + 1)
+    return None
+
+
+def parse_proposals(raw: str) -> list[dict]:
+    parsed = _json_array(raw or "")
+    if parsed is None:
         return []
     proposals = []
     for entry in parsed:
@@ -162,6 +178,15 @@ def next_classic(table, classics: list[dict]) -> dict | None:
             continue
         return entry
     return None
+
+
+def _classic_filed_today(table, now: datetime) -> bool:
+    """One foundational slot a day, even when the proposer runs twice."""
+    today = now.strftime("%Y-%m-%d")
+    return any(
+        p.get("lens") == "foundational" and str(p.get("created_ts", "")).startswith(today)
+        for p in list_all(table)
+    )
 
 
 def format_message(entries: list[dict]) -> tuple[str, list]:
@@ -253,7 +278,7 @@ def run_propose(table, ssm_client, s3_client, bucket: str, model: str, now: date
     sources = [s for s in gather() if s.get("source") != "github"]
     entries: list[dict] = []
 
-    classic = next_classic(table, load_classics())
+    classic = None if _classic_filed_today(table, now) else next_classic(table, load_classics())
     if classic is not None:
         proposal = {
             "title": classic["title"][:MAX_TITLE],
@@ -275,7 +300,11 @@ def run_propose(table, ssm_client, s3_client, bucket: str, model: str, now: date
                 {"role": "user", "content": build_prompt(sources, archive, slots, profile_text, now)},
             ],
         )
-        for proposal in parse_proposals(raw)[:slots]:
+        picks = parse_proposals(raw)
+        if not picks:
+            # Silence must mean broken: a reply that yields nothing is logged.
+            print(f"proposer: model reply had no valid proposals: {(raw or '')[:300]!r}")
+        for proposal in picks[:slots]:
             source_type = source_type_from_url(proposal["citation"])
             entries.append(_file(table, s3_client, bucket, proposal, source_type, profile_version, len(sources)))
 

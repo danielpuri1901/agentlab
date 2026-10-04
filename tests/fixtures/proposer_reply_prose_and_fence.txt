@@ -1,0 +1,32 @@
+Looking at the sources against Daniel's taste profile and the recent archive:
+
+**VISTA** (arxiv 2610.02200) - a visual harness for reasoning in interactive environments - directly hits "harnesses" and "agents." The archive shows no prior harness paper was approved recently (AutoCompact was approved but on compaction, not harness architecture). This is distinct.
+
+**AutoCompact** (arxiv 2610.02163) was already APPROVED in the archive as "Agent Context Window Management in Long-Horizon Coding Tasks" - skip.
+
+**KaliBench** (arxiv 2610.02206) was REJECTED in the archive as "Agent Tool-Use Reliability Under Cybersecurity Task Complexity" - skip.
+
+**AutoCompact** - already in archive.
+
+**MemFold** (hf, arxiv 2609.36435) - compact soft memory for long-context personalization via on-policy optimization - hits "agent memory" and "compaction." Not in archive.
+
+**VISTA** and **MemFold** are the two strongest picks.
+
+```json
+[
+  {
+    "title": "VISTA: A Visual Harness for Reasoning in an Interactive World",
+    "why": "VISTA directly targets harness design for multimodal agents across interactive environments, which sits at the center of Daniel's agent harness interest.",
+    "citation": "http://arxiv.org/abs/2610.02200v1",
+    "distance": "This paper does not appear anywhere in the recent archive.",
+    "lens": "implement"
+  },
+  {
+    "title": "MemFold: Learning Compact Soft Memory for Long-Context Personalization via On-Policy Optimization",
+    "why": "MemFold addresses both agent memory compaction and on-policy optimization together, two of Daniel's named core interests, in a single learnable memory module.",
+    "citation": "https://arxiv.org/abs/2609.36435",
+    "distance": "This paper does not appear anywhere in the recent archive.",
+    "lens": "frontier"
+  }
+]
+```

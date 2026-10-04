@@ -391,3 +391,53 @@ def test_run_propose_queues_ping_when_notify_fails(fabric, monkeypatch):
     pending = [i for i in table.scan()["Items"] if i["experiment_id"] == PENDING_PARTITION]
     assert len(pending) == 1
     assert "Today's lessons" in json.loads(pending[0]["payload"])["text"]
+
+
+def test_parse_proposals_reads_a_fenced_array_after_prose():
+    """The real Sonnet reply of 2026-10-04: reasoning prose, then a fenced
+    JSON array. The old parser read from the first bracket to the end of the
+    text, choked on the closing fence, and dropped both picks."""
+    from pathlib import Path
+
+    raw = (Path(__file__).parent / "fixtures" / "proposer_reply_prose_and_fence.txt").read_text(encoding="utf-8")
+
+    picks = parse_proposals(raw)
+
+    assert len(picks) == 2
+    assert all("arxiv.org/abs/" in p["citation"] for p in picks)
+
+
+def test_parse_proposals_reads_a_bare_array_between_prose():
+    raw = (
+        'Here are the picks [two of them]:\n'
+        '[{"title": "T", "why": "W", "citation": "https://x", "distance": "d", "lens": "implement"}]\n'
+        "Hope that helps."
+    )
+
+    assert [p["lens"] for p in parse_proposals(raw)] == ["implement"]
+
+
+def test_run_propose_logs_a_reply_that_yields_no_picks(fabric, telegram_calls, monkeypatch, capsys):
+    table, ssm, s3 = fabric
+    _daytime(monkeypatch)
+    monkeypatch.setattr(proposer_mod, "gather", lambda: list(FAKE_SOURCES))
+    _capture_complete(monkeypatch, output="I could not find anything worth proposing today.")
+
+    run_propose(table, ssm, s3, BUCKET, DEFAULT_PROPOSER_MODEL, now=NOW)
+
+    assert "model reply had no valid proposals" in capsys.readouterr().out
+
+
+def test_run_propose_files_one_classic_per_day(fabric, telegram_calls, monkeypatch):
+    table, ssm, s3 = fabric
+    _daytime(monkeypatch)
+    monkeypatch.setattr(proposer_mod, "gather", lambda: list(FAKE_SOURCES))
+    _capture_complete(monkeypatch, output="no picks")
+    run_propose(table, ssm, s3, BUCKET, DEFAULT_PROPOSER_MODEL, now=NOW)
+    _capture_complete(monkeypatch)
+
+    run_propose(table, ssm, s3, BUCKET, DEFAULT_PROPOSER_MODEL, now=NOW)
+
+    lenses = [i["lens"] for i in table.scan()["Items"] if i.get("sk") == "proposal"]
+    assert lenses.count("foundational") == 1
+    assert len(lenses) == 3
