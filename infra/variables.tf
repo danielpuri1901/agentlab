@@ -65,6 +65,18 @@ variable "pick_model" {
   type        = string
 }
 
+variable "deep_read_price_model" {
+  description = "Pricing id for deep_read_model, so its calls get a cost estimate even when deep_read_model is an application inference profile ARN."
+  type        = string
+  default     = "global.anthropic.claude-sonnet-5-5"
+}
+
+variable "deep_read_thinking" {
+  description = "Thinking type the deep read call asks for (Bedrock thinking.type). Sonnet 5.5 thinks by default and rejects \"disabled\"; \"between_tools\" switches thinking off for the deep read, which makes no tool calls."
+  type        = string
+  default     = "between_tools"
+}
+
 variable "story_model" {
   description = "Bedrock model id that writes the video storyboards. An application inference profile ARN takes the Bedrock Converse path, which sends story_effort."
   type        = string
