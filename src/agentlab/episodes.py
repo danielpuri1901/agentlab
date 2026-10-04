@@ -167,6 +167,11 @@ def _video_episode(item: dict, now: datetime) -> Episode | None:
     if rating is None:
         if now - parse_ts(sent_ts) < UNRATED_AFTER:
             return None
+        # Silence counts against a pick the lab chose or Daniel approved. An
+        # operator replay with no proposal behind it is a test run, so its
+        # silence says nothing about taste. A rating on it still counts.
+        if item.get("feedback_status") == "operator-replay" and not item.get("pid"):
+            return None
         kind, weight = UNRATED_KIND
         ts = sent_ts
     else:

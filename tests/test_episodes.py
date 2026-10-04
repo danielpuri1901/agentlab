@@ -241,3 +241,16 @@ def test_scan_all_reads_every_page(monkeypatch):
         monkeypatch.setattr(table, "scan", paged_scan)
         assert len(scan_all(table)) == 5
         assert len(pages) >= 3
+
+
+def test_an_unrated_operator_test_run_is_not_a_taste_signal():
+    sent = "2026-10-01T10:30:00.000000Z"
+    items = [
+        _video("v-test", None, sent, feedback_status="operator-replay"),
+        _video("v-approved", None, sent, feedback_status="operator-replay", pid="p1"),
+        _video("v-rated", "COOL", sent, feedback_status="operator-replay"),
+    ]
+
+    kinds = sorted(e.kind for e in derive_episodes(items, [], NOW))
+
+    assert kinds == ["cool", "unrated"]
