@@ -23,7 +23,10 @@ resource "aws_iam_role" "github_images" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            "token.actions.githubusercontent.com:sub" = "repo:danielpuri1901/agentlab:ref:refs/heads/main"
+            # GitHub names the repo by owner and repo ids as well as names
+            # (seen in CloudTrail, 2026-10-04), so a deleted and re-created
+            # repo with the same name cannot assume this role.
+            "token.actions.githubusercontent.com:sub" = "repo:danielpuri1901@123932678/agentlab@1335976071:ref:refs/heads/main"
           }
         }
       }
