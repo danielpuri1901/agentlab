@@ -6,35 +6,28 @@ Spec: `docs/specs/2026-09-05-metaphor-videos.md`.
 
 `worker explain` runs the three tracks as before.
 After the deep read, each track tries the story path through `agentlab.story_video.compose_story_video`.
-The story path creates a storyboard and narration, then makes up to four low-quality generated scene attempts and judges every renderable attempt.
-Each generated video follows a stable teaching sequence: title and definition, concrete problem, explanation, grounded result, application or implication, limitation, and final test question.
-The scene plan supplies facts and relationships but does not dictate the layout.
-The model chooses a paper-specific visual concept and controls its abstraction, composition, motion, rhythm, and transitions.
-Abstract, geometric, cinematic, and diagrammatic treatments are allowed when their meaning is clear.
-Each attempt samples the start, middle, and end of every beat at phone width.
-The three samples become one contact sheet per beat for the vision judge.
-The judge checks those frames, source accuracy, timing, and readability.
-It also scores whether the visual concept is clear, paper-specific, coherent, and visually compelling.
-The first passing attempt ships.
-If no attempt passes, the best safe rendered attempt ships.
-Technical failures repair the previous scene source.
-A weak visual concept starts a fresh scene without the previous source.
+The story and scene models, Claude Opus 5.5 at high effort in production, write the storyboard and the scene code.
+The storyboard builds the video around one bold visual metaphor that carries the paper's real mechanism.
+Each generated video follows a stable teaching sequence: title and definition, concrete problem, mechanism, grounded result, application or implication, limitation, and final test question.
+The scene coder gets Daniel's creative brief and only the hard technical facts, so colour, motion, camera moves, and 3D are all open.
+There is no judge and no score.
+Each attempt writes the scene code, runs the code guard, renders once at medium quality, and checks the timing structure.
+The first attempt that passes ships.
+Only a coder error, a guard finding, a Manim error or timeout, or invalid timing costs another attempt, up to three, and the coder gets the exact error back.
+A beat that runs longer than its narration still ships, because the narration track is padded to each beat's length.
+Layout problems do not fail a render either: they are recorded as `layout_warnings` in the timing.
+If no attempt passes, the story path raises `StoryFailed`, the track writes `STORY_FAILED` and `TRACK_FAILED` events to the ledger, and Telegram gets the digest link instead of a video.
 Each shipped story stores its visual direction.
 Later videos receive recent directions and must choose a substantially different concept.
-The template is used only when no generated attempt renders safely.
-The selected candidate renders at medium quality for delivery.
-If that final render fails or has invalid timing, the compose loop uses the accepted low-quality preview instead.
-If the story path cannot produce any renderable scene and raises `StoryFailed`, the track writes a `STORY_FALLBACK` event to the ledger and renders the existing template.
-The Telegram message looks the same in either path.
 
 ## Where to look
 
-- `video#<key>` items in the state table include `render_path` (`story` or `template`), `attempts`, `selected_attempt`, `judge_score`, `judge_passed`, `story_key`, measured model calls, estimated model cost, and tagged AgentLab month-to-date AWS cost.
-- `explain-<yyyymmdd>` items include `STORY_FALLBACK` events with the reason in `detail`.
-- S3 `stories/<key>.json` contains the storyboard, judgement, attempts, timing, and artifact keys for every attempt.
+- `video#<key>` items in the state table include `render_path`, `attempts`, `selected_attempt`, `story_key`, measured model calls, estimated model cost, and tagged AgentLab month-to-date AWS cost.
+- `explain-<yyyymmdd>` items include `STORY_FAILED` and `TRACK_FAILED` events with the reason in `detail`.
+- S3 `stories/<key>.json` contains the storyboard, attempts, timing with its `layout_warnings`, and a record of every attempt with the exact failure of each failed one.
 - S3 `stories/<key>.py` contains the generated scene source that rendered.
-- S3 `stories/<key>/attempts/` contains every generated source file and sampled frame.
-- CloudWatch `/ecs/agentlab-explain` contains warnings and Manim tracebacks for failed story attempts, including a warning when the accepted preview replaces a failed final render.
+- S3 `stories/<key>/attempts/` contains every generated source file.
+- CloudWatch `/ecs/agentlab-explain` contains warnings and Manim tracebacks for failed story attempts.
 
 The Telegram caption shows the estimated model cost for that video.
 It also shows tagged AgentLab AWS month-to-date spend when Cost Explorer is available.
@@ -76,10 +69,14 @@ Then run `SCENE_SPEC_JSON=work/spec.json PYTHONPATH=work uvx --python 3.12 manim
 
 ## Knobs
 
-- `STORY_MODEL`, `SCENE_MODEL`, and `JUDGE_MODEL` are Bedrock model IDs that each default to `DEEP_READ_MODEL`.
-- `agentlab.story_video.MAX_ATTEMPTS`, `LOW_RENDER_TIMEOUT`, `FINAL_RENDER_TIMEOUT`, and `VIDEO_DEADLINE_SECONDS` control the retry and render limits.
-- `agentlab.story_scene.PER_BEAT_OVERRUN_LIMIT` and `TOTAL_OVERRUN_LIMIT` control accepted scene timing.
-- `storyboard.STORYBOARD_SYSTEM`, `scene_code.SCENE_CODE_SYSTEM`, and `frame_judge.JUDGE_SYSTEM` are the model prompts.
+- `STORY_MODEL` and `SCENE_MODEL` are Bedrock model IDs that each default to `DEEP_READ_MODEL`.
+  The explain task sets them from the `story_model` and `scene_model` Terraform variables.
+- `STORY_PRICE_MODEL` and `SCENE_PRICE_MODEL` price those calls when the model is an application inference profile ARN.
+  Terraform sets both to `global.anthropic.claude-opus-5-5` by default.
+- `STORY_EFFORT` sets the output effort of the storyboard and scene code calls on the Bedrock Converse path.
+  It defaults to `high`.
+- `agentlab.story_video.MAX_ATTEMPTS`, `RENDER_TIMEOUT`, `MODEL_CALL_TIMEOUT`, and `VIDEO_DEADLINE_SECONDS` control the retry and time limits.
+- `storyboard.STORYBOARD_SYSTEM` and `scene_code.SCENE_CODE_SYSTEM` are the model prompts.
 
 ## Deploy
 
@@ -89,3 +86,4 @@ cd infra && terraform apply
 ```
 
 The build script rewrites `infra/video_image_tag.auto.tfvars` with the video image tag.
+`story_model` and `scene_model` have no default, so `infra/runtime.auto.tfvars` must set them before `terraform apply`.
