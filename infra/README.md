@@ -19,12 +19,12 @@ Terraform state and private runtime values stay outside Git.
 
 ## image_tag bootstrap
 
-`variables.tf`'s `image_tag` defaults to `"latest"`, but `scripts/build_and_push_image.sh` deliberately never pushes a mutable `:latest` tag to ECR - only `app-<git-short-SHA>` tags, one per commit, so a given image build is always reproducible from the commit that produced it.
+`variables.tf`'s `image_tag` defaults to `"latest"`, but the `build-images` GitHub Actions workflow deliberately never pushes a mutable `:latest` tag to ECR - only `app-<git-short-SHA>` tags, one per commit, so a given image build is always reproducible from the commit that produced it.
 That means a plain `terraform apply` with no override would try to run an image tag (`:latest`) that was never pushed, or - worse, if `:latest` happened to exist from some earlier manual push - silently redeploy stale task definitions without anyone noticing.
 
-The mechanism that prevents this: every successful run of `scripts/build_and_push_image.sh` writes `infra/image_tag.auto.tfvars` with `image_tag = "app-<git short sha>"` for the commit it just built and pushed.
+The mechanism that prevents this: `scripts/deploy_ci_images.sh` checks that `app-<sha7>` and `video-<sha7>` for the current commit exist in ECR, then writes `infra/image_tag.auto.tfvars` and `infra/video_image_tag.auto.tfvars` with those tags.
 Terraform automatically loads `image_tag.auto.tfvars` from the working directory on every plan/apply, with no `-var` flag needed, so a plain `terraform apply` after a push always picks up the exact image that was just built - never `:latest`, never a stale pin.
-`image_tag.auto.tfvars` is gitignored on purpose: it is a local build artifact recording "what did I last push," not a checked-in value, and it will differ between whoever last ran the build script.
+`image_tag.auto.tfvars` is gitignored on purpose: it is a local build artifact recording "what did I last push," not a checked-in value, and it will differ between whoever last ran the deploy script.
 
 ## How to validate
 

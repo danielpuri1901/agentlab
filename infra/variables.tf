@@ -39,7 +39,7 @@ variable "experiments_queue_name" {
 }
 
 variable "image_tag" {
-  description = "Tag of the `agentlab` ECR image the ECS task definitions run. scripts/build_and_push_image.sh pushes app-<git-sha>; override with -var image_tag=<tag> at apply time to roll out a new build."
+  description = "Tag of the `agentlab` ECR image the ECS task definitions run. The build-images GitHub Actions workflow pushes app-<git-sha>; override with -var image_tag=<tag> at apply time to roll out a new build."
   type        = string
   default     = "latest"
 }
@@ -106,7 +106,7 @@ variable "story_effort" {
 }
 
 variable "video_image_tag" {
-  description = "Tag of the `agentlab` ECR image the explain task definition runs (same repo as image_tag, different image - it carries the render toolchain from Dockerfile.video). scripts/build_and_push_video_image.sh pushes video-<git-sha>; override with -var video_image_tag=<tag> at apply time to roll out a new build."
+  description = "Tag of the `agentlab` ECR image the explain task definition runs (same repo as image_tag, different image - it carries the render toolchain from Dockerfile.video). The build-images GitHub Actions workflow pushes video-<git-sha>; override with -var video_image_tag=<tag> at apply time to roll out a new build."
   type        = string
   default     = "latest-video"
 }

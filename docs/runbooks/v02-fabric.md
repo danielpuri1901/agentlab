@@ -8,7 +8,7 @@ Idle cost is ~$0: nothing runs between experiments.
 ## Deploy or update
 
 1. `cd infra && terraform apply` (provider creds come from your `aws login` session via `eval "$(aws configure export-credentials --format env)"`).
-2. After code changes: `./scripts/build_and_push_image.sh` builds, pushes, and pins the new image tag in `infra/image_tag.auto.tfvars`; then `terraform apply` again to point the task definitions at it.
+2. After code changes: push to main. The `build-images` GitHub Actions workflow builds and pushes both images. Then `scripts/deploy_ci_images.sh` pins the new tags in `infra/*image_tag.auto.tfvars` and runs `terraform apply`.
 
 ## Run an experiment
 

@@ -1,0 +1,66 @@
+name: build-images
+
+# Builds the worker image (Dockerfile) and the video image (Dockerfile.video)
+# for every push to main, and pushes them to ECR as app-<sha7> and
+# video-<sha7>. Each Dockerfile runs the full test suite in its test stage,
+# so a failing test stops the push. The laptop never builds images:
+# scripts/deploy_ci_images.sh deploys the tags this workflow pushed.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write # the short-lived AWS sign-in token
+  contents: read
+
+concurrency:
+  group: build-images
+  cancel-in-progress: false
+
+env:
+  IMAGE_REPO: 891377302765.dkr.ecr.eu-west-1.amazonaws.com/agentlab
+
+jobs:
+  build:
+    # Native arm64, the same architecture as the Fargate tasks: no emulation.
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - prefix: app
+            dockerfile: Dockerfile
+          - prefix: video
+            dockerfile: Dockerfile.video
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::891377302765:role/agentlab-github-images
+          aws-region: eu-west-1
+
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Pick the image tag
+        id: tag
+        run: echo "image=${IMAGE_REPO}:${{ matrix.prefix }}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # The build cache lives in ECR next to the images (one cache tag per
+      # image), so each run reuses the unchanged layers of the last one.
+      # ECR needs image-manifest=true for cache images.
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.tag.outputs.image }}
+          cache-from: type=registry,ref=${{ env.IMAGE_REPO }}:buildcache-${{ matrix.prefix }}
+          cache-to: type=registry,ref=${{ env.IMAGE_REPO }}:buildcache-${{ matrix.prefix }},mode=max,image-manifest=true,oci-mediatypes=true
+
+      - run: echo "Pushed ${{ steps.tag.outputs.image }}" >> "$GITHUB_STEP_SUMMARY"

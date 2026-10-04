@@ -37,14 +37,9 @@ The dry run on 2026-10-02 took 7 minutes 20 seconds for 1 Sonnet call and about 
 ## Deploy
 
 1. Make sure `main` holds the code you want and the checkout is clean.
-2. Build and push both images from a clean checkout.
-   The scripts write the image tag tfvars next to the `infra/` they run from.
-
-```bash
-export AWS_REGION=eu-west-1
-bash scripts/build_and_push_image.sh
-bash scripts/build_and_push_video_image.sh
-```
+2. Push to main and wait for the `build-images` workflow.
+   GitHub Actions builds and pushes both images; the laptop never builds them.
+   `scripts/deploy_ci_images.sh` pins their tags and runs `terraform apply` from the main checkout.
 
 3. In the checkout that holds `infra/terraform.tfstate`, make sure these gitignored files exist.
 

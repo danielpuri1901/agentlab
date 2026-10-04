@@ -39,7 +39,7 @@ output "experiments_dlq_arn" {
 }
 
 output "ecr_repository_url" {
-  description = "ECR repository URL - the push/pull target for scripts/build_and_push_image.sh."
+  description = "ECR repository URL - the push target for the build-images GitHub Actions workflow."
   value       = aws_ecr_repository.agentlab.repository_url
 }
 

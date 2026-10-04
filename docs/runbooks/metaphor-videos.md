@@ -91,12 +91,14 @@ Then run `SCENE_SPEC_JSON=work/spec.json PYTHONPATH=work uvx --python 3.12 manim
 
 ## Deploy
 
+Push to main. GitHub Actions builds both images and pushes them to ECR (`.github/workflows/build-images.yml`).
+Then, from the main checkout:
+
 ```bash
-scripts/build_and_push_video_image.sh
-cd infra && terraform apply
+AWS_PROFILE=agentlab scripts/deploy_ci_images.sh
 ```
 
-The build script rewrites `infra/video_image_tag.auto.tfvars` with the video image tag.
+The deploy script checks that both images for the current commit are in ECR, pins their tags in `infra/*image_tag.auto.tfvars`, and runs `terraform apply`.
 `story_model` and `scene_model` have no default, so `infra/runtime.auto.tfvars` must set them before `terraform apply`.
 `deep_read_thinking` defaults to `between_tools`, which is meant for a Sonnet 5.5 `deep_read_model`.
 If `deep_read_model` is still an older model, set `deep_read_thinking = ""` so the deep read sends no thinking field.
