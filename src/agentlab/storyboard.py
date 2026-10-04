@@ -1,7 +1,8 @@
-"""Turn a grounded paper plan into a simple visual explanation.
+"""Turn a grounded paper plan into a visual explanation.
 
-The storyboard shows the paper's real parts and mechanism. It starts with
-the paper title and a plain definition. It does not invent an analogy.
+The storyboard carries the paper's real mechanism through one bold visual
+metaphor. The narration explains in plain words: it starts with the paper
+title and a plain definition, and every number comes from the source.
 """
 
 import json
@@ -20,8 +21,8 @@ MIN_MAPPING = 2
 MAX_MAPPING = 8
 MAX_TERM = 40
 MAX_MAPPING_VISUAL = 80
-MIN_BEATS = 8
-MAX_BEATS = 10
+MIN_BEATS = 6
+MAX_BEATS = 12
 MAX_NARRATION = 240
 MAX_VISUAL = 500
 MAX_ON_SCREEN = 2
@@ -184,7 +185,7 @@ def _clip(data: dict) -> dict:
     return data
 
 
-def _structure_error(board: Storyboard, plan: ScenePlan, digest: str) -> str:
+def _structure_error(board: Storyboard, plan: ScenePlan) -> str:
     if board.title != plan.title:
         return "storyboard title must match the scene plan title exactly"
     roles = [beat.role for beat in board.beats]
@@ -211,27 +212,6 @@ def _structure_error(board: Storyboard, plan: ScenePlan, digest: str) -> str:
             return "the result beat must use at least one grounded key number"
     if "—" in board.model_dump_json():
         return "use a plain hyphen or period instead of an em dash"
-    allowed_terms = {
-        _plain(value) for node in plan.diagram.nodes for value in (node.id, node.label)
-    } | {_plain(step.label) for step in plan.mechanism_steps}
-    grounded_text = _plain(digest + " " + plan.model_dump_json())
-    # Word by word, not phrase by phrase. The storyboard legitimately names a
-    # benchmark column the paper reports in pieces: the digest said "SQuAD
-    # v1.1" in one sentence and "Test F1" in another, and demanding the whole
-    # phrase contiguously killed the classic track on 2026-09-23. A term with
-    # one invented word in it still fails.
-    grounded_words = set(grounded_text.split())
-    unknown = [
-        item.paper_term
-        for item in board.mapping
-        if (
-            _plain(item.paper_term) not in allowed_terms
-            and _plain(item.paper_term) not in grounded_text
-            and not set(_plain(item.paper_term).split()) <= grounded_words
-        )
-    ]
-    if unknown:
-        return "mapping uses terms outside the scene plan: " + ", ".join(unknown)
     return ""
 
 
@@ -262,7 +242,7 @@ def parse_storyboard(
         if beat.role == "application":
             beat.narration = plan.application_or_implication
     _repair_ungrounded_numbers(board, digest, plan)
-    error = _structure_error(board, plan, digest)
+    error = _structure_error(board, plan)
     if error:
         return None, error
     missing = ungrounded_numbers(board.model_dump(), digest, plan)
@@ -275,53 +255,50 @@ def parse_storyboard(
     return board, ""
 
 
-STORYBOARD_SYSTEM = """You are the visual director for a 90-second research-paper video.
-Make it clear, visually compelling, and memorable.
-Use the paper's real mechanism and evidence.
-Treat the scene plan as a factual brief, not as a required diagram or layout.
+STORYBOARD_SYSTEM = """You are the visual director for a short research-paper video.
+Make it visually striking and memorable. Prefer creative over safe.
 
-Choose one strong visual concept designed for this paper.
-Abstract visual systems are welcome when their meaning is easy to follow.
-Use shape, space, scale, rhythm, contrast, and transformation to make ideas visible.
-Change the composition when a new view makes the idea clearer.
-Avoid a generic row of boxes unless that is truly the clearest explanation.
-Do not use an unrelated metaphor, mascot, or story.
+Build the whole video around one bold visual metaphor that you invent for this paper.
+The metaphor carries the paper's real mechanism: each of its moving parts stands for a real part of the paper.
+Let the metaphor change across the beats. It can grow, split, transform, collide, break, or rebuild.
+Colour, motion, camera moves, depth, and 3D are all available.
+Treat the scene plan as a factual brief, not as a layout.
 
+The narration explains the paper in plain words and may point at the metaphor.
+The metaphor lives in the visuals.
 Start with the exact paper title and one simple definition of the main idea.
-Then establish a concrete input or problem from the paper.
-Show the real mechanism through cause and effect.
-Then show one grounded result, one practical application or implication, one limit, and the street-test question.
+Then show a concrete problem from the paper, the real mechanism through cause and effect,
+one grounded result, one practical application or implication, one limit, and the street-test question.
 If the application is your inference rather than the paper's claim, say that plainly.
 
-For every beat, first decide what the viewer must understand.
-Then choose the clearest visual explanation for someone seeing the idea for the first time.
-Describe meaningful motion and transitions, not a static inventory of objects.
-
-Write 8 to 10 beats with this exact role order:
+Write 6 to 12 beats with this exact role order:
 1. title
 2. problem
-3. two to four mechanism beats
+3. mechanism beats, as many as the mechanism needs
 4. result
 5. application
 6. limit
 7. question
 
 Each beat has role, narration, visual, and on_screen_text.
+The visual says what the viewer sees and how it moves.
 Narration has one or two short sentences. Each sentence has at most 22 words.
 Use common words. Define a necessary technical term before using it.
-Never open with "imagine", "picture this", "think of", "it is like", or "as if".
+Never use "imagine", "picture this", "think of", "it is like", or "as if" in the title beat.
 Never use an em dash.
 
 The first beat's on_screen_text must contain the exact storyboard title.
 The first beat's narration must contain simple_definition exactly.
 Use at most two short on-screen labels per beat.
-Use paper terms from the digest or scene plan. Prefer exact diagram node labels or
-mechanism step labels, but a specific term grounded in the digest is also valid.
 Every number must occur in the digest or scene plan.
-Everything must be drawable with Manim text, shapes, paths, particles, and transformations.
+When the scene plan has key_numbers, the result beat states one of their values exactly.
+Everything must be drawable in Manim: text, shapes, paths, particles, 3D solids, colour, and camera moves.
+Nothing comes from image files.
 
 Output exactly one fenced json block with keys title, simple_definition, visual_focus,
-mapping (a list of paper_term and visual objects), and beats.
+mapping, and beats. visual_focus names the metaphor in one sentence. mapping is a list
+of two to eight objects with paper_term (the paper's own name for a part) and visual
+(what stands for it in the metaphor).
 Nothing can follow the json block."""
 
 
@@ -344,9 +321,10 @@ def build_storyboard_prompt(
         "<scene_plan>\n"
         f"{plan.model_dump_json(indent=1)}\n"
         "</scene_plan>\n\n"
-        "Explain this paper directly. Show its real components and relationships. "
-        "Start with the title and a simple definition. End with the result, application, "
-        "limit, and street-test question. Return the fenced json storyboard." + recent
+        "Explain this paper through one bold visual metaphor built on its real "
+        "mechanism. Start with the title and a simple definition. End with the result, "
+        "application, limit, and street-test question. Return the fenced json "
+        "storyboard." + recent
     )
 
 

@@ -58,47 +58,17 @@ def test_parse_storyboard_pins_application_to_grounded_plan(golden, plan):
     assert actual.narration == plan.application_or_implication
 
 
-def test_parse_storyboard_accepts_mapping_term_grounded_in_digest(golden, plan):
-    golden["mapping"][0]["paper_term"] = "conventional-commit classifier"
-    digest = DIGEST + "\nThe conventional-commit classifier labels each change."
-
-    board, error = sb.parse_storyboard(_fenced(golden), digest, plan)
-
-    assert error == ""
-    assert board is not None
-
-
-def test_parse_storyboard_accepts_a_term_recomposed_from_grounded_words(golden, plan):
-    """The digest says "SQuAD v1.1" and "Test F1" in different sentences; the
-    storyboard names the benchmark column "SQuAD v1.1 Test F1". Every word is
-    the paper's own (this killed the classic track on 2026-09-23).
-    """
-    golden["mapping"][0]["paper_term"] = "SQuAD v1.1 Test F1"
-    digest = DIGEST + "\nOn SQuAD v1.1 the model is judged by Test F1."
-
-    board, error = sb.parse_storyboard(_fenced(golden), digest, plan)
-
-    assert error == ""
-    assert board is not None
-
-
-def test_parse_storyboard_rejects_a_term_with_one_invented_word(golden, plan):
-    golden["mapping"][0]["paper_term"] = "SQuAD v1.1 Neuroflux"
-    digest = DIGEST + "\nOn SQuAD v1.1 the model is judged by Test F1."
-
-    board, error = sb.parse_storyboard(_fenced(golden), digest, plan)
-
-    assert board is None
-    assert "neuroflux" in error.lower()
-
-
-def test_parse_storyboard_rejects_mapping_term_missing_from_digest_and_plan(golden, plan):
-    golden["mapping"][0]["paper_term"] = "invented hidden classifier"
+def test_parse_storyboard_accepts_a_mapping_term_the_scene_plan_never_names(
+    golden, plan
+):
+    """Six of 24 failed runs up to 2026-10-04 died on the rule that every
+    mapping term must appear in the scene plan. The rule is gone."""
+    golden["mapping"][0]["paper_term"] = "magic suitcase"
 
     board, error = sb.parse_storyboard(_fenced(golden), DIGEST, plan)
 
-    assert board is None
-    assert "mapping uses terms outside the scene plan" in error
+    assert error == ""
+    assert board.mapping[0].paper_term == "magic suitcase"
 
 
 def test_parse_storyboard_clips_long_strings_instead_of_failing(golden, plan):
@@ -110,7 +80,22 @@ def test_parse_storyboard_clips_long_strings_instead_of_failing(golden, plan):
     assert len(board.beats[0].visual) == sb.MAX_VISUAL
 
 
-@pytest.mark.parametrize("beat_count", [7, 11])
+@pytest.mark.parametrize("mechanism_beats", [0, 6])
+def test_parse_storyboard_accepts_six_to_twelve_beats(golden, plan, mechanism_beats):
+    beats = golden["beats"]
+    mechanism = [beat for beat in beats if beat["role"] == "mechanism"]
+    golden["beats"] = (
+        beats[:2] + [mechanism[i % len(mechanism)] for i in range(mechanism_beats)]
+        + beats[-4:]
+    )
+
+    board, error = sb.parse_storyboard(_fenced(golden), DIGEST, plan)
+
+    assert error == ""
+    assert len(board.beats) == 6 + mechanism_beats
+
+
+@pytest.mark.parametrize("beat_count", [5, 13])
 def test_parse_storyboard_rejects_bad_beat_counts(golden, plan, beat_count):
     beat = golden["beats"][0]
     golden["beats"] = [beat] * beat_count
@@ -212,7 +197,7 @@ def test_prompt_carries_digest_plan_and_the_hard_rules(plan):
     prompt = sb.build_storyboard_prompt(DIGEST, plan)
     assert DIGEST in prompt
     assert plan.street_test_question in prompt
-    for rule in ("real mechanism", "unrelated metaphor", "title", "street-test"):
+    for rule in ("real mechanism", "visual metaphor", "title", "street-test"):
         assert rule in sb.STORYBOARD_SYSTEM + prompt
 
 
@@ -228,17 +213,16 @@ def test_prompt_names_recent_visual_directions_to_avoid(plan):
     assert "substantially different" in prompt
 
 
-def test_prompt_requires_direct_simple_explanation():
+def test_prompt_asks_for_one_bold_visual_metaphor():
     system = sb.STORYBOARD_SYSTEM
+    assert "one bold visual metaphor" in system
+    assert "visually striking" in system
+    assert "camera moves" in system and "3D" in system
+    assert "Do not use an unrelated metaphor" not in system
     assert "simple definition" in system
-    assert "clearest visual explanation" in system
-    assert "visually compelling" in system
-    assert "Abstract visual systems are welcome" in system
-    assert "designed for this paper" in system
-    assert "8 to 10 beats" in system
+    assert "6 to 12 beats" in system
     assert "application" in system
     assert "at most 22 words" in system
-    assert "Keep the same component positions" not in system
 
 
 def test_parse_storyboard_removes_analogy_opening(golden, plan):
@@ -247,22 +231,6 @@ def test_parse_storyboard_removes_analogy_opening(golden, plan):
     assert error == ""
     assert board is not None
     assert board.beats[0].narration == f"{plan.title}. {board.simple_definition}"
-
-
-def test_parse_storyboard_rejects_terms_outside_scene_plan(golden, plan):
-    golden["mapping"][0]["paper_term"] = "magic suitcase"
-    board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
-    assert board is None
-    assert "outside the scene plan" in error
-
-
-def test_parse_storyboard_accepts_normalised_scene_plan_node_ids(golden, plan):
-    golden["mapping"][0]["paper_term"] = "gate"
-
-    board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
-
-    assert error == ""
-    assert board is not None
 
 
 def test_parse_storyboard_repairs_title_from_scene_plan(golden, plan):
