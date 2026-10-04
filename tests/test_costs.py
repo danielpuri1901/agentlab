@@ -4,6 +4,7 @@ import litellm
 import pytest
 
 from agentlab.costs import (
+    BEDROCK_RATE_CARD,
     CLAUDE_TOKENIZER_ADJUSTMENT,
     ModelCallUsage,
     cache_static_system_prompt,
@@ -38,6 +39,33 @@ def test_claude_tokenizer_adjustment_constant_is_exported_but_unapplied():
 def test_unknown_model_raises():
     with pytest.raises(KeyError):
         resolve_price("bedrock/does-not-exist")
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["global.anthropic.claude-opus-5-5", "bedrock/global.anthropic.claude-opus-5-5"],
+)
+def test_opus_5_5_prices_from_the_bedrock_rate_card(monkeypatch, model):
+    """litellm's bundled map has no Opus 5.5 entry, so its calls would go
+    unpriced without the rate card."""
+    for key in BEDROCK_RATE_CARD:
+        monkeypatch.delitem(litellm.model_cost, key, raising=False)
+        monkeypatch.delitem(litellm.model_cost, f"bedrock/{key}", raising=False)
+
+    price = resolve_price(model)
+
+    assert price.input_per_mtok == 4.0
+    assert price.output_per_mtok == 20.0
+    assert price.cache_read_input_per_mtok == 0.20
+    assert price.cache_write_input_per_mtok == 5.0
+    assert price.source == "bedrock-rate-card:global.anthropic.claude-opus-5-5"
+    assert run_cost(
+        model,
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+        cache_read_input_tokens=1_000_000,
+        cache_write_input_tokens=1_000_000,
+    ) == pytest.approx(4.0 + 20.0 + 0.20 + 5.0)
 
 
 def test_run_and_experiment_cost_arithmetic():

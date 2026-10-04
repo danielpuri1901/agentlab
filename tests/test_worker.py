@@ -17,6 +17,7 @@ import pytest
 from moto import mock_aws
 from typer.testing import CliRunner
 
+from agentlab import costs as costs_mod
 from agentlab import notify as notify_mod
 from agentlab import worker as worker_mod
 from agentlab.cli import app
@@ -822,6 +823,53 @@ def test_complete_long_rejects_truncated_output(monkeypatch, finish_reason):
 
     with pytest.raises(ValueError, match="token limit"):
         worker_mod._complete_long("bedrock/story-model", [])
+
+
+@pytest.mark.parametrize(
+    ("model_env", "price_env"),
+    [("STORY_MODEL", "STORY_PRICE_MODEL"), ("SCENE_MODEL", "SCENE_PRICE_MODEL")],
+)
+def test_opus_application_profile_prices_from_its_price_model_env(
+    monkeypatch, model_env, price_env
+):
+    arn = "bedrock/arn:aws:bedrock:eu-west-1:123:application-inference-profile/opus"
+    monkeypatch.setenv(model_env, arn)
+    monkeypatch.setenv(price_env, "global.anthropic.claude-opus-5-5")
+    # Pin the rate-card path even after a litellm release learns this model.
+    monkeypatch.delitem(
+        costs_mod.litellm.model_cost, "global.anthropic.claude-opus-5-5", raising=False
+    )
+    monkeypatch.setattr(
+        worker_mod,
+        "bedrock_converse",
+        lambda model, messages, **kwargs: SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+            usage=SimpleNamespace(
+                prompt_tokens=3_000,
+                completion_tokens=2_000,
+                prompt_tokens_details=SimpleNamespace(
+                    cached_tokens=1_000, cache_creation_tokens=1_000
+                ),
+            ),
+        ),
+    )
+    usage = []
+
+    worker_mod._run_completion(
+        arn,
+        [{"role": "user", "content": "Write the scene."}],
+        max_tokens=100,
+        timeout=7,
+        stage="video",
+        usage_sink=usage,
+    )
+
+    assert usage[0].pricing_model == "global.anthropic.claude-opus-5-5"
+    # 1000 uncached input at 4, 2000 output at 20, 1000 cache reads at 0.20,
+    # 1000 cache writes at 5, all USD per million tokens.
+    assert usage[0].estimated_cost_usd == pytest.approx(
+        (1_000 * 4 + 2_000 * 20 + 1_000 * 0.20 + 1_000 * 5) / 1e6
+    )
 
 
 def test_explain_story_path_ships_and_records_artifacts(

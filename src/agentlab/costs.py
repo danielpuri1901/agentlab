@@ -34,6 +34,22 @@ class ModelPrice(BaseModel):
     source: str
 
 
+BEDROCK_RATE_CARD = {
+    "global.anthropic.claude-opus-5-5": ModelPrice(
+        input_per_mtok=4.0,
+        output_per_mtok=20.0,
+        cache_read_input_per_mtok=0.20,
+        cache_write_input_per_mtok=5.0,
+        source="bedrock-rate-card:global.anthropic.claude-opus-5-5",
+    ),
+}
+"""Bedrock prices for models litellm's bundled map does not know yet.
+
+USD per million tokens, Bedrock global standard tier, read off the Bedrock
+rate card on 2026-10-04. resolve_price uses an entry only when litellm has
+no key for the model, so a later litellm release that adds it wins."""
+
+
 @dataclass(frozen=True)
 class ModelCallUsage:
     stage: str
@@ -68,7 +84,13 @@ def _resolve_litellm_key(model: str) -> str:
 
 
 def resolve_price(model: str) -> ModelPrice:
-    key = _resolve_litellm_key(model)
+    try:
+        key = _resolve_litellm_key(model)
+    except KeyError:
+        price = BEDROCK_RATE_CARD.get(model.removeprefix("bedrock/"))
+        if price is None:
+            raise
+        return price
     entry = litellm.model_cost[key]
     input_per_mtok = entry["input_cost_per_token"] * 1e6
     output_per_mtok = entry["output_cost_per_token"] * 1e6
