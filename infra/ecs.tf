@@ -191,10 +191,10 @@ resource "aws_ecs_task_definition" "explain" {
       # be replaced on every apply, churning a revision and the schedule that
       # points at it. Spelling them out makes the config match what AWS
       # stores.
-      environment            = []
-      portMappings           = []
-      systemControls         = []
-      volumesFrom            = []
+      environment    = []
+      portMappings   = []
+      systemControls = []
+      volumesFrom    = []
       linuxParameters = {
         capabilities = {
           add  = []
