@@ -21,8 +21,10 @@ from agentlab.storyboard import Storyboard
 SCENE_CLASS = "PaperStory"
 BASE_CLASS = "StoryScene"
 BEAT_MARGIN_SECONDS = 0.3
-EDIT_MAX_TOKENS = 8000
-"""Output budget of one edit call, thinking included: an edit is a few lines."""
+EDIT_MAX_TOKENS = 16000
+"""Output budget of one edit call, thinking included. The first live edit
+(2026-10-04, Sonnet 4.6 at high effort) used all of 8000, so a smaller cap
+risks a cut-off reply and a costly whole-file rewrite."""
 
 ALLOWED_IMPORTS = frozenset(
     {
@@ -345,6 +347,9 @@ def _dedup(items: list[str]) -> list[str]:
     return out
 
 
+# The render cost line is from the first live free-mode run (2026-10-04): a
+# scene with about 100 Dot3D and Line3D meshes did not render within 600 s on
+# Fargate; the edit to flat Dot and Line shipped.
 STORY_SCENE_API = """The base class is a ThreeDScene (already written, do not redefine \
 it). It gives you:
 
@@ -367,6 +372,7 @@ Camera and 3D (angles in radians, for example 70 * DEGREES):
 - self.begin_ambient_camera_rotation(rate=0.2) and self.stop_ambient_camera_rotation(): a slow orbit that runs until you stop it.
 - self.add_fixed_in_frame_mobjects(mobject): pin text or an overlay to the screen, so camera moves never tilt or move it. It adds the mobject to the scene at once, so call it just before you animate the mobject in.
 - 3D mobjects: Surface, Sphere, Cube, Prism, Cylinder, Line3D, Arrow3D, Dot3D, and ThreeDAxes without labels.
+- Render cost: the renderer draws every face of every 3D mobject on every frame, and the whole video must render within 10 minutes on 4 CPUs. Use 3D mobjects for a few large hero objects only. Draw lattices, grids, particles, and other repeated small shapes with flat Dot, Line, and Circle.
 The camera starts flat, looking straight at the stage (phi=0, theta=-90 * DEGREES), and stays wherever you leave it.
 
 The base class already sets the dark background, pins each beat's caption to the bottom band, and pads each beat so it lasts at least its narration. You only write beat_1 .. beat_n."""

@@ -310,7 +310,7 @@ def test_edit_scene_code_sends_the_file_and_error_with_a_small_budget():
     )
 
     messages, kwargs = seen[0]
-    assert kwargs == {"max_tokens": 8000}
+    assert kwargs == {"max_tokens": 16000}
     assert messages[0]["content"] == scene_code.SCENE_CODE_SYSTEM
     user = messages[1]["content"]
     assert f"<current_file>\n{SOURCE}\n</current_file>" in user
@@ -346,7 +346,7 @@ def test_fix_rounds_put_the_storyboard_behind_a_cache_checkpoint():
             {"role": "user", "content": prompt},
         ],
         model="bedrock/arn:aws:bedrock:eu-west-1:123:application-inference-profile/x",
-        max_tokens=8000,
+        max_tokens=16000,
     )
 
     stable, checkpoint, changing = request["messages"][0]["content"]
