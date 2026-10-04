@@ -22,7 +22,6 @@ from collections.abc import Callable
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Literal
 
-from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from agentlab.source_text import prepare_source
@@ -463,66 +462,12 @@ def _normalise_source_number(value: str) -> str:
     return collapsed.replace(",", "").replace("percent", "%")
 
 
-def _percentage_table_numbers(source_text: str) -> set[str]:
-    soup = BeautifulSoup(source_text, "html.parser")
-    grounded: set[str] = set()
-    for table in soup.find_all("table"):
-        rows = [
-            [cell.get_text(" ", strip=True) for cell in row.find_all(["td", "th"])]
-            for row in table.find_all("tr")
-        ]
-        rows = [row for row in rows if row]
-        if not rows:
-            continue
-        percentage_columns = {
-            index
-            for index, heading in enumerate(rows[0])
-            if "%" in heading
-            or re.search(r"\bpercent(?:age)?\b", heading, re.IGNORECASE)
-        }
-        if not percentage_columns:
-            figure = table.find_parent("figure")
-            context_root = figure or table
-            previous_paragraph = context_root.find_previous("p")
-            context = (
-                previous_paragraph.get_text(" ", strip=True)
-                if previous_paragraph is not None
-                else ""
-            )
-            headings = " ".join(rows[0])
-            has_percentage_metric = (
-                "%" in context
-                or re.search(r"\bpercent(?:age)?\b", context, re.IGNORECASE)
-            ) and re.search(
-                r"\b(?:accuracy|accuracies|performance|score|scores)\b",
-                context,
-                re.IGNORECASE,
-            )
-            has_other_unit = re.search(
-                r"\b(?:seconds?|milliseconds?|minutes?|hours?|bytes?|tokens?|parameters?|latency|time)\b",
-                headings,
-                re.IGNORECASE,
-            )
-            if has_percentage_metric and not has_other_unit:
-                percentage_columns = set(range(1, max(len(row) for row in rows)))
-        for row in rows[1:]:
-            for index in percentage_columns:
-                if index >= len(row):
-                    continue
-                for value in _SOURCE_NUMBER_RE.findall(row[index]):
-                    normalised = _normalise_source_number(value)
-                    grounded.add(
-                        normalised if normalised.endswith("%") else normalised + "%"
-                    )
-    return grounded
-
-
 def _rounded_forms(value: str) -> set[str]:
     """A grounded decimal rounded to a whole number and to one decimal.
 
-    The unit stays as the source wrote it: "26.4%" gives "26%" and "26.4%",
-    and its unitless twin "26.4" gives "26" and "26.4". A bare "26.4" never
-    grounds "26%", the same rule as for the unrounded number.
+    The unit stays as written: "26.4%" gives "26%" and "26.4%", and "26.4"
+    gives "26" and "26.4". Each source number is already grounded with and
+    without "%", so both forms round.
     """
     match = _DECIMAL_NUMBER_RE.fullmatch(value)
     if not match:
@@ -542,16 +487,18 @@ def _grounded_source_numbers(source_text: str) -> set[str]:
     for value in _SOURCE_NUMBER_RE.findall(source_text):
         normalised = _normalise_source_number(value)
         grounded.add(normalised)
-        # A source that writes "22.9%" also grounds a plan that writes
-        # "22.9": dropping a unit is not inventing a number, and treating it
-        # as one killed four real tracks between 2026-09-21 and 2026-09-23.
+        # The guard catches invented numbers, not units. A source "22.9%"
+        # grounds a plan "22.9" (four killed tracks, 2026-09-21 to 09-23), and
+        # a bare table cell "64.60" grounds "64.60%": papers put the % in the
+        # column header (Cache-to-Cache deep read, 2026-10-04).
         if normalised.endswith("%"):
             grounded.add(normalised[:-1])
+        else:
+            grounded.add(normalised + "%")
     # "v0.1.1" grounds "0.1.1". _SOURCE_NUMBER_RE refuses a number preceded by
     # a letter (so "gpt4" never grounds "4"), which also hides every version
     # string behind its own "v".
     grounded.update(_VERSION_NUMBER_RE.findall(source_text))
-    grounded.update(_percentage_table_numbers(source_text))
     # Rounding is not inventing: the source said "26.4 percentage points" and
     # the plan said "26 percent" in seven of 24 failed runs up to 2026-10-04.
     grounded.update(form for value in list(grounded) for form in _rounded_forms(value))

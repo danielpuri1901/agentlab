@@ -302,25 +302,22 @@ def test_deep_read_accepts_percentage_for_accuracy_benchmark_table():
     assert plan.key_numbers[1].value == "47.95%"
 
 
-def test_deep_read_rejects_percentage_when_source_uses_another_unit():
+def test_deep_read_grounds_a_percentage_against_a_bare_table_cell():
+    """Cache-to-Cache, 2026-10-04: the table cell says "64.60", the column
+    header holds the unit, and the plan says "64.60%". Same number."""
     source = SOURCE_TEXT + (
-        "<table><tr><td>Method</td><td>Duration (seconds)</td></tr>"
-        "<tr><td>Oracle</td><td>62.34</td></tr></table>"
+        "<table><tr><td>Setting</td><td>Accuracy</td></tr>"
+        "<tr><td>Sharer1, Sharer2 to Receiver</td><td>64.60</td></tr></table>"
     )
-    digest = DIGEST_MD + "\n\nPerformance reaches 62.34%."
-    plan_data = _plan_kwargs(
-        key_numbers=[
-            {"value": "12%", "meaning": "Accuracy gain over raw context."},
-            {"value": "62.34%", "meaning": "Performance reported in the table."},
-        ]
+    digest = DIGEST_MD + "\n\nTwo sharers reach 64.60% accuracy."
+
+    returned_digest, _plan = deep_read(
+        "https://arxiv.org/abs/2510.03215",
+        lambda url: source,
+        lambda model, messages: _fenced(VALID_PLAN_DICT, digest=digest),
     )
 
-    with pytest.raises(ValueError, match=r"numbers missing.*62\.34%"):
-        deep_read(
-            "https://arxiv.org/abs/2510.03215",
-            lambda url: source,
-            lambda model, messages: _fenced(plan_data, digest=digest),
-        )
+    assert "64.60%" in returned_digest
 
 
 def test_deep_read_grounds_a_bare_number_against_a_percentage_in_the_source():
@@ -412,7 +409,8 @@ def test_deep_read_grounds_a_number_rounded_to_a_whole_percent():
         ("26.4 points", "26", True),
         ("26.4%", "27%", False),
         ("26.4%", "26.3%", False),
-        ("26.4 points", "26%", False),
+        ("26.4 points", "26%", True),
+        ("26.4 points", "25%", False),
     ],
 )
 def test_deep_read_rounding_grounds_only_the_true_rounded_forms(
