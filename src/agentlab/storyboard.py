@@ -195,7 +195,7 @@ def parse_storyboard(
         return None, f"JSON parse error: {exc}"
     if not isinstance(data, dict):
         return None, "storyboard JSON must be an object"
-    data = json.loads(json.dumps(data, ensure_ascii=False).replace("—", "-"))
+    data = json.loads(json.dumps(data, ensure_ascii=False).replace("\u2014", "-"))
     data = _clip(data)
     try:
         board = Storyboard(**data)

@@ -291,8 +291,8 @@ def test_parse_storyboard_accepts_any_role_order_and_a_result_without_a_key_numb
 
 @pytest.mark.parametrize("escaped", [False, True])
 def test_parse_storyboard_turns_an_em_dash_into_a_hyphen(golden, plan, escaped):
-    golden["beats"][2]["narration"] = "The gate opens — then it checks."
-    golden["visual_focus"] = "A gate—and a path."
+    golden["beats"][2]["narration"] = "The gate opens \u2014 then it checks."
+    golden["visual_focus"] = "A gate\u2014and a path."
 
     board, error = sb.parse_storyboard(
         json.dumps(golden, ensure_ascii=escaped), DIGEST, plan
