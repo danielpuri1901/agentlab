@@ -831,8 +831,10 @@ def test_complete_long_sends_story_effort_through_bedrock_converse(
 ):
     calls = []
 
-    def fake_converse(model, messages, *, max_tokens, timeout, effort=None):
-        calls.append({"max_tokens": max_tokens, "timeout": timeout, "effort": effort})
+    def fake_converse(model, messages, *, max_tokens, timeout, extra_fields=None):
+        calls.append(
+            {"max_tokens": max_tokens, "timeout": timeout, "fields": extra_fields}
+        )
         return SimpleNamespace(
             choices=[
                 SimpleNamespace(
@@ -853,7 +855,61 @@ def test_complete_long_sends_story_effort_through_bedrock_converse(
     )
 
     assert text == "complete"
-    assert calls == [{"max_tokens": 32000, "timeout": 600, "effort": effort}]
+    assert calls == [
+        {
+            "max_tokens": 32000,
+            "timeout": 600,
+            "fields": {"output_config": {"effort": effort}},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("env", "fields"),
+    [
+        ({}, None),
+        (
+            {"DEEP_READ_THINKING": "between_tools"},
+            {"thinking": {"type": "between_tools"}},
+        ),
+    ],
+)
+def test_only_the_deep_read_gets_the_thinking_fields(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch, env, fields
+):
+    _set_daytime(monkeypatch)
+    _set_explain_env(monkeypatch, track="core")
+    _patch_explain_pools(monkeypatch)
+    _patch_explain_render_stages(monkeypatch)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    arn = "bedrock/arn:aws:bedrock:eu-west-1:123:application-inference-profile/x"
+    sent = {}
+
+    def fake_converse(model, messages, *, max_tokens, timeout, extra_fields=None):
+        sent[messages[0]["content"]] = extra_fields
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="[1]"))]
+        )
+
+    deep_read = _make_fake_deep_read()
+
+    def fake_deep_read(url, fetch_text, complete, model=None):
+        complete(arn, [{"role": "system", "content": "deep read"}])
+        return deep_read(url, fetch_text, complete, model)
+
+    def fake_rank(candidates, interests_text, complete, mode="core", model=None, limit=3):
+        complete(arn, [{"role": "system", "content": "pick"}])
+        return candidates[:limit]
+
+    monkeypatch.setattr(worker_mod, "bedrock_converse", fake_converse)
+    monkeypatch.setattr("agentlab.worker.deep_read", fake_deep_read)
+    monkeypatch.setattr("agentlab.worker.rank_papers", fake_rank)
+
+    result = runner.invoke(app, ["worker", "explain"])
+
+    assert result.exit_code == 0, result.output
+    assert sent == {"deep read": fields, "pick": None}
 
 
 @pytest.mark.parametrize(

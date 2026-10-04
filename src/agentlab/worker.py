@@ -436,7 +436,7 @@ def _run_completion(
     stage: str,
     usage_sink: list[ModelCallUsage] | None = None,
     pricing_model: str | None = None,
-    effort: str | None = None,
+    extra_fields: dict | None = None,
 ):
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     import litellm
@@ -449,7 +449,7 @@ def _run_completion(
             messages,
             max_tokens=max_tokens,
             timeout=timeout,
-            effort=effort,
+            extra_fields=extra_fields,
         )
     else:
         request_messages = messages
@@ -483,6 +483,7 @@ def _complete(
     *,
     usage_sink: list[ModelCallUsage] | None = None,
     pricing_model: str | None = None,
+    extra_fields: dict | None = None,
 ) -> str:
     response = _run_completion(
         model,
@@ -492,8 +493,18 @@ def _complete(
         stage="paper",
         usage_sink=usage_sink,
         pricing_model=pricing_model,
+        extra_fields=extra_fields,
     )
     return response.choices[0].message.content
+
+
+def _deep_read_extra_fields() -> dict | None:
+    """Sonnet 5.5 thinks by default, its thinking counts against the deep
+    read's 3000 tokens, and it rejects thinking type "disabled". Terraform
+    sets DEEP_READ_THINKING to "between_tools" to switch it off. Only the
+    Bedrock Converse path sends it."""
+    thinking = os.environ.get("DEEP_READ_THINKING")
+    return {"thinking": {"type": thinking}} if thinking else None
 
 
 def _complete_long(
@@ -521,7 +532,11 @@ def _complete_long(
         stage="video",
         usage_sink=usage_sink,
         pricing_model=pricing_model,
-        effort=os.environ.get("STORY_EFFORT", DEFAULT_STORY_EFFORT),
+        extra_fields={
+            "output_config": {
+                "effort": os.environ.get("STORY_EFFORT", DEFAULT_STORY_EFFORT)
+            }
+        },
     )
     choice = response.choices[0]
     if getattr(choice, "finish_reason", None) in {"length", "max_tokens"}:
@@ -787,7 +802,12 @@ def _run_explain_track(
         mark_seen(table, identity, url, title, candidate.get("source", track), track)
         partial["identity"] = identity
 
-    digest, plan = deep_read(url, _fetch_text, complete, model=deep_read_model)
+    digest, plan = deep_read(
+        url,
+        _fetch_text,
+        bind(complete, extra_fields=_deep_read_extra_fields()),
+        model=deep_read_model,
+    )
     partial["claim"] = plan.one_line_claim
 
     key = _generate_video_key(track)

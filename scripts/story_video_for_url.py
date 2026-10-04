@@ -9,6 +9,7 @@ import json
 import os
 import sys
 from collections.abc import Sequence
+from functools import partial
 from pathlib import Path
 
 import boto3
@@ -19,12 +20,22 @@ from agentlab.video_render import verify_voice
 
 
 def run_story_video_for_url(url: str, out_dir: str) -> int:
-    from agentlab.worker import _complete, _complete_long, _fetch_text
+    from agentlab.worker import (
+        _complete,
+        _complete_long,
+        _deep_read_extra_fields,
+        _fetch_text,
+    )
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     model = os.environ.get("DEEP_READ_MODEL", DEFAULT_DEEP_READ_MODEL)
-    digest, plan = deep_read(url, _fetch_text, _complete, model=model)
+    digest, plan = deep_read(
+        url,
+        _fetch_text,
+        partial(_complete, extra_fields=_deep_read_extra_fields()),
+        model=model,
+    )
     (out / "digest.md").write_text(digest, encoding="utf-8")
     (out / "scene_plan.json").write_text(
         plan.model_dump_json(indent=1), encoding="utf-8"

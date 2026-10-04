@@ -42,6 +42,13 @@ BEDROCK_RATE_CARD = {
         cache_write_input_per_mtok=5.0,
         source="bedrock-rate-card:global.anthropic.claude-opus-5-5",
     ),
+    "global.anthropic.claude-sonnet-5-5": ModelPrice(
+        input_per_mtok=2.0,
+        output_per_mtok=10.0,
+        cache_read_input_per_mtok=0.20,
+        cache_write_input_per_mtok=2.50,
+        source="bedrock-rate-card:global.anthropic.claude-sonnet-5-5",
+    ),
 }
 """Bedrock prices for models litellm's bundled map does not know yet.
 

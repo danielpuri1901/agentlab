@@ -31,18 +31,18 @@ def test_build_converse_request_places_cache_points_after_stable_prefixes():
     assert "additionalModelRequestFields" not in request
 
 
-def test_build_converse_request_asks_for_the_output_effort():
+def test_build_converse_request_sends_extra_fields_to_the_model():
+    fields = {"thinking": {"type": "between_tools"}}
+
     request = build_converse_request(
-        [{"role": "user", "content": "Write the scene."}],
+        [{"role": "user", "content": "Read the paper."}],
         model="bedrock/arn:aws:bedrock:eu-west-1:123:application-inference-profile/x",
-        max_tokens=32000,
-        effort="high",
+        max_tokens=3000,
+        extra_fields=fields,
     )
 
-    assert request["additionalModelRequestFields"] == {
-        "output_config": {"effort": "high"}
-    }
-    assert request["inferenceConfig"] == {"maxTokens": 32000}
+    assert request["additionalModelRequestFields"] == fields
+    assert request["inferenceConfig"] == {"maxTokens": 3000}
 
 
 def test_response_from_converse_leaves_thinking_out_of_the_text():
@@ -106,8 +106,8 @@ def test_response_from_converse_preserves_cache_usage():
 def test_worker_uses_bedrock_converse_for_application_profile(monkeypatch):
     calls = []
 
-    def fake_converse(model, messages, *, max_tokens, timeout, effort=None):
-        calls.append((model, messages, max_tokens, timeout, effort))
+    def fake_converse(model, messages, *, max_tokens, timeout, extra_fields=None):
+        calls.append((model, messages, max_tokens, timeout, extra_fields))
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
             usage=SimpleNamespace(
@@ -130,10 +130,10 @@ def test_worker_uses_bedrock_converse_for_application_profile(monkeypatch):
         stage="video",
         usage_sink=usage,
         pricing_model="anthropic.claude-sonnet-4-6",
-        effort="high",
+        extra_fields={"output_config": {"effort": "high"}},
     )
 
     assert len(calls) == 1
-    assert calls[0][2:] == (100, 7, "high")
+    assert calls[0][2:] == (100, 7, {"output_config": {"effort": "high"}})
     assert usage[0].cache_read_input_tokens == 5
     assert usage[0].cache_write_input_tokens == 3

@@ -52,14 +52,18 @@ def _content_blocks(content, *, cache_stable_prefix: bool = False) -> list[dict]
 
 
 def build_converse_request(
-    messages: list[dict], *, model: str, max_tokens: int, effort: str | None = None
+    messages: list[dict],
+    *,
+    model: str,
+    max_tokens: int,
+    extra_fields: dict | None = None,
 ) -> dict:
     """Map chat messages to one Converse request.
 
-    `effort`, when set, asks the model for that output effort through
-    additionalModelRequestFields (Bedrock accepted the field live on
-    2026-10-04). Thinking then comes back as reasoningContent blocks, which
-    response_from_converse leaves out of the text.
+    `extra_fields`, when set, goes to the model as additionalModelRequestFields:
+    the story path sends {"output_config": {"effort": ...}} and the deep read
+    can send {"thinking": {"type": "between_tools"}}. Thinking comes back as
+    reasoningContent blocks, which response_from_converse leaves out of the text.
     """
     system = []
     converse_messages = []
@@ -89,8 +93,8 @@ def build_converse_request(
         "messages": converse_messages,
         "inferenceConfig": {"maxTokens": max_tokens},
     }
-    if effort:
-        request["additionalModelRequestFields"] = {"output_config": {"effort": effort}}
+    if extra_fields:
+        request["additionalModelRequestFields"] = extra_fields
     return request
 
 
@@ -120,7 +124,7 @@ def converse(
     *,
     max_tokens: int,
     timeout: int,
-    effort: str | None = None,
+    extra_fields: dict | None = None,
 ):
     import boto3
     from botocore.config import Config
@@ -134,7 +138,7 @@ def converse(
     )
     response = client.converse(
         **build_converse_request(
-            messages, model=model, max_tokens=max_tokens, effort=effort
+            messages, model=model, max_tokens=max_tokens, extra_fields=extra_fields
         )
     )
     return response_from_converse(response)
