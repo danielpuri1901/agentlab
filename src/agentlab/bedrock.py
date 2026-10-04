@@ -5,7 +5,10 @@ import re
 from types import SimpleNamespace
 from urllib.parse import unquote_to_bytes
 
-_FIX_ROUND = "\n\nThis is a fix round."
+FIX_ROUND = "\n\nThis is a fix round."
+"""scene_code starts every fix round with this phrase. The first user message
+gets its prompt-cache checkpoint right before it, so the storyboard part is
+read from cache on every round."""
 
 
 def _model_id(model: str) -> str:
@@ -14,13 +17,13 @@ def _model_id(model: str) -> str:
 
 def _text_blocks(text: str, *, cache_stable_prefix: bool = False) -> list[dict]:
     """Split scene repair prompts so changing feedback stays after the cache."""
-    if not cache_stable_prefix or _FIX_ROUND not in text:
+    if not cache_stable_prefix or FIX_ROUND not in text:
         return [{"text": text}]
-    stable, changing = text.split(_FIX_ROUND, 1)
+    stable, changing = text.split(FIX_ROUND, 1)
     return [
         {"text": stable},
         {"cachePoint": {"type": "default"}},
-        {"text": _FIX_ROUND.lstrip("\n") + changing},
+        {"text": FIX_ROUND.lstrip("\n") + changing},
     ]
 
 

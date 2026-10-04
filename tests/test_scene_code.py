@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from agentlab import scene_code, story_scene
+from agentlab.bedrock import build_converse_request
 from agentlab.storyboard import Storyboard
 
 GOLDEN_SCENE = (Path(__file__).parent / "fixtures" / "paper_story_golden.py").read_text(
@@ -248,6 +249,123 @@ def test_prompt_keeps_only_hard_technical_facts():
         "small intentional colour palette",
     ):
         assert old_rule not in system + api
+
+
+SOURCE = "def beat_1(self):\n    self.hold(1)\n\ndef beat_2(self):\n    self.hold(1)"
+
+
+def _block(search: str, replace: str) -> str:
+    return f"<<<<<<< SEARCH\n{search}=======\n{replace}>>>>>>> REPLACE\n"
+
+
+def test_apply_edits_replaces_each_block_once_in_order():
+    """Blocks apply one after another, so the second can match the first's
+    output. Prose and fences around the blocks are ignored."""
+    reply = (
+        "Two fixes.\n```python\n"
+        + _block("def beat_1(self):\n    self.hold(1)\n", "def beat_1(self):\n    self.hold(2)\n")
+        + "```\n```python\n"
+        + _block("    self.hold(2)\n", "    self.hold(3)\n")
+        + "```"
+    )
+
+    assert scene_code.apply_edits(SOURCE, reply) == (
+        "def beat_1(self):\n    self.hold(3)\n\ndef beat_2(self):\n    self.hold(1)\n"
+    )
+
+
+def test_apply_edits_can_delete_lines():
+    reply = _block("\ndef beat_2(self):\n    self.hold(1)\n", "")
+
+    assert scene_code.apply_edits(SOURCE, reply) == "def beat_1(self):\n    self.hold(1)\n"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        _block("    self.hold(5)\n", "    self.hold(6)\n"),
+        _block("    self.hold(1)\n", "    self.hold(6)\n"),
+        _block("def beat_1(self):\n", "def beat_1(self):\n")
+        + _block("    self.hold(9)\n", "    self.hold(6)\n"),
+        _block("", "    self.hold(6)\n"),
+        "```python\n" + SOURCE + "\n```",
+        "",
+    ],
+    ids=["missing", "ambiguous", "second-missing", "empty-search", "whole-file", "empty"],
+)
+def test_apply_edits_returns_none_unless_every_block_matches_exactly_once(reply):
+    assert scene_code.apply_edits(SOURCE, reply) is None
+
+
+def test_edit_scene_code_sends_the_file_and_error_with_a_small_budget():
+    board = Storyboard(**GOLDEN_BOARD)
+    seen = []
+
+    def complete(model, messages, **kwargs):
+        seen.append((messages, kwargs))
+        return _block("def beat_2(self):\n    self.hold(1)\n", "def beat_2(self):\n    self.hold(2)\n")
+
+    edited = scene_code.edit_scene_code(
+        board, [6.0] * BEATS, SOURCE, "NameError: x", complete, model="m"
+    )
+
+    messages, kwargs = seen[0]
+    assert kwargs == {"max_tokens": 8000}
+    assert messages[0]["content"] == scene_code.SCENE_CODE_SYSTEM
+    user = messages[1]["content"]
+    assert f"<current_file>\n{SOURCE}\n</current_file>" in user
+    assert "<what_went_wrong>\nNameError: x\n</what_went_wrong>" in user
+    assert user.endswith(scene_code.EDIT_FORMAT)
+    assert edited == (
+        "def beat_1(self):\n    self.hold(1)\n\ndef beat_2(self):\n    self.hold(2)\n"
+    )
+
+
+def test_edit_scene_code_returns_none_when_the_edits_do_not_apply():
+    board = Storyboard(**GOLDEN_BOARD)
+
+    edited = scene_code.edit_scene_code(
+        board,
+        [6.0] * BEATS,
+        SOURCE,
+        "NameError: x",
+        lambda model, messages, **kwargs: _block("    no such line\n", "    x = 1\n"),
+        model="m",
+    )
+
+    assert edited is None
+
+
+def test_fix_rounds_put_the_storyboard_behind_a_cache_checkpoint():
+    board = Storyboard(**GOLDEN_BOARD)
+    prompt = scene_code.build_edit_prompt(board, [6.0] * BEATS, "FILE", "NameError: x")
+
+    request = build_converse_request(
+        [
+            {"role": "system", "content": scene_code.SCENE_CODE_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+        model="bedrock/arn:aws:bedrock:eu-west-1:123:application-inference-profile/x",
+        max_tokens=8000,
+    )
+
+    stable, checkpoint, changing = request["messages"][0]["content"]
+    assert "<storyboard_json>" in stable["text"] and "FILE" not in stable["text"]
+    assert checkpoint == {"cachePoint": {"type": "default"}}
+    assert changing["text"].startswith("This is a fix round.")
+    assert "FILE" in changing["text"]
+
+
+def test_only_the_user_prompt_asks_for_the_whole_file():
+    """The system prompt is shared by whole-file calls and edit calls, so the
+    answer format lives in each user prompt."""
+    board = Storyboard(**GOLDEN_BOARD)
+    prompt = scene_code.build_scene_code_prompt(board, [6.0] * BEATS, None, None)
+
+    assert "whole file" not in scene_code.SCENE_CODE_SYSTEM
+    assert prompt.endswith(
+        "exactly one fenced python block with the whole file and nothing outside it."
+    )
 
 
 def test_write_scene_code_after_a_coder_error_sends_the_error_without_a_file():

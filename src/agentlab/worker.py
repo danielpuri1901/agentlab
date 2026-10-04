@@ -514,11 +514,13 @@ def _complete_long(
     usage_sink: list[ModelCallUsage] | None = None,
     pricing_model: str | None = None,
     timeout: int = MODEL_CALL_TIMEOUT_SECONDS,
+    max_tokens: int = LONG_COMPLETION_MAX_TOKENS,
 ) -> str:
-    """The story path's model calls: storyboards and complete scene files.
+    """The story path's model calls: storyboards, scene files, and scene edits.
 
     Opus 5.5 always thinks, and thinking counts against the output budget, so
-    this completion allows 32000 output tokens. STORY_EFFORT (default "high")
+    this completion allows 32000 output tokens unless the caller asks for less
+    (a scene edit asks for 8000). STORY_EFFORT (default "high")
     sets the output effort; only the Bedrock Converse path, which application
     inference profile ARNs take, sends it. The story path passes the timeout
     from the video's remaining budget. The lazy litellm import avoids the
@@ -527,7 +529,7 @@ def _complete_long(
     response = _run_completion(
         model,
         messages,
-        max_tokens=LONG_COMPLETION_MAX_TOKENS,
+        max_tokens=max_tokens,
         timeout=timeout,
         stage="video",
         usage_sink=usage_sink,

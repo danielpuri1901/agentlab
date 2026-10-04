@@ -848,19 +848,22 @@ def test_complete_long_sends_story_effort_through_bedrock_converse(
     for name, value in env.items():
         monkeypatch.setenv(name, value)
 
-    text = worker_mod._complete_long(
-        "bedrock/arn:aws:bedrock:eu-west-1:123:application-inference-profile/opus",
-        [{"role": "user", "content": "Write the scene."}],
-        timeout=600,
-    )
+    arn = "bedrock/arn:aws:bedrock:eu-west-1:123:application-inference-profile/opus"
+    messages = [{"role": "user", "content": "Write the scene."}]
 
-    assert text == "complete"
+    assert worker_mod._complete_long(arn, messages, timeout=600) == "complete"
+    assert worker_mod._complete_long(arn, messages, timeout=60, max_tokens=8000)
     assert calls == [
         {
             "max_tokens": 32000,
             "timeout": 600,
             "fields": {"output_config": {"effort": effort}},
-        }
+        },
+        {
+            "max_tokens": 8000,
+            "timeout": 60,
+            "fields": {"output_config": {"effort": effort}},
+        },
     ]
 
 

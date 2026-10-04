@@ -15,11 +15,14 @@ import re
 from collections.abc import Callable
 from decimal import ROUND_DOWN, Decimal
 
+from agentlab.bedrock import FIX_ROUND
 from agentlab.storyboard import Storyboard
 
 SCENE_CLASS = "PaperStory"
 BASE_CLASS = "StoryScene"
 BEAT_MARGIN_SECONDS = 0.3
+EDIT_MAX_TOKENS = 8000
+"""Output budget of one edit call, thinking included: an edit is a few lines."""
 
 ALLOWED_IMPORTS = frozenset(
     {
@@ -398,18 +401,23 @@ important content above it.
 the rest with a still frame.
 - The render must finish within 10 minutes at 1280x720 and 30 fps, so keep 3D meshes \
 coarse (for example resolution=(16, 16)) and updaters light.
-- Keep the file under 12000 tokens.
+- Keep the file under 12000 tokens."""
 
-Answer with exactly one fenced ```python block containing the whole file and nothing \
-else outside it."""
+EDIT_FORMAT = """Fix the current file with the smallest edits that remove this failure. \
+Answer only with search/replace blocks in this exact format, as many as you need:
+
+<<<<<<< SEARCH
+exact lines copied from the current file
+=======
+the lines that replace them
+>>>>>>> REPLACE
+
+Each SEARCH text must match the current file exactly, indentation included, and occur \
+exactly once in it. Do not send the whole file."""
 
 
-def build_scene_code_prompt(
-    storyboard: Storyboard,
-    durations: list[float],
-    feedback: str | None,
-    previous_source: str | None,
-) -> str:
+def _storyboard_prompt(storyboard: Storyboard, durations: list[float]) -> str:
+    """The part of every scene prompt that stays the same across fix rounds."""
     _validate_durations(storyboard, durations)
     beat_lines = []
     for i, (beat, seconds) in enumerate(
@@ -426,7 +434,7 @@ def build_scene_code_prompt(
             f"most {budget} s.\n  Narration: {beat.narration}\n  Visual: {beat.visual}{labels}"
         )
     storyboard_json = storyboard.model_dump_json(indent=2)
-    prompt = (
+    return (
         "<storyboard_json>\n"
         f"{storyboard_json}\n"
         "</storyboard_json>\n\n"
@@ -439,13 +447,59 @@ def build_scene_code_prompt(
         + "\n\n"
         + STORY_SCENE_API
     )
+
+
+def build_scene_code_prompt(
+    storyboard: Storyboard,
+    durations: list[float],
+    feedback: str | None,
+    previous_source: str | None,
+) -> str:
+    prompt = _storyboard_prompt(storyboard, durations)
     if feedback:
-        prompt += "\n\nThe previous attempt failed. Return the full corrected file.\n\n"
+        prompt += f"{FIX_ROUND} The previous attempt failed.\n\n"
         if previous_source:
             prompt += f"<previous_file>\n{previous_source}\n</previous_file>\n\n"
         prompt += f"<what_went_wrong>\n{feedback}\n</what_went_wrong>"
-    prompt += "\n\nWrite the complete file now, in one fenced python block."
+    prompt += (
+        "\n\nWrite the complete file now: exactly one fenced python block with the "
+        "whole file and nothing outside it."
+    )
     return prompt
+
+
+def build_edit_prompt(
+    storyboard: Storyboard, durations: list[float], source: str, feedback: str
+) -> str:
+    return (
+        _storyboard_prompt(storyboard, durations)
+        + f"{FIX_ROUND} The current file failed.\n\n"
+        + f"<current_file>\n{source}\n</current_file>\n\n"
+        + f"<what_went_wrong>\n{feedback}\n</what_went_wrong>\n\n"
+        + EDIT_FORMAT
+    )
+
+
+_EDIT_BLOCK_RE = re.compile(
+    r"^<<<<<<< SEARCH[ \t]*\n(.*?)^=======[ \t]*\n(.*?)^>>>>>>> REPLACE[ \t]*$",
+    re.DOTALL | re.MULTILINE,
+)
+
+
+def apply_edits(source: str, reply: str) -> str | None:
+    """Apply the reply's search/replace blocks in order with plain string
+    replacement. None when the reply has no block or any SEARCH text does
+    not occur exactly once at that point; the caller then asks for a whole
+    new file instead."""
+    blocks = _EDIT_BLOCK_RE.findall(reply or "")
+    if not blocks:
+        return None
+    text = source.rstrip("\n") + "\n"
+    for search, replace in blocks:
+        if text.count(search) != 1:
+            return None
+        text = text.replace(search, replace, 1)
+    return text
 
 
 def _validate_durations(storyboard: Storyboard, durations: list[float]) -> None:
@@ -501,3 +555,23 @@ def write_scene_code(
         },
     ]
     return extract_python_block(complete(model, messages))
+
+
+def edit_scene_code(
+    storyboard: Storyboard,
+    durations: list[float],
+    source: str,
+    feedback: str,
+    complete: Callable[..., str],
+    model: str,
+) -> str | None:
+    """Ask for the smallest fix to a failed file. None when the edits do not
+    apply exactly."""
+    messages = [
+        {"role": "system", "content": SCENE_CODE_SYSTEM},
+        {
+            "role": "user",
+            "content": build_edit_prompt(storyboard, durations, source, feedback),
+        },
+    ]
+    return apply_edits(source, complete(model, messages, max_tokens=EDIT_MAX_TOKENS))

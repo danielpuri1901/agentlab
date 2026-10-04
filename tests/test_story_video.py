@@ -22,6 +22,7 @@ PLAN = ScenePlan(
     **json.loads((FIXTURES / "sample_plan.json").read_text(encoding="utf-8"))
 )
 GOLDEN_SCENE = (FIXTURES / "paper_story_golden.py").read_text(encoding="utf-8")
+EDITED_SCENE = GOLDEN_SCENE + "\n# edited\n"
 DIGEST = "# Digest\n0% and 44% on 50 items.\n## Limits\nNone."
 N = len(BOARD.beats)
 
@@ -54,6 +55,8 @@ def seams(monkeypatch):
         "timings": [],
         "coder": [],
         "previous_sources": [],
+        "edits": [],
+        "edited": [],
     }
 
     monkeypatch.setattr(
@@ -89,6 +92,15 @@ def seams(monkeypatch):
         return result
 
     monkeypatch.setattr(story_video, "write_scene_code", fake_coder)
+
+    def fake_edit(storyboard, durations, source, feedback, complete, model):
+        state["edits"].append((source, feedback))
+        result = state["edited"].pop(0) if state["edited"] else EDITED_SCENE
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(story_video, "edit_scene_code", fake_edit)
 
     def fake_render(
         scene_file,
@@ -169,26 +181,35 @@ def test_first_successful_render_ships_without_a_judge(seams, tmp_path):
     assert "class PaperStory" in result.scene_source
     assert result.visual_direction.startswith("A crowded house")
     assert result.timing == _timing()
-    assert [record["status"] for record in result.attempt_records] == ["shipped"]
+    assert seams["edits"] == []
+    assert _modes_and_statuses(result) == [("generate", "shipped")]
     fields = {field.name for field in dataclasses.fields(result)}
     assert not fields & {"judge_score", "judgement", "passed"}
 
 
-def test_guard_finding_goes_back_to_the_coder(seams, tmp_path):
-    seams["codes"] = ["import os\n" + GOLDEN_SCENE]
+def _modes_and_statuses(result):
+    return [(record["mode"], record["status"]) for record in result.attempt_records]
+
+
+def test_guard_finding_is_fixed_with_an_edit(seams, tmp_path):
+    first = "import os\n" + GOLDEN_SCENE
+    seams["codes"] = [first]
 
     result = _compose(tmp_path)
 
     assert result.attempts == 2
-    assert "import not allowed: os" in seams["coder"][1]
+    assert seams["coder"] == [None]
+    assert seams["edits"][0][0] == first
+    assert "import not allowed: os" in seams["edits"][0][1]
+    assert result.scene_source == EDITED_SCENE
     assert len(seams["renders"]) == 1
-    assert [record["status"] for record in result.attempt_records] == [
-        "guard_rejected",
-        "shipped",
+    assert _modes_and_statuses(result) == [
+        ("generate", "guard_rejected"),
+        ("edit", "shipped"),
     ]
 
 
-def test_render_traceback_goes_back_to_the_coder_with_the_file(
+def test_render_traceback_goes_to_an_edit_of_the_current_file(
     seams, tmp_path, caplog
 ):
     first = GOLDEN_SCENE + "\n# first attempt\n"
@@ -199,33 +220,79 @@ def test_render_traceback_goes_back_to_the_coder_with_the_file(
         result = _compose(tmp_path)
 
     assert result.attempts == 2
-    assert seams["coder"][1] == (
+    traceback = (
         "Manim failed with this traceback:\n"
         "Traceback (most recent call last):\n  File paper_story.py\nNameError: x"
     )
-    assert seams["previous_sources"][1] == first
+    assert seams["edits"] == [(first, traceback)]
+    assert seams["coder"] == [None]
     assert "NameError: x" in caplog.text
-    assert result.attempt_records[0]["status"] == "render_error"
+    assert _modes_and_statuses(result) == [
+        ("generate", "render_error"),
+        ("edit", "shipped"),
+    ]
 
 
-def test_render_timeout_goes_back_to_the_coder(seams, tmp_path):
+def test_render_timeout_goes_to_an_edit(seams, tmp_path):
     seams["render_errors"] = [subprocess.TimeoutExpired(["manim"], 600)]
 
     result = _compose(tmp_path)
 
     assert result.attempts == 2
-    assert "did not finish within 600 s" in seams["coder"][1]
+    assert "did not finish within 600 s" in seams["edits"][0][1]
     assert result.attempt_records[0]["status"] == "render_timeout"
 
 
-def test_coder_error_goes_back_to_the_coder(seams, tmp_path):
+def test_edits_that_do_not_apply_fall_back_to_a_whole_new_file(seams, tmp_path):
+    first = GOLDEN_SCENE + "\n# first attempt\n"
+    seams["codes"] = [first, GOLDEN_SCENE]
+    seams["render_errors"] = [_render_error()]
+    seams["edited"] = [None]
+
+    result = _compose(tmp_path)
+
+    assert result.attempts == 2
+    assert seams["coder"][1].startswith("Manim failed with this traceback:")
+    assert seams["previous_sources"] == [None, first]
+    assert result.scene_source == GOLDEN_SCENE
+    assert _modes_and_statuses(result) == [
+        ("generate", "render_error"),
+        ("rewrite", "shipped"),
+    ]
+
+
+def test_coder_error_before_any_file_writes_the_file_again(seams, tmp_path):
     seams["codes"] = [RuntimeError("model output hit the token limit")]
 
     result = _compose(tmp_path)
 
     assert result.attempts == 2
-    assert "RuntimeError: model output hit the token limit" in seams["coder"][1]
-    assert seams["previous_sources"][1] is None
+    assert seams["coder"][1] == (
+        "The previous scene coder call failed: "
+        "RuntimeError: model output hit the token limit"
+    )
+    assert seams["previous_sources"] == [None, None]
+    assert seams["edits"] == []
+    assert _modes_and_statuses(result) == [
+        ("generate", "coder_error"),
+        ("generate", "shipped"),
+    ]
+
+
+def test_coder_error_during_an_edit_keeps_fixing_the_render_error(seams, tmp_path):
+    seams["render_errors"] = [_render_error()]
+    seams["edited"] = [RuntimeError("throttled"), EDITED_SCENE]
+
+    result = _compose(tmp_path)
+
+    assert result.attempts == 3
+    assert seams["edits"][0] == seams["edits"][1]
+    assert seams["edits"][1][1].startswith("Manim failed with this traceback:")
+    assert _modes_and_statuses(result) == [
+        ("generate", "render_error"),
+        ("edit", "coder_error"),
+        ("edit", "shipped"),
+    ]
 
 
 def test_overrun_ships_and_pads_the_audio_to_the_beat(seams, tmp_path):
@@ -253,24 +320,26 @@ def test_layout_warnings_ship_with_the_timing(seams, tmp_path):
     assert result.timing["layout_warnings"] == timing["layout_warnings"]
 
 
-def test_max_attempts_is_capped_at_three(seams, tmp_path):
-    seams["render_errors"] = [_render_error()] * 5
+def test_one_file_and_five_fix_rounds_at_most(seams, tmp_path):
+    seams["render_errors"] = [_render_error()] * 7
 
     with pytest.raises(StoryFailed) as exc:
         _compose(tmp_path, max_attempts=99)
 
-    assert "no renderable scene in 3 attempts" in str(exc.value)
-    assert len(seams["coder"]) == 3
+    assert "no renderable scene in 6 attempts" in str(exc.value)
+    assert seams["coder"] == [None]
+    assert len(seams["edits"]) == 5
 
 
-def test_three_failures_raise_story_failed_with_each_reason(seams, tmp_path):
+def test_story_failed_names_each_failure(seams, tmp_path):
     seams["codes"] = [RuntimeError("throttled"), "import os\n" + GOLDEN_SCENE]
     seams["render_errors"] = [_render_error()]
 
     with pytest.raises(StoryFailed) as exc:
-        _compose(tmp_path)
+        _compose(tmp_path, max_attempts=3)
 
     message = str(exc.value)
+    assert "no renderable scene in 3 attempts" in message
     assert "attempt 1: coder error" in message
     assert "attempt 2: guard: import not allowed: os" in message
     assert "attempt 3: render error" in message
@@ -349,7 +418,7 @@ def _mismatch_overrun(timing):
         "overrun",
     ],
 )
-def test_invalid_timing_goes_back_to_the_coder(seams, tmp_path, mutate):
+def test_invalid_timing_goes_to_an_edit(seams, tmp_path, mutate):
     invalid = copy.deepcopy(_timing())
     mutate(invalid)
     seams["timings"] = [invalid, _timing()]
@@ -357,11 +426,11 @@ def test_invalid_timing_goes_back_to_the_coder(seams, tmp_path, mutate):
     result = _compose(tmp_path)
 
     assert result.attempts == 2
-    assert "timing" in seams["coder"][1].lower()
+    assert "timing" in seams["edits"][0][1].lower()
     assert result.attempt_records[0]["status"] == "invalid_timing"
 
 
-def test_unreadable_timing_goes_back_to_the_coder(seams, monkeypatch, tmp_path):
+def test_unreadable_timing_goes_to_an_edit(seams, monkeypatch, tmp_path):
     fake_render = story_video.render_scene_video
     lose_timing = [True]
 
@@ -376,7 +445,7 @@ def test_unreadable_timing_goes_back_to_the_coder(seams, monkeypatch, tmp_path):
     result = _compose(tmp_path)
 
     assert result.attempts == 2
-    assert "timing output could not be read" in seams["coder"][1]
+    assert "timing output could not be read" in seams["edits"][0][1]
     assert result.attempt_records[0]["status"] == "invalid_timing"
 
 
@@ -418,8 +487,8 @@ def test_deadline_bound_completion_caps_each_model_call(monkeypatch, deadline, t
         deadline_seconds=deadline,
     )
 
-    assert bounded("model", []) == "ok"
-    assert calls == [{"timeout": timeout}]
+    assert bounded("model", [], max_tokens=8000) == "ok"
+    assert calls == [{"timeout": timeout, "max_tokens": 8000}]
 
 
 def test_storyboard_invalid_becomes_story_failed(seams, monkeypatch, tmp_path):

@@ -4,11 +4,14 @@ Every external step is a module-level name so tests and the worker can
 replace the slow or external boundary without replacing the compose loop.
 Failures become StoryFailed because the worker owns the fallback.
 
-There is no judge. The first attempt that passes the code guard, renders,
-and writes structurally valid timing ships. Only those deterministic
-failures cost another attempt, and the coder gets the exact error back.
-A beat that runs longer than its narration is not a failure: concat_audio
-pads each narration clip to its beat's length.
+There is no judge. The first file that passes the code guard, renders, and
+writes structurally valid timing ships. Only those deterministic failures
+cost another attempt. The scene is written whole once. After a failure the
+coder gets the current file and the exact error and answers with
+search/replace edits, so a fix costs a few lines instead of a new file. A
+whole new file is written only when there is no file yet or the edits do
+not apply exactly. A beat that runs longer than its narration is not a
+failure: concat_audio pads each narration clip to its beat's length.
 """
 
 import json
@@ -21,7 +24,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentlab import story_scene
-from agentlab.scene_code import check_scene_code, visual_direction, write_scene_code
+from agentlab.scene_code import (
+    check_scene_code,
+    edit_scene_code,
+    visual_direction,
+    write_scene_code,
+)
 from agentlab.scene_plan import ScenePlan
 from agentlab.story_scene import SCENE_CLASS, TIMING_ENV, beat_lengths
 from agentlab.storyboard import Storyboard, StoryboardInvalid, design_storyboard
@@ -38,7 +46,8 @@ RENDER_QUALITY = "m"
 RENDER_TIMEOUT = 600
 MODEL_CALL_TIMEOUT = 600
 VIDEO_DEADLINE_SECONDS = 2400
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = 6
+"""The first file plus up to five fix rounds."""
 STDERR_TAIL_LINES = 40
 TIMING_TOLERANCE = 0.001
 
@@ -100,9 +109,9 @@ def _remaining_timeout(started: float, deadline_seconds: int, limit: int) -> int
 
 
 def _deadline_bound_completion(complete, started: float, deadline_seconds: int):
-    def bounded(model: str, messages: list[dict]) -> str:
+    def bounded(model: str, messages: list[dict], **kwargs) -> str:
         timeout = _remaining_timeout(started, deadline_seconds, MODEL_CALL_TIMEOUT)
-        return complete(model, messages, timeout=timeout)
+        return complete(model, messages, timeout=timeout, **kwargs)
 
     return bounded
 
@@ -266,45 +275,62 @@ def _compose(
     failures: list[str] = []
     attempt_records: list[dict] = []
     feedback: str | None = None
-    previous: str | None = None
+    source: str | None = None
     attempt_limit = min(max_attempts, MAX_ATTEMPTS)
     for attempt in range(1, attempt_limit + 1):
         try:
             _remaining_timeout(started, deadline_seconds, 1)
         except _DeadlineExceeded as exc:
             raise StoryFailed(str(exc)) from exc
+        mode = "generate" if source is None else "edit"
         try:
-            source = write_scene_code(
-                storyboard,
-                durations,
-                bounded_complete,
-                model=scene_model,
-                feedback=feedback,
-                previous_source=previous,
-            )
-        except Exception as exc:  # noqa: BLE001 - the next attempt gets the error
+            new_source = None
+            if source is not None:
+                new_source = edit_scene_code(
+                    storyboard,
+                    durations,
+                    source,
+                    feedback,
+                    bounded_complete,
+                    model=scene_model,
+                )
+            if new_source is None:
+                if source is not None:
+                    mode = "rewrite"
+                new_source = write_scene_code(
+                    storyboard,
+                    durations,
+                    bounded_complete,
+                    model=scene_model,
+                    feedback=feedback,
+                    previous_source=source,
+                )
+        except Exception as exc:  # noqa: BLE001 - the next round retries
             detail = _failure_detail(exc)
             logger.warning("scene coder failed on attempt %d: %s", attempt, detail)
             failures.append(f"attempt {attempt}: coder error")
             attempt_records.append(
-                {"attempt": attempt, "status": "coder_error", "failure": detail}
+                {
+                    "attempt": attempt,
+                    "mode": mode,
+                    "status": "coder_error",
+                    "failure": detail,
+                }
             )
-            feedback = f"The previous scene coder call failed: {detail}"
+            # With a file in hand, the next round still fixes its last failure.
+            if source is None:
+                feedback = f"The previous scene coder call failed: {detail}"
             continue
 
-        previous = source
+        source = new_source
         scene_file = _write_attempt(scene_dir, attempt, source)
+        record = {"attempt": attempt, "mode": mode, "source_path": str(scene_file)}
         findings = check_scene_code(source, len(storyboard.beats))
         if findings:
             feedback = "The guard rejected the file:\n- " + "\n- ".join(findings)
             failures.append(f"attempt {attempt}: guard: {findings[0]}")
             attempt_records.append(
-                {
-                    "attempt": attempt,
-                    "status": "guard_rejected",
-                    "failure": feedback,
-                    "source_path": str(scene_file),
-                }
+                {**record, "status": "guard_rejected", "failure": feedback}
             )
             continue
 
@@ -321,12 +347,7 @@ def _compose(
             logger.warning("render failed on attempt %d:\n%s", attempt, detail)
             failures.append(f"attempt {attempt}: render error")
             attempt_records.append(
-                {
-                    "attempt": attempt,
-                    "status": "render_error",
-                    "failure": detail,
-                    "source_path": str(scene_file),
-                }
+                {**record, "status": "render_error", "failure": detail}
             )
             continue
         except subprocess.TimeoutExpired:
@@ -338,12 +359,7 @@ def _compose(
             logger.warning("render timed out on attempt %d", attempt)
             failures.append(f"attempt {attempt}: render timeout")
             attempt_records.append(
-                {
-                    "attempt": attempt,
-                    "status": "render_timeout",
-                    "failure": feedback,
-                    "source_path": str(scene_file),
-                }
+                {**record, "status": "render_timeout", "failure": feedback}
             )
             continue
         except _TimingInvalid as exc:
@@ -358,23 +374,15 @@ def _compose(
             failures.append(f"attempt {attempt}: invalid timing")
             attempt_records.append(
                 {
-                    "attempt": attempt,
+                    **record,
                     "status": "invalid_timing",
                     "failure": feedback,
-                    "source_path": str(scene_file),
                     "timing": timing,
                 }
             )
             continue
 
-        attempt_records.append(
-            {
-                "attempt": attempt,
-                "status": "shipped",
-                "source_path": str(scene_file),
-                "timing": timing,
-            }
-        )
+        attempt_records.append({**record, "status": "shipped", "timing": timing})
         lengths = beat_lengths(timing)
         audio = concat_audio(
             clips,
