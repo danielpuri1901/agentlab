@@ -1,4 +1,5 @@
 import copy
+import dataclasses
 import importlib.util
 import json
 import logging
@@ -8,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from agentlab import story_video
-from agentlab.frame_judge import BeatJudgement, Judgement
 from agentlab.scene_plan import ScenePlan
 from agentlab.story_video import StoryFailed
 from agentlab.storyboard import Storyboard, StoryboardInvalid
@@ -41,60 +41,7 @@ def _timing(overruns=None):
             }
         )
         cursor += length
-    return {"beats": beats, "total": cursor}
-
-
-def _timing_with_raw_overruns(raw_overruns):
-    beats, cursor = [], 0.0
-    for index, raw_overrun in enumerate(raw_overruns, start=1):
-        length = 5.0 + raw_overrun
-        beats.append(
-            {
-                "beat": index,
-                "start": cursor,
-                "end": cursor + length,
-                "narration": 5.0,
-                "overrun": round(raw_overrun, 3),
-            }
-        )
-        cursor += length
-    return {"beats": beats, "total": cursor}
-
-
-def _judgement(score=8, fix_beat=None):
-    beats = [
-        BeatJudgement(
-            beat=index, grounded=True, shows_visual=True, legible=True, clean=True
-        )
-        for index in range(1, N + 1)
-    ]
-    if fix_beat:
-        beats[fix_beat - 1] = BeatJudgement(
-            beat=fix_beat,
-            grounded=True,
-            shows_visual=True,
-            legible=True,
-            clean=False,
-            issue="overlap",
-        )
-    judgement = Judgement(beats=beats, score=score)
-    judgement.verdict = "fix" if fix_beat else "pass"
-    return judgement
-
-
-def _ungrounded(score=6, beat=1):
-    """A substantive defect: the frame does not match the storyboard."""
-    judgement = _judgement(score=score)
-    judgement.beats[beat - 1] = BeatJudgement(
-        beat=beat,
-        grounded=False,
-        shows_visual=True,
-        legible=True,
-        clean=True,
-        issue="shows a different mechanism",
-    )
-    judgement.verdict = "fix"
-    return judgement
+    return {"beats": beats, "total": cursor, "layout_warnings": []}
 
 
 @pytest.fixture
@@ -103,14 +50,10 @@ def seams(monkeypatch):
     state = {
         "renders": [],
         "codes": [],
-        "judgements": [],
         "render_errors": [],
         "timings": [],
         "coder": [],
         "previous_sources": [],
-        "frame_times": [],
-        "frame_timeouts": [],
-        "contact_sheets": [],
     }
 
     monkeypatch.setattr(
@@ -165,33 +108,12 @@ def seams(monkeypatch):
         Path(extra_env["SCENE_TIMING_OUT"]).write_text(
             json.dumps(timing), encoding="utf-8"
         )
-        output = Path(out_dir) / "videos" / "x" / "480p15" / f"{scene_class}.mp4"
+        output = Path(out_dir) / "videos" / "x" / "720p30" / f"{scene_class}.mp4"
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(b"video")
         return output
 
     monkeypatch.setattr(story_video, "render_scene_video", fake_render)
-
-    def fake_sample_frames(video, times, out_dir, timeout_seconds):
-        state["frame_times"].append(times)
-        state["frame_timeouts"].append(timeout_seconds)
-        return [Path(out_dir) / f"{index}.png" for index in range(len(times))]
-
-    monkeypatch.setattr(story_video, "sample_frames", fake_sample_frames)
-
-    def fake_contact_sheets(frames, out_dir, timeout_seconds):
-        sheets = [Path(out_dir) / f"beat-{index}.png" for index in range(N)]
-        state["contact_sheets"].append(sheets)
-        return sheets
-
-    monkeypatch.setattr(story_video, "contact_sheet_frames", fake_contact_sheets)
-    monkeypatch.setattr(
-        story_video,
-        "judge_frames",
-        lambda frames, storyboard, plan, complete, model: (
-            state["judgements"].pop(0) if state["judgements"] else _judgement()
-        ),
-    )
     monkeypatch.setattr(
         story_video,
         "concat_audio",
@@ -201,6 +123,7 @@ def seams(monkeypatch):
     )
 
     def fake_mux(video, audio, out, timeout_seconds=None):
+        state["muxed_video"] = Path(video)
         output = Path(out)
         output.write_bytes(b"final")
         return output
@@ -220,7 +143,6 @@ def _compose(tmp_path, max_attempts=story_video.MAX_ATTEMPTS):
         out_path=tmp_path / "out" / "video.mp4",
         story_model="s",
         scene_model="c",
-        judge_model="j",
         max_attempts=max_attempts,
     )
 
@@ -229,31 +151,27 @@ def _render_error(message="NameError: x"):
     return subprocess.CalledProcessError(
         1,
         ["manim"],
-        stderr=f"Traceback...\n{message}",
+        stderr=f"Traceback (most recent call last):\n  File paper_story.py\n{message}",
     )
 
 
-def test_happy_path_one_attempt_then_final_render(seams, tmp_path):
+def test_first_successful_render_ships_without_a_judge(seams, tmp_path):
     result = _compose(tmp_path)
 
     assert result.video_path.read_bytes() == b"final"
     assert result.attempts == 1
-    assert result.judge_score == 8
-    assert [quality for quality, _ in seams["renders"]] == ["l", "m"]
-    assert seams["renders"][0][1] == story_video.LOW_RENDER_TIMEOUT
-    assert seams["renders"][1][1] == story_video.FINAL_RENDER_TIMEOUT
+    assert result.selected_attempt == 1
+    assert seams["renders"] == [("m", story_video.RENDER_TIMEOUT)]
+    assert seams["coder"] == [None]
+    assert seams["muxed_video"].name == "PaperStory.mp4"
     assert seams["targets"] == [5.0] * N
-    assert seams["frame_times"] == [
-        [offset + 5.0 * index for index in range(N) for offset in (1.0, 2.5, 4.0)]
-    ]
-    assert seams["frame_timeouts"] == [story_video.FRAME_SAMPLE_TIMEOUT_SECONDS]
-    assert len(seams["contact_sheets"][0]) == N
     assert result.srt_path.exists()
     assert "class PaperStory" in result.scene_source
     assert result.visual_direction.startswith("A crowded house")
-    assert result.selected_attempt == 1
-    assert result.passed is True
-    assert result.attempt_records[0]["status"] == "passed"
+    assert result.timing == _timing()
+    assert [record["status"] for record in result.attempt_records] == ["shipped"]
+    fields = {field.name for field in dataclasses.fields(result)}
+    assert not fields & {"judge_score", "judgement", "passed"}
 
 
 def test_guard_finding_goes_back_to_the_coder(seams, tmp_path):
@@ -263,172 +181,99 @@ def test_guard_finding_goes_back_to_the_coder(seams, tmp_path):
 
     assert result.attempts == 2
     assert "import not allowed: os" in seams["coder"][1]
-    assert len([quality for quality, _ in seams["renders"] if quality == "l"]) == 1
+    assert len(seams["renders"]) == 1
+    assert [record["status"] for record in result.attempt_records] == [
+        "guard_rejected",
+        "shipped",
+    ]
 
 
-def test_render_traceback_is_logged_and_goes_back_to_the_coder(seams, tmp_path, caplog):
+def test_render_traceback_goes_back_to_the_coder_with_the_file(
+    seams, tmp_path, caplog
+):
+    first = GOLDEN_SCENE + "\n# first attempt\n"
+    seams["codes"] = [first]
     seams["render_errors"] = [_render_error()]
 
     with caplog.at_level(logging.WARNING, logger="agentlab.story_video"):
         result = _compose(tmp_path)
 
     assert result.attempts == 2
-    assert "NameError" in seams["coder"][1]
+    assert seams["coder"][1] == (
+        "Manim failed with this traceback:\n"
+        "Traceback (most recent call last):\n  File paper_story.py\nNameError: x"
+    )
+    assert seams["previous_sources"][1] == first
     assert "NameError: x" in caplog.text
+    assert result.attempt_records[0]["status"] == "render_error"
 
 
-def test_overrun_goes_back_to_the_coder(seams, tmp_path):
-    seams["timings"] = [_timing([0.0, 2.0] + [0.0] * (N - 2))]
-
-    result = _compose(tmp_path)
-
-    assert result.attempts == 2
-    assert "beat 2" in seams["coder"][1]
-
-
-def test_raw_per_beat_overrun_above_limit_goes_back_to_the_coder(seams, tmp_path):
-    seams["timings"] = [
-        _timing_with_raw_overruns([0.7504] + [0.0] * (N - 1)),
-        _timing(),
-    ]
+def test_render_timeout_goes_back_to_the_coder(seams, tmp_path):
+    seams["render_errors"] = [subprocess.TimeoutExpired(["manim"], 600)]
 
     result = _compose(tmp_path)
 
     assert result.attempts == 2
-    assert "beat 1" in seams["coder"][1]
+    assert "did not finish within 600 s" in seams["coder"][1]
+    assert result.attempt_records[0]["status"] == "render_timeout"
 
 
-def test_inflated_timing_narration_cannot_hide_clip_overrun(seams, tmp_path):
-    masked = _timing_with_raw_overruns([0.7504] + [0.0] * (N - 1))
-    masked["beats"][0]["narration"] = 5.0008
-    masked["beats"][0]["overrun"] = 0.75
-    seams["timings"] = [masked, _timing()]
+def test_coder_error_goes_back_to_the_coder(seams, tmp_path):
+    seams["codes"] = [RuntimeError("model output hit the token limit")]
 
     result = _compose(tmp_path)
 
     assert result.attempts == 2
-    assert "beat 1" in seams["coder"][1]
+    assert "RuntimeError: model output hit the token limit" in seams["coder"][1]
+    assert seams["previous_sources"][1] is None
 
 
-def test_raw_total_overrun_above_limit_goes_back_to_the_coder(seams, tmp_path):
-    raw_overrun = 3.0002 / N
-    seams["timings"] = [
-        _timing_with_raw_overruns([raw_overrun] * N),
-        _timing(),
-    ]
-
-    result = _compose(tmp_path)
-
-    assert result.attempts == 2
-    assert "total overrun" in seams["coder"][1]
-
-
-def test_cosmetic_defect_ships_on_the_first_attempt(seams, tmp_path):
-    """A beat with overlap is not worth a second coder call and render."""
-    seams["judgements"] = [_judgement(score=7, fix_beat=2)]
+def test_overrun_ships_and_pads_the_audio_to_the_beat(seams, tmp_path):
+    """A beat longer than its narration is not a failure: the audio clip is
+    padded to the beat's length."""
+    overrun = _timing([0.0, 2.5] + [0.0] * (N - 2))
+    seams["timings"] = [overrun]
 
     result = _compose(tmp_path)
 
     assert result.attempts == 1
-    assert result.passed is False
-    assert result.judge_score == 7
-    assert [quality for quality, _ in seams["renders"]] == ["l", "m"]
+    assert seams["coder"] == [None]
+    assert seams["targets"] == [5.0, 7.5] + [5.0] * (N - 2)
+    assert result.timing == overrun
 
 
-def test_substantive_defect_still_goes_back_to_the_coder(seams, tmp_path):
-    seams["judgements"] = [_ungrounded(score=7), _judgement(score=8)]
-
-    result = _compose(tmp_path)
-
-    assert result.attempts == 2
-    assert "beat 1" in seams["coder"][1]
-    assert result.passed is True
-
-
-def test_every_candidate_ungrounded_still_fails_the_gate(seams, tmp_path):
-    seams["judgements"] = [_ungrounded(score=score) for score in (7, 4, 6, 5)]
-
-    with pytest.raises(StoryFailed, match="quality gate failed after 4 attempts"):
-        _compose(tmp_path)
-
-    assert [quality for quality, _ in seams["renders"]] == ["l"] * 4
-
-
-def test_best_shippable_candidate_wins_when_nothing_passes(seams, tmp_path):
-    """Exhaustion ships the best clean-enough render instead of discarding
-    four of them and paying for a template video on top."""
-    seams["judgements"] = [
-        _ungrounded(score=8),
-        _judgement(score=5, fix_beat=3),
-        _ungrounded(score=9),
-        _judgement(score=6, fix_beat=2),
-    ]
+def test_layout_warnings_ship_with_the_timing(seams, tmp_path):
+    timing = _timing()
+    timing["layout_warnings"] = ["beat 2 layout: 'Agent' runs off the left edge"]
+    seams["timings"] = [timing]
 
     result = _compose(tmp_path)
 
-    assert result.passed is False
-    assert result.judge_score == 6
-    assert result.selected_attempt == 4
+    assert result.attempts == 1
+    assert result.timing["layout_warnings"] == timing["layout_warnings"]
 
 
-def test_a_weak_score_never_ships(seams, tmp_path):
-    """Below the ship floor is substantive, not cosmetic."""
-    seams["judgements"] = [_judgement(score=4, fix_beat=2)] * 4
-
-    with pytest.raises(StoryFailed, match="quality gate failed after 4 attempts"):
-        _compose(tmp_path)
-
-
-def test_low_quality_judgement_retries_with_a_fresh_visual_concept(seams, tmp_path):
-    weak = _judgement(score=5)
-    weak.verdict = "fix"
-    weak.note = "The composition is generic and static."
-    seams["judgements"] = [weak, _judgement(score=8)]
-
-    result = _compose(tmp_path)
-
-    assert result.attempts == 2
-    assert "fresh visual concept" in seams["coder"][1]
-    assert seams["previous_sources"][1] is None
-
-
-def test_latest_candidate_wins_a_score_tie(seams, tmp_path):
-    latest_source = GOLDEN_SCENE + "\n# latest candidate\n"
-    seams["codes"] = [GOLDEN_SCENE, latest_source]
-    seams["judgements"] = [
-        _ungrounded(score=7),
-        _judgement(score=7),
-    ]
-
-    result = _compose(tmp_path)
-
-    assert result.attempts == 2
-    assert result.scene_source == latest_source
-
-
-def test_later_coder_failure_does_not_ship_earlier_rejected_candidate(seams, tmp_path):
-    seams["codes"] = [
-        GOLDEN_SCENE,
-        RuntimeError("coder unavailable"),
-        RuntimeError("coder unavailable"),
-        RuntimeError("coder unavailable"),
-    ]
-    seams["judgements"] = [_ungrounded(score=7)]
-
-    with pytest.raises(StoryFailed, match="quality gate failed after 4 attempts"):
-        _compose(tmp_path)
-
-    assert [quality for quality, _ in seams["renders"]] == ["l"]
-
-
-def test_max_attempts_is_capped_at_four(seams, tmp_path):
+def test_max_attempts_is_capped_at_three(seams, tmp_path):
     seams["render_errors"] = [_render_error()] * 5
 
-    with pytest.raises(story_video.StoryFailed) as exc:
+    with pytest.raises(StoryFailed) as exc:
         _compose(tmp_path, max_attempts=99)
 
-    assert "4 attempts" in str(exc.value)
-    assert len(seams["coder"]) == 4
+    assert "no renderable scene in 3 attempts" in str(exc.value)
+    assert len(seams["coder"]) == 3
+
+
+def test_three_failures_raise_story_failed_with_each_reason(seams, tmp_path):
+    seams["codes"] = [RuntimeError("throttled"), "import os\n" + GOLDEN_SCENE]
+    seams["render_errors"] = [_render_error()]
+
+    with pytest.raises(StoryFailed) as exc:
+        _compose(tmp_path)
+
+    message = str(exc.value)
+    assert "attempt 1: coder error" in message
+    assert "attempt 2: guard: import not allowed: os" in message
+    assert "attempt 3: render error" in message
 
 
 def _drop_last_beat(timing):
@@ -504,7 +349,7 @@ def _mismatch_overrun(timing):
         "overrun",
     ],
 )
-def test_invalid_preview_timing_goes_back_to_the_coder(seams, tmp_path, mutate):
+def test_invalid_timing_goes_back_to_the_coder(seams, tmp_path, mutate):
     invalid = copy.deepcopy(_timing())
     mutate(invalid)
     seams["timings"] = [invalid, _timing()]
@@ -513,19 +358,29 @@ def test_invalid_preview_timing_goes_back_to_the_coder(seams, tmp_path, mutate):
 
     assert result.attempts == 2
     assert "timing" in seams["coder"][1].lower()
+    assert result.attempt_records[0]["status"] == "invalid_timing"
 
 
-def test_four_failures_raise_story_failed(seams, tmp_path):
-    seams["render_errors"] = [_render_error()] * 4
+def test_unreadable_timing_goes_back_to_the_coder(seams, monkeypatch, tmp_path):
+    fake_render = story_video.render_scene_video
+    lose_timing = [True]
 
-    with pytest.raises(story_video.StoryFailed) as exc:
-        _compose(tmp_path)
+    def render(*args, **kwargs):
+        video = fake_render(*args, **kwargs)
+        if lose_timing and lose_timing.pop():
+            Path(kwargs["extra_env"]["SCENE_TIMING_OUT"]).unlink()
+        return video
 
-    assert "4 attempts" in str(exc.value)
+    monkeypatch.setattr(story_video, "render_scene_video", render)
+
+    result = _compose(tmp_path)
+
+    assert result.attempts == 2
+    assert "timing output could not be read" in seams["coder"][1]
+    assert result.attempt_records[0]["status"] == "invalid_timing"
 
 
 def test_video_deadline_stops_new_attempts(seams, monkeypatch, tmp_path):
-    seams["render_errors"] = [_render_error()] * 4
     times = iter([0.0, 0.0, 2.0])
     monkeypatch.setattr(story_video.time, "monotonic", lambda: next(times, 2.0))
 
@@ -540,86 +395,53 @@ def test_video_deadline_stops_new_attempts(seams, monkeypatch, tmp_path):
             out_path=tmp_path / "out" / "video.mp4",
             story_model="s",
             scene_model="c",
-            judge_model="j",
             deadline_seconds=1,
         )
 
     assert len(seams["coder"]) == 1
+    assert seams["renders"] == []
 
 
-def test_deadline_bound_completion_caps_each_model_call(monkeypatch):
+@pytest.mark.parametrize(
+    ("deadline", "timeout"),
+    [(100, 70), (story_video.VIDEO_DEADLINE_SECONDS, story_video.MODEL_CALL_TIMEOUT)],
+)
+def test_deadline_bound_completion_caps_each_model_call(monkeypatch, deadline, timeout):
+    """30 s into the video: the call gets what is left of the deadline, up to
+    the per-call cap."""
     calls = []
     monkeypatch.setattr(story_video.time, "monotonic", lambda: 40.0)
 
     bounded = story_video._deadline_bound_completion(
         lambda model, messages, **kwargs: calls.append(kwargs) or "ok",
         started=10.0,
-        deadline_seconds=100,
+        deadline_seconds=deadline,
     )
 
     assert bounded("model", []) == "ok"
-    assert calls == [{"timeout": 70}]
+    assert calls == [{"timeout": timeout}]
 
 
 def test_storyboard_invalid_becomes_story_failed(seams, monkeypatch, tmp_path):
-    def bad_storyboard(digest, plan, complete, model):
+    def bad_storyboard(digest, plan, complete, model, **kwargs):
         raise StoryboardInvalid("missing mechanism")
 
     monkeypatch.setattr(story_video, "design_storyboard", bad_storyboard)
 
-    with pytest.raises(story_video.StoryFailed) as exc:
+    with pytest.raises(StoryFailed) as exc:
         _compose(tmp_path)
 
     assert "storyboard" in str(exc.value)
 
 
-def test_final_render_exception_logs_and_falls_back_to_preview(seams, tmp_path, caplog):
-    seams["render_errors"] = [None, OSError("render disk full")]
-
-    with caplog.at_level(logging.WARNING, logger="agentlab.story_video"):
-        result = _compose(tmp_path)
-
-    assert result.video_path.read_bytes() == b"final"
-    assert result.timing == _timing()
-    assert seams["targets"] == [5.0] * N
-    assert "render disk full" in caplog.text
-    assert "accepted preview" in caplog.text
-
-
-def test_final_render_overrun_falls_back_to_preview(seams, tmp_path, caplog):
-    seams["timings"] = [
-        _timing(),
-        _timing([0.0, 2.0] + [0.0] * (N - 2)),
-    ]
-
-    with caplog.at_level(logging.WARNING, logger="agentlab.story_video"):
-        result = _compose(tmp_path)
-
-    assert result.timing == _timing()
-    assert seams["targets"] == [5.0] * N
-    assert "beat 2" in caplog.text
-    assert "accepted preview" in caplog.text
-
-
-def test_malformed_final_timing_falls_back_to_preview(seams, tmp_path):
-    invalid = _timing()
-    invalid["total"] += 1.0
-    seams["timings"] = [_timing(), invalid]
-
-    result = _compose(tmp_path)
-
-    assert result.timing == _timing()
-    assert seams["targets"] == [5.0] * N
-
-
 def test_unexpected_exception_becomes_story_failed(seams, monkeypatch, tmp_path):
     monkeypatch.setattr(
         story_video,
-        "sample_frames",
+        "concat_audio",
         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk")),
     )
 
-    with pytest.raises(story_video.StoryFailed) as exc:
+    with pytest.raises(StoryFailed) as exc:
         _compose(tmp_path)
 
     assert "OSError" in str(exc.value)

@@ -418,7 +418,6 @@ def _pricing_model_for(model: str) -> str | None:
         ("PICK_MODEL", "PICK_PRICE_MODEL", DEFAULT_PICK_PRICE_MODEL),
         ("STORY_MODEL", "STORY_PRICE_MODEL", DEFAULT_DEEP_READ_PRICE_MODEL),
         ("SCENE_MODEL", "SCENE_PRICE_MODEL", DEFAULT_DEEP_READ_PRICE_MODEL),
-        ("JUDGE_MODEL", "JUDGE_PRICE_MODEL", DEFAULT_DEEP_READ_PRICE_MODEL),
     )
     for model_env, price_env, default_price in pairs:
         if os.environ.get(model_env) == model:
@@ -671,26 +670,6 @@ def _upload_attempt_artifacts(
             source_key = f"{prefix}/scene.py"
             s3_client.upload_file(source_path, bucket, source_key)
             record["source_key"] = source_key
-        frame_keys = []
-        for index, frame_path in enumerate(record.pop("frame_paths", []), start=1):
-            if not Path(frame_path).is_file():
-                continue
-            frame_key = f"{prefix}/frame-{index:02d}.png"
-            s3_client.upload_file(frame_path, bucket, frame_key)
-            frame_keys.append(frame_key)
-        if frame_keys:
-            record["frame_keys"] = frame_keys
-        sheet_keys = []
-        for index, sheet_path in enumerate(
-            record.pop("contact_sheet_paths", []), start=1
-        ):
-            if not Path(sheet_path).is_file():
-                continue
-            sheet_key = f"{prefix}/contact-sheet-{index:02d}.png"
-            s3_client.upload_file(sheet_path, bucket, sheet_key)
-            sheet_keys.append(sheet_key)
-        if sheet_keys:
-            record["contact_sheet_keys"] = sheet_keys
     return records
 
 
@@ -734,7 +713,6 @@ def _run_explain_track(
     pick_model: str,
     story_model: str,
     scene_model: str,
-    judge_model: str,
     partial: dict,
     aws_mtd_cost: Decimal | None = None,
     forced_candidate: dict | None = None,
@@ -838,7 +816,6 @@ def _run_explain_track(
                 video_path,
                 story_model=story_model,
                 scene_model=scene_model,
-                judge_model=judge_model,
                 recent_visual_directions=_recent_visual_directions(table),
             )
         except StoryFailed as exc:
@@ -863,11 +840,9 @@ def _run_explain_track(
         story_record = {
             "storyboard": story.storyboard.model_dump(),
             "visual_direction": story.visual_direction,
-            "judgement": story.judgement,
             "attempts": story.attempts,
             "timing": story.timing,
             "selected_attempt": story.selected_attempt,
-            "passed": story.passed,
             "attempt_records": attempt_records,
         }
         s3_client.put_object(
@@ -936,13 +911,11 @@ def _run_explain_track(
                 "selection_probability": selection_probability,
                 "render_path": "story",
                 "attempts": story.attempts,
-                "judge_score": story.judge_score,
                 "story_key": story_key,
                 "visual_direction": story.visual_direction,
                 "visual_focus": story.visual_direction,
                 "storyboard_visual_focus": story.storyboard.visual_focus,
                 "selected_attempt": story.selected_attempt,
-                "judge_passed": story.passed,
                 "estimated_model_cost_usd": model_cost,
                 "cost_estimated": True,
                 "model_calls": model_calls,
@@ -979,7 +952,6 @@ def explain_command() -> None:
     pick_model = os.environ.get("PICK_MODEL", DEFAULT_PICK_MODEL)
     story_model = os.environ.get("STORY_MODEL", deep_read_model)
     scene_model = os.environ.get("SCENE_MODEL", deep_read_model)
-    judge_model = os.environ.get("JUDGE_MODEL", deep_read_model)
 
     tracks = list(EXPLAIN_TRACKS) if track_env == "all" else [track_env]
     if any(t not in EXPLAIN_TRACKS for t in tracks):
@@ -1033,7 +1005,6 @@ def explain_command() -> None:
                 pick_model,
                 story_model,
                 scene_model,
-                judge_model,
                 partial,
                 aws_mtd_cost,
                 forced_candidate,

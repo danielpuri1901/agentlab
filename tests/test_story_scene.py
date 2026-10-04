@@ -10,7 +10,6 @@ GOLDEN_BOARD = Path(__file__).parent / "fixtures" / "storyboard_golden.json"
 
 
 def test_module_imports_without_manim_and_exposes_pure_helpers():
-    assert callable(story_scene.overrun_report)
     assert callable(story_scene.layout_warning)
     assert story_scene.SCENE_CLASS == "PaperStory"
     assert story_scene.STAGE_BOTTOM < 0 < story_scene.STAGE_TOP
@@ -27,35 +26,6 @@ def test_beat_record_measures_overrun_never_negative():
     }
     assert story_scene.beat_record(1, 0.0, 3.0, 4.0)["overrun"] == 0.0
 
-
-def test_overrun_report_is_none_within_limits():
-    timing = {
-        "beats": [
-            story_scene.beat_record(1, 0, 4.4, 4.0),
-            story_scene.beat_record(2, 4.4, 8.0, 3.6),
-        ]
-    }
-    assert story_scene.overrun_report(timing) is None
-
-
-def test_overrun_report_names_the_offending_beats():
-    timing = {
-        "beats": [
-            story_scene.beat_record(1, 0, 5.0, 4.0),
-            story_scene.beat_record(2, 5.0, 8.0, 3.0),
-        ]
-    }
-    report = story_scene.overrun_report(timing)
-    assert "beat 1" in report and "1.0 s" in report
-    assert "beat 2" not in report
-
-
-def test_overrun_report_flags_total_even_when_each_beat_is_small():
-    beats = [
-        story_scene.beat_record(i, i * 4.0, i * 4.0 + 4.7, 4.0) for i in range(1, 6)
-    ]
-    report = story_scene.overrun_report({"beats": beats})
-    assert "total overrun" in report
 
 
 def test_beat_midpoints_and_lengths():

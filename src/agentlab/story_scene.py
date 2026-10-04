@@ -28,9 +28,9 @@ returns renderer.time, advanced by every play and wait).
 Final holds are rounded up by one frame when Manim truncates a fractional
 static wait, so a visual beat never ends before its narration.
 
-The pure helpers above the manim import (beat_record, overrun_report,
-layout_warning, beat_midpoints, beat_lengths, wrap_text, load_spec) are
-importable from the main venv without manim, and story_video.py uses them.
+The pure helpers above the manim import (beat_record, layout_warning,
+beat_midpoints, beat_lengths, wrap_text, load_spec) are importable from the
+main venv without manim, and story_video.py uses them.
 """
 
 import json
@@ -63,8 +63,6 @@ CAPTION_WRAP_WIDTH = 60
 CAPTION_MAX_HEIGHT = 1.4
 CAPTION_SWAP_SECONDS = 0.25
 
-PER_BEAT_OVERRUN_LIMIT = 0.75
-TOTAL_OVERRUN_LIMIT = 3.0
 FRAME_TIME_TOLERANCE = 1e-6
 
 def load_spec() -> dict:
@@ -144,25 +142,6 @@ def beat_record(index: int, start: float, end: float, narration_seconds: float) 
         "overrun": max(0.0, round((end - start) - narration_seconds, 3)),
     }
 
-
-def overrun_report(
-    timing: dict, per_beat_limit: float = PER_BEAT_OVERRUN_LIMIT, total_limit: float = TOTAL_OVERRUN_LIMIT
-) -> str | None:
-    """None when every beat fits its narration (within the limits); else a
-    message the coder can act on, naming each offending beat."""
-    beats = timing.get("beats") or []
-    bad = [b for b in beats if b.get("overrun", 0.0) > per_beat_limit]
-    total = sum(b.get("overrun", 0.0) for b in beats)
-    if not bad and total <= total_limit:
-        return None
-    lines = [f"beat {b['beat']} ran {b['overrun']:.1f} s past its {b['narration']:.1f} s narration" for b in bad]
-    if total > total_limit:
-        lines.append(f"total overrun {total:.1f} s is above the {total_limit:.1f} s limit")
-    return (
-        "Beats ran longer than their narration. Shorten run_time values or drop animations "
-        "so each beat's animations end at least 0.3 s before its narration ends:\n- "
-        + "\n- ".join(lines)
-    )
 
 
 def beat_midpoints(timing: dict) -> list[float]:

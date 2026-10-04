@@ -2,7 +2,13 @@
 
 Every external step is a module-level name so tests and the worker can
 replace the slow or external boundary without replacing the compose loop.
-Failures become StoryFailed because the worker owns the template fallback.
+Failures become StoryFailed because the worker owns the fallback.
+
+There is no judge. The first attempt that passes the code guard, renders,
+and writes structurally valid timing ships. Only those deterministic
+failures cost another attempt, and the coder gets the exact error back.
+A beat that runs longer than its narration is not a failure: concat_audio
+pads each narration clip to its beat's length.
 """
 
 import json
@@ -15,23 +21,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentlab import story_scene
-from agentlab.frame_judge import (
-    FRAME_SAMPLE_TIMEOUT_SECONDS,
-    blocking_defect,
-    contact_sheet_frames,
-    cosmetic_only,
-    judge_frames,
-    judgement_feedback,
-    sample_frames,
-)
 from agentlab.scene_code import check_scene_code, visual_direction, write_scene_code
 from agentlab.scene_plan import ScenePlan
-from agentlab.story_scene import (
-    SCENE_CLASS,
-    TIMING_ENV,
-    beat_lengths,
-    overrun_report,
-)
+from agentlab.story_scene import SCENE_CLASS, TIMING_ENV, beat_lengths
 from agentlab.storyboard import Storyboard, StoryboardInvalid, design_storyboard
 from agentlab.video_render import (
     build_srt,
@@ -42,13 +34,13 @@ from agentlab.video_render import (
 )
 
 STORY_SCENE_FILE = Path(story_scene.__file__)
-LOW_RENDER_TIMEOUT = 180
-FINAL_RENDER_TIMEOUT = 300
-VIDEO_DEADLINE_SECONDS = 900
-MAX_ATTEMPTS = 4
+RENDER_QUALITY = "m"
+RENDER_TIMEOUT = 600
+MODEL_CALL_TIMEOUT = 600
+VIDEO_DEADLINE_SECONDS = 2400
+MAX_ATTEMPTS = 3
 STDERR_TAIL_LINES = 40
 TIMING_TOLERANCE = 0.001
-OVERRUN_LIMIT_TOLERANCE = 1e-9
 
 logger = logging.getLogger(__name__)
 
@@ -73,23 +65,9 @@ class StoryResult:
     scene_source: str
     visual_direction: str
     attempts: int
-    judge_score: int | None
-    judgement: dict | None
     timing: dict
     selected_attempt: int
-    passed: bool
     attempt_records: list[dict]
-
-
-@dataclass
-class _Candidate:
-    attempt: int
-    source: str
-    scene_file: Path
-    video: Path
-    timing: dict
-    judgement: object
-    frames: list[Path]
 
 
 def _stderr_tail(exc: subprocess.CalledProcessError) -> str:
@@ -114,15 +92,6 @@ def _write_attempt(scene_dir: Path, attempt: int, source: str) -> Path:
     return scene_file
 
 
-def beat_sample_times(timing: dict) -> list[float]:
-    times = []
-    for beat in timing["beats"]:
-        start = float(beat["start"])
-        length = float(beat["end"]) - start
-        times.extend(start + length * fraction for fraction in (0.2, 0.5, 0.8))
-    return times
-
-
 def _remaining_timeout(started: float, deadline_seconds: int, limit: int) -> int:
     remaining = deadline_seconds - (time.monotonic() - started)
     if remaining <= 0:
@@ -132,22 +101,20 @@ def _remaining_timeout(started: float, deadline_seconds: int, limit: int) -> int
 
 def _deadline_bound_completion(complete, started: float, deadline_seconds: int):
     def bounded(model: str, messages: list[dict]) -> str:
-        timeout = _remaining_timeout(started, deadline_seconds, LOW_RENDER_TIMEOUT)
+        timeout = _remaining_timeout(started, deadline_seconds, MODEL_CALL_TIMEOUT)
         return complete(model, messages, timeout=timeout)
 
     return bounded
 
 
-def _render(
-    scene_file: Path, spec: dict, quality: str, timeout: int
-) -> tuple[Path, dict]:
-    timing_path = scene_file.parent / f"beat_times_{quality}.json"
+def _render(scene_file: Path, spec: dict, timeout: int) -> tuple[Path, dict]:
+    timing_path = scene_file.parent / "beat_times.json"
     video = render_scene_video(
         scene_file,
         SCENE_CLASS,
         spec,
-        scene_file.parent / f"media_{quality}",
-        quality=quality,
+        scene_file.parent / "media",
+        quality=RENDER_QUALITY,
         timeout_seconds=timeout,
         extra_env={TIMING_ENV: str(timing_path)},
     )
@@ -223,30 +190,6 @@ def _timing_error(timing: dict, durations: list[float]) -> str | None:
     return None
 
 
-def _timing_feedback(timing: dict, durations: list[float]) -> str | None:
-    error = _timing_error(timing, durations)
-    if error:
-        return f"The render timing is invalid: {error}. Fix the scene timing output."
-    raw_timing = {
-        "beats": [
-            {
-                **beat,
-                "narration": expected_narration,
-                "overrun": max(
-                    0.0,
-                    (beat["end"] - beat["start"]) - expected_narration,
-                ),
-            }
-            for beat, expected_narration in zip(timing["beats"], durations, strict=True)
-        ]
-    }
-    return overrun_report(
-        raw_timing,
-        per_beat_limit=(story_scene.PER_BEAT_OVERRUN_LIMIT + OVERRUN_LIMIT_TOLERANCE),
-        total_limit=story_scene.TOTAL_OVERRUN_LIMIT + OVERRUN_LIMIT_TOLERANCE,
-    )
-
-
 def compose_story_video(
     digest: str,
     plan: ScenePlan,
@@ -257,7 +200,6 @@ def compose_story_video(
     out_path,
     story_model: str,
     scene_model: str,
-    judge_model: str,
     max_attempts: int = MAX_ATTEMPTS,
     deadline_seconds: int = VIDEO_DEADLINE_SECONDS,
     recent_visual_directions: list[str] | None = None,
@@ -273,7 +215,6 @@ def compose_story_video(
             Path(out_path),
             story_model,
             scene_model,
-            judge_model,
             max_attempts,
             deadline_seconds,
             recent_visual_directions,
@@ -294,7 +235,6 @@ def _compose(
     out_path: Path,
     story_model,
     scene_model,
-    judge_model,
     max_attempts,
     deadline_seconds,
     recent_visual_directions,
@@ -323,21 +263,15 @@ def _compose(
     }
     scene_dir = work_dir / "scene"
 
-    candidates: list[_Candidate] = []
     failures: list[str] = []
     attempt_records: list[dict] = []
     feedback: str | None = None
     previous: str | None = None
-    attempts = 0
     attempt_limit = min(max_attempts, MAX_ATTEMPTS)
     for attempt in range(1, attempt_limit + 1):
-        attempts = attempt
         try:
             _remaining_timeout(started, deadline_seconds, 1)
         except _DeadlineExceeded as exc:
-            failures.append(f"attempt {attempt}: deadline")
-            if candidates:
-                break
             raise StoryFailed(str(exc)) from exc
         try:
             source = write_scene_code(
@@ -348,7 +282,7 @@ def _compose(
                 feedback=feedback,
                 previous_source=previous,
             )
-        except Exception as exc:  # noqa: BLE001 - an earlier candidate can still ship
+        except Exception as exc:  # noqa: BLE001 - the next attempt gets the error
             detail = _failure_detail(exc)
             logger.warning("scene coder failed on attempt %d: %s", attempt, detail)
             failures.append(f"attempt {attempt}: coder error")
@@ -375,19 +309,16 @@ def _compose(
             continue
 
         try:
-            preview_timeout = _remaining_timeout(
-                started, deadline_seconds, LOW_RENDER_TIMEOUT
+            render_timeout = _remaining_timeout(
+                started, deadline_seconds, RENDER_TIMEOUT
             )
-            video, timing = _render(scene_file, spec, "l", preview_timeout)
+            video, timing = _render(scene_file, spec, render_timeout)
         except _DeadlineExceeded as exc:
-            failures.append(f"attempt {attempt}: deadline")
-            if candidates:
-                break
             raise StoryFailed(str(exc)) from exc
         except subprocess.CalledProcessError as exc:
             detail = _stderr_tail(exc)
             feedback = "Manim failed with this traceback:\n" + detail
-            logger.warning("preview render failed on attempt %d:\n%s", attempt, detail)
+            logger.warning("render failed on attempt %d:\n%s", attempt, detail)
             failures.append(f"attempt {attempt}: render error")
             attempt_records.append(
                 {
@@ -400,11 +331,11 @@ def _compose(
             continue
         except subprocess.TimeoutExpired:
             feedback = (
-                f"The render did not finish within {preview_timeout} s. "
-                "The scene is too heavy: use fewer mobjects, no per-frame "
-                "updaters except self.counter, shorter run_times."
+                f"The render did not finish within {render_timeout} s. The scene "
+                "is too heavy: use fewer or coarser mobjects, lighter updaters, "
+                "and shorter run_times."
             )
-            logger.warning("preview render timed out on attempt %d", attempt)
+            logger.warning("render timed out on attempt %d", attempt)
             failures.append(f"attempt {attempt}: render timeout")
             attempt_records.append(
                 {
@@ -416,10 +347,14 @@ def _compose(
             )
             continue
         except _TimingInvalid as exc:
+            timing, error = None, str(exc)
+        else:
+            error = _timing_error(timing, durations)
+        if error:
             feedback = (
-                f"The render timing is invalid: {exc}. Fix the scene timing output."
+                f"The render timing is invalid: {error}. Fix the scene timing output."
             )
-            logger.warning("preview timing failed on attempt %d: %s", attempt, exc)
+            logger.warning("render timing failed on attempt %d: %s", attempt, error)
             failures.append(f"attempt {attempt}: invalid timing")
             attempt_records.append(
                 {
@@ -427,177 +362,51 @@ def _compose(
                     "status": "invalid_timing",
                     "failure": feedback,
                     "source_path": str(scene_file),
-                }
-            )
-            continue
-
-        feedback = _timing_feedback(timing, durations)
-        if feedback:
-            logger.warning("preview timing failed on attempt %d: %s", attempt, feedback)
-            failures.append(f"attempt {attempt}: timing")
-            attempt_records.append(
-                {
-                    "attempt": attempt,
-                    "status": "timing_rejected",
-                    "failure": feedback,
-                    "source_path": str(scene_file),
                     "timing": timing,
                 }
             )
             continue
 
-        try:
-            frame_timeout = _remaining_timeout(
-                started, deadline_seconds, FRAME_SAMPLE_TIMEOUT_SECONDS
-            )
-            frames = sample_frames(
-                video,
-                beat_sample_times(timing),
-                scene_file.parent / "frames",
-                timeout_seconds=frame_timeout,
-            )
-            contact_sheets = contact_sheet_frames(
-                frames,
-                scene_file.parent / "contact-sheets",
-                timeout_seconds=_remaining_timeout(
-                    started, deadline_seconds, FRAME_SAMPLE_TIMEOUT_SECONDS
-                ),
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            detail = _failure_detail(exc)
-            feedback = f"Frame extraction failed: {detail}"
-            failures.append(f"attempt {attempt}: frame extraction")
-            attempt_records.append(
-                {
-                    "attempt": attempt,
-                    "status": "frame_error",
-                    "failure": detail,
-                    "source_path": str(scene_file),
-                }
-            )
-            continue
-        except _DeadlineExceeded as exc:
-            failures.append(f"attempt {attempt}: deadline")
-            if candidates:
-                break
-            raise StoryFailed(str(exc)) from exc
-        judgement = judge_frames(
-            contact_sheets, storyboard, plan, bounded_complete, model=judge_model
-        )
-        candidates.append(
-            _Candidate(attempt, source, scene_file, video, timing, judgement, frames)
-        )
         attempt_records.append(
             {
                 "attempt": attempt,
-                "status": "passed" if judgement.verdict == "pass" else "judge_fix",
+                "status": "shipped",
                 "source_path": str(scene_file),
-                "frame_paths": [str(frame) for frame in frames],
-                "contact_sheet_paths": [str(sheet) for sheet in contact_sheets],
                 "timing": timing,
-                "judgement": judgement.model_dump(),
             }
         )
-        if judgement.verdict == "pass":
-            break
-        if cosmetic_only(judgement):
-            # Ship it. Another attempt would buy a tidier frame for a coder
-            # call plus a render, and the video is already at pass quality.
-            logger.info(
-                "attempt %d ships with cosmetic defects only (score %d)",
-                attempt,
-                judgement.score,
-            )
-            break
-        feedback = judgement_feedback(judgement)
-        has_technical_problem = any(
-            not beat.grounded or not beat.legible or not beat.clean
-            for beat in judgement.beats
+        lengths = beat_lengths(timing)
+        audio = concat_audio(
+            clips,
+            work_dir / "narration.mp3",
+            target_seconds=lengths,
+            timeout_seconds=_remaining_timeout(
+                started, deadline_seconds, RENDER_TIMEOUT
+            ),
         )
-        if judgement.beats and not has_technical_problem:
-            previous = None
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        srt_path = out_path.with_suffix(".srt")
+        srt_path.write_text(build_srt(clips, durations=lengths), encoding="utf-8")
+        video_path = mux_final(
+            video,
+            audio,
+            out_path,
+            timeout_seconds=_remaining_timeout(
+                started, deadline_seconds, RENDER_TIMEOUT
+            ),
+        )
+        return StoryResult(
+            video_path=Path(video_path),
+            srt_path=srt_path,
+            storyboard=storyboard,
+            scene_source=source,
+            visual_direction=visual_direction(source),
+            attempts=attempt,
+            timing=timing,
+            selected_attempt=attempt,
+            attempt_records=attempt_records,
+        )
 
-    if not candidates:
-        raise StoryFailed(
-            f"no renderable scene in {attempts} attempts: " + "; ".join(failures)
-        )
-
-    passed = [
-        candidate for candidate in candidates if candidate.judgement.verdict == "pass"
-    ]
-    pool = passed
-    if not passed:
-        # Nothing reached a clean pass. Ship the best candidate that carries no
-        # substantive defect rather than throwing away every render and paying
-        # for a template video on top (18 such fallbacks by 2026-09-23).
-        shippable = [
-            candidate
-            for candidate in candidates
-            if blocking_defect(candidate.judgement) is None
-        ]
-        if not shippable:
-            best_rejected = max(
-                candidates,
-                key=lambda candidate: (candidate.judgement.score, candidate.attempt),
-            )
-            issue = next(
-                (beat.issue for beat in best_rejected.judgement.beats if beat.issue),
-                best_rejected.judgement.note or "judge requested another fix",
-            )
-            raise StoryFailed(
-                f"quality gate failed after {attempts} attempts: "
-                f"best score {best_rejected.judgement.score}/10; {issue}"
-            )
-        pool = shippable
-    best = max(
-        pool, key=lambda candidate: (candidate.judgement.score, candidate.attempt)
-    )
-    try:
-        final_timeout = _remaining_timeout(
-            started, deadline_seconds, FINAL_RENDER_TIMEOUT
-        )
-        final_video, timing = _render(best.scene_file, spec, "m", final_timeout)
-        final_timing_error = _timing_feedback(timing, durations)
-        if final_timing_error:
-            raise _TimingInvalid(final_timing_error)
-    except Exception as exc:  # noqa: BLE001 - the accepted preview is the fallback
-        logger.warning(
-            "final render failed, using accepted preview: %s",
-            _failure_detail(exc),
-        )
-        final_video, timing = best.video, best.timing
-
-    lengths = beat_lengths(timing)
-    audio = concat_audio(
-        clips,
-        work_dir / "narration.mp3",
-        target_seconds=lengths,
-        timeout_seconds=_remaining_timeout(
-            started, deadline_seconds, FINAL_RENDER_TIMEOUT
-        ),
-    )
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    srt_path = out_path.with_suffix(".srt")
-    srt_path.write_text(build_srt(clips, durations=lengths), encoding="utf-8")
-    video_path = mux_final(
-        final_video,
-        audio,
-        out_path,
-        timeout_seconds=_remaining_timeout(
-            started, deadline_seconds, FINAL_RENDER_TIMEOUT
-        ),
-    )
-    return StoryResult(
-        video_path=Path(video_path),
-        srt_path=srt_path,
-        storyboard=storyboard,
-        scene_source=best.source,
-        visual_direction=visual_direction(best.source),
-        attempts=attempts,
-        judge_score=best.judgement.score,
-        judgement=best.judgement.model_dump(),
-        timing=timing,
-        selected_attempt=best.attempt,
-        passed=best.judgement.verdict == "pass",
-        attempt_records=attempt_records,
+    raise StoryFailed(
+        f"no renderable scene in {attempt_limit} attempts: " + "; ".join(failures)
     )

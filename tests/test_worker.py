@@ -714,12 +714,12 @@ def _fake_story_success(
         scene_source="class PaperStory: pass",
         visual_direction="A wave folds into a verified path.",
         attempts=2,
-        judge_score=8,
-        judgement={"score": 8, "beats": [], "verdict": "pass", "note": None},
-        timing={"beats": [], "total": 25.0},
+        timing={"beats": [], "total": 25.0, "layout_warnings": []},
         selected_attempt=2,
-        passed=True,
-        attempt_records=[{"attempt": 2, "status": "passed"}],
+        attempt_records=[
+            {"attempt": 1, "status": "render_error", "failure": "NameError: x"},
+            {"attempt": 2, "status": "shipped"},
+        ],
     )
 
 
@@ -926,9 +926,9 @@ def test_explain_story_path_ships_and_records_artifacts(
     assert len(videos) == 1
     row = videos[0]
     assert row["render_path"] == "story"
-    assert row["attempts"] == 2 and row["judge_score"] == 8
+    assert row["attempts"] == 2
     assert row["selected_attempt"] == 2
-    assert row["judge_passed"] is True
+    assert "judge_score" not in row and "judge_passed" not in row
     assert row["visual_direction"] == "A wave folds into a verified path."
     assert row["estimated_model_cost_usd"] == 0
     assert row["model_calls"] == []
@@ -942,8 +942,12 @@ def test_explain_story_path_ships_and_records_artifacts(
         story = json.loads(body.read())
     assert story["storyboard"]["title"] == "Recursive Self-Improvement in AI"
     assert story["visual_direction"] == "A wave folds into a verified path."
-    assert story["judgement"]["score"] == 8
-    assert story["attempt_records"] == [{"attempt": 2, "status": "passed"}]
+    assert "judgement" not in story and "passed" not in story
+    assert story["timing"]["layout_warnings"] == []
+    assert story["attempt_records"] == [
+        {"attempt": 1, "status": "render_error", "failure": "NameError: x"},
+        {"attempt": 2, "status": "shipped"},
+    ]
 
     _url, kwargs = next(
         call for call in telegram_calls if call[0].endswith("/sendVideo")
@@ -960,11 +964,7 @@ def test_upload_attempt_artifacts_replaces_local_paths_with_s3_keys(
 ):
     s3, _dynamodb, _table = moto_fabric
     source = tmp_path / "paper_story.py"
-    frame = tmp_path / "frame.png"
-    sheet = tmp_path / "sheet.png"
     source.write_text("class PaperStory: pass", encoding="utf-8")
-    frame.write_bytes(b"png")
-    sheet.write_bytes(b"sheet")
 
     records = _upload_attempt_artifacts(
         s3,
@@ -973,31 +973,24 @@ def test_upload_attempt_artifacts_replaces_local_paths_with_s3_keys(
         [
             {
                 "attempt": 1,
-                "status": "judge_fix",
+                "status": "render_error",
+                "failure": "NameError: x",
                 "source_path": str(source),
-                "frame_paths": [str(frame)],
-                "contact_sheet_paths": [str(sheet)],
-            }
+            },
+            {"attempt": 2, "status": "coder_error", "failure": "throttled"},
         ],
     )
 
     assert "source_path" not in records[0]
-    assert "frame_paths" not in records[0]
-    assert "contact_sheet_paths" not in records[0]
     assert records[0]["source_key"] == "stories/core-1/attempts/1/scene.py"
-    assert records[0]["frame_keys"] == ["stories/core-1/attempts/1/frame-01.png"]
-    assert records[0]["contact_sheet_keys"] == [
-        "stories/core-1/attempts/1/contact-sheet-01.png"
-    ]
+    assert records[1] == {"attempt": 2, "status": "coder_error", "failure": "throttled"}
     keys = {
         item["Key"]
         for item in s3.list_objects_v2(Bucket=BUCKET, Prefix="stories/core-1/")[
             "Contents"
         ]
     }
-    assert records[0]["source_key"] in keys
-    assert records[0]["frame_keys"][0] in keys
-    assert records[0]["contact_sheet_keys"][0] in keys
+    assert keys == {records[0]["source_key"]}
 
 
 def test_recent_visual_directions_returns_latest_distinct_story_concepts(moto_fabric):
@@ -1085,7 +1078,6 @@ def test_explain_story_failure_sends_digest_without_template_video(
             {
                 "story_model": "bedrock/deep-model",
                 "scene_model": "bedrock/deep-model",
-                "judge_model": "bedrock/deep-model",
             },
         ),
         (
@@ -1093,12 +1085,10 @@ def test_explain_story_failure_sends_digest_without_template_video(
                 "DEEP_READ_MODEL": "bedrock/deep-model",
                 "STORY_MODEL": "bedrock/story-model",
                 "SCENE_MODEL": "bedrock/scene-model",
-                "JUDGE_MODEL": "bedrock/judge-model",
             },
             {
                 "story_model": "bedrock/story-model",
                 "scene_model": "bedrock/scene-model",
-                "judge_model": "bedrock/judge-model",
             },
         ),
     ],

@@ -41,7 +41,6 @@ def run_story_video_for_url(url: str, out_dir: str) -> int:
             out / "video.mp4",
             story_model=os.environ.get("STORY_MODEL", model),
             scene_model=os.environ.get("SCENE_MODEL", model),
-            judge_model=os.environ.get("JUDGE_MODEL", model),
         )
     except StoryFailed as exc:
         print(f"story failed: {exc}", file=sys.stderr)
@@ -51,13 +50,10 @@ def run_story_video_for_url(url: str, out_dir: str) -> int:
         result.storyboard.model_dump_json(indent=1), encoding="utf-8"
     )
     (out / "paper_story.py").write_text(result.scene_source, encoding="utf-8")
-    (out / "judgement.json").write_text(
-        json.dumps(result.judgement, indent=1), encoding="utf-8"
+    (out / "timing.json").write_text(
+        json.dumps(result.timing, indent=1), encoding="utf-8"
     )
-    print(
-        f"video: {result.video_path}  attempts: {result.attempts}  "
-        f"judge: {result.judge_score}"
-    )
+    print(f"video: {result.video_path}  attempts: {result.attempts}")
     return 0
 
 
