@@ -532,3 +532,81 @@ def test_local_runner_main_parses_url_and_output(monkeypatch, tmp_path):
 
     assert exit_code == 0
     assert calls == [("https://example.com/paper", str(tmp_path))]
+
+
+@pytest.fixture
+def paper_checkpoints():
+    import boto3
+    from moto import mock_aws
+
+    from agentlab.stage_checkpoints import StageCheckpoints
+
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket="checkpoint-test")
+        yield StageCheckpoints(s3, "checkpoint-test", "arxiv:2510.03215")
+
+
+def _compose_with(tmp_path, checkpoints, plan_fingerprint="plan-1"):
+    return story_video.compose_story_video(
+        DIGEST,
+        PLAN,
+        polly_client=None,
+        voice_id="Ivy",
+        complete=lambda model, messages: "",
+        work_dir=tmp_path / "work",
+        out_path=tmp_path / "out" / "video.mp4",
+        story_model="s",
+        scene_model="c",
+        checkpoints=checkpoints,
+        plan_fingerprint=plan_fingerprint,
+    )
+
+
+def test_a_new_storyboard_is_saved_for_the_next_run(seams, paper_checkpoints, tmp_path):
+    from agentlab.stage_checkpoints import fingerprint
+
+    _compose_with(tmp_path, paper_checkpoints)
+
+    saved = paper_checkpoints.load(
+        "storyboard", fingerprint("storyboard", "s", "plan-1")
+    )
+    assert Storyboard.model_validate(saved) == BOARD
+
+
+def test_a_saved_storyboard_is_reused_without_a_model_call(
+    seams, paper_checkpoints, monkeypatch, tmp_path
+):
+    from agentlab.stage_checkpoints import fingerprint
+
+    paper_checkpoints.save(
+        "storyboard",
+        fingerprint("storyboard", "s", "plan-1"),
+        BOARD.model_dump(mode="json"),
+    )
+
+    def no_model_call(*args, **kwargs):
+        raise AssertionError("the storyboard model was called")
+
+    monkeypatch.setattr(story_video, "design_storyboard", no_model_call)
+
+    result = _compose_with(tmp_path, paper_checkpoints)
+
+    assert result.storyboard == BOARD
+
+
+def test_a_storyboard_from_another_deep_read_is_not_reused(
+    seams, paper_checkpoints, monkeypatch, tmp_path
+):
+    from agentlab.stage_checkpoints import fingerprint
+
+    other = BOARD.model_copy(update={"title": "From an older deep read"})
+    paper_checkpoints.save(
+        "storyboard",
+        fingerprint("storyboard", "s", "plan-0"),
+        other.model_dump(mode="json"),
+    )
+
+    result = _compose_with(tmp_path, paper_checkpoints, plan_fingerprint="plan-1")
+
+    assert result.storyboard == BOARD

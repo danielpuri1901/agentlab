@@ -14,6 +14,7 @@ internally, so tests can hit them directly against a moto-mocked client.
 
 import asyncio
 import json
+import logging
 import os
 import re
 import secrets
@@ -59,10 +60,12 @@ from agentlab.results import extract_results, mean_score, total_cost, total_toke
 from agentlab.scene_plan import (
     DEFAULT_DEEP_READ_MODEL,
     DEFAULT_PICK_MODEL,
+    ScenePlan,
     deep_read,
     rank_papers,
 )
 from agentlab.sources import gather_exploit, gather_explore
+from agentlab.stage_checkpoints import StageCheckpoints, fingerprint
 from agentlab.stats import paired_analysis, verdict
 from agentlab.story_video import StoryFailed, compose_story_video
 from agentlab.video_render import verify_voice
@@ -220,7 +223,9 @@ def propose_command() -> None:
 @worker_app.command("consolidate")
 def consolidate_command(
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="Print the candidate profile and eval. Write nothing. Ping nobody."
+        False,
+        "--dry-run",
+        help="Print the candidate profile and eval. Write nothing. Ping nobody.",
     ),
 ) -> None:
     """Weekly taste profile rewrite (Sunday 18:00 Amsterdam), gated by the probe eval."""
@@ -690,6 +695,13 @@ def _upload_attempt_artifacts(
     return records
 
 
+def _saved_deep_read(data: dict) -> tuple[str, ScenePlan]:
+    digest = data["digest"]
+    if not isinstance(digest, str) or not digest.strip():
+        raise ValueError("saved digest is empty")
+    return digest, ScenePlan.model_validate(data["plan"])
+
+
 def _recent_visual_directions(table, limit: int = 6) -> list[str]:
     items = []
     request = {}
@@ -767,7 +779,9 @@ def _run_explain_track(
         if not fresh:
             return "empty"
         mode = "novel" if track == "novel" else "core"
-        profile_text, profile_version = load_profile_text(table, s3_client, bucket, INTERESTS_PATH)
+        profile_text, profile_version = load_profile_text(
+            table, s3_client, bucket, INTERESTS_PATH
+        )
         baseline_ranking = rank_papers(
             fresh, profile_text, complete, mode=mode, model=pick_model, limit=len(fresh)
         )
@@ -804,12 +818,27 @@ def _run_explain_track(
         mark_seen(table, identity, url, title, candidate.get("source", track), track)
         partial["identity"] = identity
 
-    digest, plan = deep_read(
-        url,
-        _fetch_text,
-        bind(complete, extra_fields=_deep_read_extra_fields()),
-        model=deep_read_model,
+    # A retry of this paper (the second chance below, or a re-approval)
+    # loads each finished stage from S3 instead of paying for it again.
+    checkpoints = StageCheckpoints(s3_client, bucket, identity)
+    read_fingerprint = fingerprint("deep_read", deep_read_model, url)
+    saved_read = checkpoints.load_parsed(
+        "deep_read", read_fingerprint, _saved_deep_read
     )
+    if saved_read is None:
+        digest, plan = deep_read(
+            url,
+            _fetch_text,
+            bind(complete, extra_fields=_deep_read_extra_fields()),
+            model=deep_read_model,
+        )
+        checkpoints.save(
+            "deep_read",
+            read_fingerprint,
+            {"digest": digest, "plan": plan.model_dump(mode="json")},
+        )
+    else:
+        digest, plan = saved_read
     partial["claim"] = plan.one_line_claim
 
     key = _generate_video_key(track)
@@ -839,6 +868,8 @@ def _run_explain_track(
                 story_model=story_model,
                 scene_model=scene_model,
                 recent_visual_directions=_recent_visual_directions(table),
+                checkpoints=checkpoints,
+                plan_fingerprint=read_fingerprint,
             )
         except StoryFailed as exc:
             transition(
@@ -967,6 +998,10 @@ def explain_command() -> None:
     the error, in STE style) and the run continues to the next track -
     silence must never mean broken.
     """
+    # Stage checkpoint hits and misses log at INFO; make them visible in
+    # CloudWatch. basicConfig does nothing if a handler already exists.
+    logging.basicConfig(format="%(levelname)s %(name)s: %(message)s")
+    logging.getLogger("agentlab").setLevel(logging.INFO)
     state_table = _require_env("STATE_TABLE")
     results_bucket = _require_env("RESULTS_BUCKET")
     track_env = os.environ.get("TRACK", "all").strip().lower()

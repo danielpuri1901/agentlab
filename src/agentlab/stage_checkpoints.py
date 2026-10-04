@@ -80,6 +80,23 @@ class StageCheckpoints:
         logger.info("checkpoint hit: %s", key)
         return data
 
+    def load_parsed(self, stage: str, stage_fingerprint: str, parse):
+        """The saved output turned into a typed value by parse, or None.
+
+        parse raises KeyError, TypeError, or ValueError (a pydantic
+        ValidationError is a ValueError) when the saved shape no longer fits
+        the code, for example after a schema change. That is a miss too.
+        """
+        data = self.load(stage, stage_fingerprint)
+        if data is None:
+            return None
+        try:
+            return parse(data)
+        except (KeyError, TypeError, ValueError) as exc:
+            key = self.key(stage, stage_fingerprint)
+            logger.info("checkpoint miss: %s (unusable: %s)", key, type(exc).__name__)
+            return None
+
     def save(self, stage: str, stage_fingerprint: str, data: dict) -> None:
         """Write a stage output. A failure only logs a warning."""
         key = self.key(stage, stage_fingerprint)
@@ -94,6 +111,19 @@ class StageCheckpoints:
             logger.warning("checkpoint save failed: %s (%s)", key, _reason(exc))
             return
         logger.info("checkpoint saved: %s", key)
+
+
+class NoCheckpoints:
+    """Stands in when a run has no S3 folder: every load misses, saves do nothing."""
+
+    def load(self, stage: str, stage_fingerprint: str) -> None:
+        return None
+
+    def load_parsed(self, stage: str, stage_fingerprint: str, parse) -> None:
+        return None
+
+    def save(self, stage: str, stage_fingerprint: str, data: dict) -> None:
+        return None
 
 
 def _reason(exc: Exception) -> str:

@@ -322,11 +322,27 @@ def test_propose_command_flushes_then_proposes(monkeypatch):
 def test_consolidate_command_wires_env_and_dry_run(monkeypatch):
     seen = {}
 
-    def fake_run(table, s3_client, ssm_client, bucket, model, probe_model, golden_path, seed_path, now=None, dry_run=False):
-        seen.update(bucket=bucket, model=model, probe_model=probe_model, dry_run=dry_run)
+    def fake_run(
+        table,
+        s3_client,
+        ssm_client,
+        bucket,
+        model,
+        probe_model,
+        golden_path,
+        seed_path,
+        now=None,
+        dry_run=False,
+    ):
+        seen.update(
+            bucket=bucket, model=model, probe_model=probe_model, dry_run=dry_run
+        )
         seen["golden"] = str(golden_path)
         seen["seed"] = str(seed_path)
-        return {"text": "Taste profile update.\nApplied: no. test", "candidate": "# Daniel's taste profile\nx"}
+        return {
+            "text": "Taste profile update.\nApplied: no. test",
+            "candidate": "# Daniel's taste profile\nx",
+        }
 
     monkeypatch.setattr("agentlab.consolidate.run_consolidate", fake_run)
 
@@ -825,7 +841,9 @@ def test_complete_long_rejects_truncated_output(monkeypatch, finish_reason):
         worker_mod._complete_long("bedrock/story-model", [])
 
 
-@pytest.mark.parametrize(("env", "effort"), [({}, "high"), ({"STORY_EFFORT": "max"}, "max")])
+@pytest.mark.parametrize(
+    ("env", "effort"), [({}, "high"), ({"STORY_EFFORT": "max"}, "max")]
+)
 def test_complete_long_sends_story_effort_through_bedrock_converse(
     monkeypatch, env, effort
 ):
@@ -1170,6 +1188,8 @@ def test_explain_passes_story_model_defaults_and_overrides(
 
     result = runner.invoke(app, ["worker", "explain"])
     assert result.exit_code == 0, result.output
+    assert captured.pop("checkpoints").folder == "checkpoints/arxiv-9911.00001"
+    assert len(captured.pop("plan_fingerprint")) == 12
     assert captured == {**expected, "recent_visual_directions": []}
 
 
@@ -1236,7 +1256,15 @@ def test_explain_ranks_with_the_profile_and_collects_clarity(
     _set_explain_env(monkeypatch, track="core")
     _set_daytime(monkeypatch)
     write_profile(s3, BUCKET, "profile/v3.md", "PROFILE V3 TEXT")
-    set_pointer(table, "v3", "profile/v3.md", None, "consolidate", {}, datetime(2026, 8, 18, 16, 0, tzinfo=UTC))
+    set_pointer(
+        table,
+        "v3",
+        "profile/v3.md",
+        None,
+        "consolidate",
+        {},
+        datetime(2026, 8, 18, 16, 0, tzinfo=UTC),
+    )
     monkeypatch.setattr("agentlab.worker.gather_exploit", lambda: [CORE_CANDIDATE])
     captured = {}
 
@@ -1260,7 +1288,9 @@ def test_explain_ranks_with_the_profile_and_collects_clarity(
     assert result.exit_code == 0, result.output
     assert captured["interests"] == "PROFILE V3 TEXT"
     assert captured["mode"] == "core"
-    _url, kwargs = next(call for call in telegram_calls if call[0].endswith("/sendVideo"))
+    _url, kwargs = next(
+        call for call in telegram_calls if call[0].endswith("/sendVideo")
+    )
     assert kwargs["data"]["caption"].startswith("[CORE] Core Candidate Paper\n")
     keyboard = json.loads(kwargs["data"]["reply_markup"])["inline_keyboard"]
     assert [button["text"] for button in keyboard[0]] == ["COOL", "MEH", "SKIP"]
@@ -1345,7 +1375,9 @@ def test_explain_operator_replay_links_video_to_proposal(
     monkeypatch.setenv("EXPLAIN_TITLE", "Cache-to-Cache")
     monkeypatch.setenv("PID", "prop-1")
     _set_daytime(monkeypatch)
-    file_proposal(table, "prop-1", "Cache-to-Cache", "why", replay_url, "d", "new_hypothesis")
+    file_proposal(
+        table, "prop-1", "Cache-to-Cache", "why", replay_url, "d", "new_hypothesis"
+    )
     _patch_explain_render_stages(monkeypatch, story=_fake_story_success)
 
     result = runner.invoke(app, ["worker", "explain"])
@@ -1521,3 +1553,42 @@ def test_explain_invalid_track_env_exits_nonzero(moto_fabric_with_ssm, monkeypat
     _set_explain_env(monkeypatch, track="bogus")
     result = runner.invoke(app, ["worker", "explain"])
     assert result.exit_code != 0
+
+
+def test_explain_retry_loads_the_saved_deep_read_instead_of_reading_again(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    _set_daytime(monkeypatch)
+    _set_explain_env(monkeypatch, track="core")
+    monkeypatch.setenv("EXPLAIN_URL", CORE_CANDIDATE["url"])
+    monkeypatch.setenv("EXPLAIN_TITLE", CORE_CANDIDATE["title"])
+    reads = []
+    fake_read = _make_fake_deep_read()
+
+    def counting_deep_read(url, fetch_text, complete, model=None):
+        reads.append((url, model))
+        return fake_read(url, fetch_text, complete, model=model)
+
+    _patch_explain_render_stages(monkeypatch, story=_fake_story_failed)
+    monkeypatch.setattr("agentlab.worker.deep_read", counting_deep_read)
+    first = runner.invoke(app, ["worker", "explain"])
+    assert "explain: core=failed" in first.output
+
+    _patch_explain_render_stages(monkeypatch, story=_fake_story_success)
+    monkeypatch.setattr("agentlab.worker.deep_read", counting_deep_read)
+    second = runner.invoke(app, ["worker", "explain"])
+    assert "explain: core=sent" in second.output
+
+    assert len(reads) == 1
+    keys = {
+        o["Key"] for o in boto3.client("s3").list_objects_v2(Bucket=BUCKET)["Contents"]
+    }
+    assert any(
+        key.startswith("checkpoints/arxiv-9911.00001/deep_read-") for key in keys
+    )
+
+    monkeypatch.setenv("DEEP_READ_MODEL", "another-model")
+    third = runner.invoke(app, ["worker", "explain"])
+    assert "explain: core=sent" in third.output
+    assert len(reads) == 2
+    assert reads[-1][1] == "another-model"

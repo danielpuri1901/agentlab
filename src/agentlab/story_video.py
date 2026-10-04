@@ -31,6 +31,7 @@ from agentlab.scene_code import (
     write_scene_code,
 )
 from agentlab.scene_plan import ScenePlan
+from agentlab.stage_checkpoints import NoCheckpoints, fingerprint
 from agentlab.story_scene import SCENE_CLASS, TIMING_ENV, beat_lengths
 from agentlab.storyboard import Storyboard, StoryboardInvalid, design_storyboard
 from agentlab.video_render import (
@@ -212,7 +213,12 @@ def compose_story_video(
     max_attempts: int = MAX_ATTEMPTS,
     deadline_seconds: int = VIDEO_DEADLINE_SECONDS,
     recent_visual_directions: list[str] | None = None,
+    checkpoints=None,
+    plan_fingerprint: str = "",
 ) -> StoryResult:
+    """checkpoints is a StageCheckpoints for the paper, or None for no reuse.
+    plan_fingerprint names the deep read that produced digest and plan, so a
+    saved storyboard is only reused for the same deep read."""
     try:
         return _compose(
             digest,
@@ -227,6 +233,8 @@ def compose_story_video(
             max_attempts,
             deadline_seconds,
             recent_visual_directions,
+            checkpoints or NoCheckpoints(),
+            plan_fingerprint,
         )
     except StoryFailed:
         raise
@@ -247,20 +255,30 @@ def _compose(
     max_attempts,
     deadline_seconds,
     recent_visual_directions,
+    checkpoints,
+    plan_fingerprint,
 ) -> StoryResult:
     started = time.monotonic()
     bounded_complete = _deadline_bound_completion(complete, started, deadline_seconds)
     work_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        storyboard = design_storyboard(
-            digest,
-            plan,
-            bounded_complete,
-            model=story_model,
-            recent_visual_directions=recent_visual_directions,
+    board_fingerprint = fingerprint("storyboard", story_model, plan_fingerprint)
+    storyboard = checkpoints.load_parsed(
+        "storyboard", board_fingerprint, Storyboard.model_validate
+    )
+    if storyboard is None:
+        try:
+            storyboard = design_storyboard(
+                digest,
+                plan,
+                bounded_complete,
+                model=story_model,
+                recent_visual_directions=recent_visual_directions,
+            )
+        except StoryboardInvalid as exc:
+            raise StoryFailed(f"storyboard: {exc}") from exc
+        checkpoints.save(
+            "storyboard", board_fingerprint, storyboard.model_dump(mode="json")
         )
-    except StoryboardInvalid as exc:
-        raise StoryFailed(f"storyboard: {exc}") from exc
 
     captions = [beat.narration for beat in storyboard.beats]
     clips = narrate(polly_client, captions, voice_id, work_dir / "narration")

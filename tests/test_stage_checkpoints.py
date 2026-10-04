@@ -8,6 +8,7 @@ from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from agentlab.stage_checkpoints import (
+    NoCheckpoints,
     StageCheckpoints,
     fingerprint,
     paper_folder,
@@ -123,3 +124,30 @@ def test_paper_folders_are_readable_and_safe():
     long_folder = paper_folder("title:" + "very long title " * 20)
     assert len(long_folder) <= 60 + 9
     assert paper_folder("title:a/b c") != paper_folder("title:a b/c")
+
+
+def test_load_parsed_returns_the_typed_value(s3):
+    checkpoints = StageCheckpoints(s3, BUCKET, "arxiv:2510.03215")
+    checkpoints.save("deep_read", "abc", {"digest": "# Digest"})
+
+    assert (
+        checkpoints.load_parsed("deep_read", "abc", lambda d: d["digest"]) == "# Digest"
+    )
+
+
+def test_a_saved_shape_the_code_no_longer_reads_is_a_miss(s3):
+    checkpoints = StageCheckpoints(s3, BUCKET, "arxiv:2510.03215")
+    checkpoints.save("deep_read", "abc", {"old_field": 1})
+
+    def parse(data):
+        return data["digest"]
+
+    assert checkpoints.load_parsed("deep_read", "abc", parse) is None
+
+
+def test_no_checkpoints_always_misses_and_saves_nothing():
+    checkpoints = NoCheckpoints()
+    checkpoints.save("deep_read", "abc", {"digest": "x"})
+
+    assert checkpoints.load("deep_read", "abc") is None
+    assert checkpoints.load_parsed("deep_read", "abc", dict) is None
