@@ -11,6 +11,7 @@ GOLDEN_BOARD = Path(__file__).parent / "fixtures" / "storyboard_golden.json"
 
 def test_module_imports_without_manim_and_exposes_pure_helpers():
     assert callable(story_scene.overrun_report)
+    assert callable(story_scene.layout_warning)
     assert story_scene.SCENE_CLASS == "PaperStory"
     assert story_scene.STAGE_BOTTOM < 0 < story_scene.STAGE_TOP
 
@@ -118,7 +119,67 @@ def test_golden_scene_renders_and_writes_timing(tmp_path):
     )
     assert all(b["overrun"] < 0.05 for b in timing["beats"])
     assert abs(timing["total"] - sum(durations)) < 0.2
+    assert timing["layout_warnings"] == []
     assert abs(video_render.ffprobe_duration(video) - sum(durations)) < 0.5
+
+
+CAMERA_SCENE = '''# Visual direction: A sphere under an orbiting camera, a square lost off stage.
+from manim import DEGREES, LEFT, Create, FadeIn, Sphere, Square
+from story_scene import StoryScene
+
+
+class PaperStory(StoryScene):
+    def beat_1(self):
+        self.ball = Sphere(radius=1.0, resolution=(8, 8))
+        self.play(Create(self.ball), run_time=0.5)
+        self.move_camera(phi=70 * DEGREES, theta=-45 * DEGREES, zoom=0.8, run_time=1.0)
+        self.begin_ambient_camera_rotation(rate=0.4)
+
+    def beat_2(self):
+        self.lost = Square(side_length=1.0).shift(LEFT * 8)
+        self.play(FadeIn(self.lost), run_time=0.5)
+
+    def beat_3(self):
+        self.clear_stage()
+        self.hold(2.5)
+'''
+
+
+@pytest.mark.render
+def test_camera_moves_render_and_layout_problems_only_warn(tmp_path):
+    """A 3D scene with camera moves renders; a square left off the stage and
+    a beat longer than its narration are recorded, not fatal."""
+    import shutil
+
+    from agentlab import video_render
+
+    scene_dir = tmp_path / "scene"
+    scene_dir.mkdir()
+    (scene_dir / "paper_story.py").write_text(CAMERA_SCENE, encoding="utf-8")
+    shutil.copy(Path(story_scene.__file__), scene_dir / "story_scene.py")
+    durations = [2.0, 2.0, 2.0]
+    timing_path = tmp_path / "beat_times.json"
+
+    video = video_render.render_scene_video(
+        scene_dir / "paper_story.py",
+        "PaperStory",
+        {
+            "storyboard": {"beats": [{}, {}, {}]},
+            "durations": durations,
+            "captions": ["one", "two", "three"],
+        },
+        tmp_path / "media",
+        quality="l",
+        extra_env={"SCENE_TIMING_OUT": str(timing_path)},
+    )
+
+    assert video.exists()
+    timing = json.loads(timing_path.read_text(encoding="utf-8"))
+    assert [b["beat"] for b in timing["beats"]] == [1, 2, 3]
+    assert timing["beats"][2]["overrun"] > 0.5
+    assert len(timing["layout_warnings"]) == 1
+    assert timing["layout_warnings"][0].startswith("beat 2 layout:")
+    assert "left edge" in timing["layout_warnings"][0]
 
 
 @pytest.mark.render
@@ -203,6 +264,27 @@ def test_layout_problems_ignores_the_caption_band_before_a_caption_exists():
     boxes = [("intro", -1.0, 1.0, story_scene.STAGE_BOTTOM, -1.0)]
 
     assert story_scene.layout_problems(boxes, caption_top=None) == []
+
+
+def test_layout_warning_names_the_beat_and_the_element_instead_of_raising():
+    boxes = [("hexagons", story_scene.STAGE_LEFT - 0.6, -2.0, 0.0, 1.0)]
+
+    warning = story_scene.layout_warning(3, boxes)
+
+    assert warning == "beat 3 layout: hexagons runs off the left edge"
+
+
+def test_layout_warning_is_none_when_everything_is_on_stage():
+    boxes = [("title", -2.0, 2.0, 2.0, 3.0)]
+
+    assert story_scene.layout_warning(1, boxes, caption_top=-2.0) is None
+
+
+def test_layout_warning_lists_at_most_a_few_problems():
+    far = 99.0
+    warning = story_scene.layout_warning(2, [("blob", -far, far, -far, far)] * 3)
+
+    assert warning.count("blob") == story_scene.MAX_REPORTED_PROBLEMS
 
 
 def test_layout_problems_ignores_mobjects_that_draw_nothing():

@@ -10,13 +10,18 @@ generated code says `from story_scene import StoryScene`.
 Reads SCENE_SPEC_JSON: {"storyboard": <Storyboard.model_dump()>,
 "durations": [seconds per beat], "captions": [text per beat]}.
 Writes SCENE_TIMING_OUT at the end of construct: {"beats": [{"beat",
-"start", "end", "narration", "overrun"}], "total"}.
+"start", "end", "narration", "overrun"}], "total", "layout_warnings"}.
 
 The base class owns: background, the caption band (bottom of frame,
-swapped at the start of every beat), safe-margin fitting, and timing (each
-beat is padded with a hold so its length is at least its narration's
-length, so the audio muxed later lines up). The generated class owns
-everything the viewer watches: one method per beat, beat_1 .. beat_n.
+swapped at the start of every beat and pinned to the screen so camera
+moves never tilt it), safe-margin fitting, and timing (each beat is padded
+with a hold so its length is at least its narration's length, so the audio
+muxed later lines up). The generated class owns everything the viewer
+watches: one method per beat, beat_1 .. beat_n.
+
+StoryScene is a ThreeDScene, so the generated code may move the camera and
+draw 3D mobjects. The camera starts flat, looking straight at the stage,
+where 2D content renders exactly as it does in a plain Scene.
 
 Scene.time is manim's renderer clock (Manim Community 0.21: Scene.time
 returns renderer.time, advanced by every play and wait).
@@ -24,8 +29,8 @@ Final holds are rounded up by one frame when Manim truncates a fractional
 static wait, so a visual beat never ends before its narration.
 
 The pure helpers above the manim import (beat_record, overrun_report,
-beat_midpoints, beat_lengths, wrap_text, load_spec) are importable from the
-main venv without manim, and story_video.py uses them.
+layout_warning, beat_midpoints, beat_lengths, wrap_text, load_spec) are
+importable from the main venv without manim, and story_video.py uses them.
 """
 
 import json
@@ -83,14 +88,9 @@ MAX_REPORTED_PROBLEMS = 4
 def layout_problems(boxes, caption_top=None) -> list[str]:
     """Name every box that leaves the stage or sits on the caption band.
 
-    Pure geometry, deliberately. The frame judge described these in prose
-    ("the context window rectangle clips the caption band", "the label box
-    overlaps the accuracy bar") after a render, a frame sample and a judge
-    call had all been paid for, and the coder then guessed at new
-    coordinates. On 2026-09-23 four attempts in a row failed this way on
-    every video. The same faults are exact rectangle arithmetic, so they are
-    caught during the render, before a single judge token is spent, and the
-    coder is told which element and which edge.
+    Pure geometry, deliberately: the faults the frame judge once described
+    in prose ("the context window rectangle clips the caption band") are
+    exact rectangle arithmetic. The result is advisory, see layout_warning.
 
     `boxes` is [(name, left, right, bottom, top)]. `caption_top` is the top
     of the caption band, or None when there is no caption yet.
@@ -117,6 +117,19 @@ def layout_problems(boxes, caption_top=None) -> list[str]:
         ):
             problems.append(f"{name} sits on the caption band")
     return problems
+
+
+def layout_warning(beat: int, boxes, caption_top=None) -> str | None:
+    """One line naming what sits off the stage at the end of a beat, or None.
+
+    Advisory: the base class records it in the timing output and never
+    fails a render on it. The boxes are world coordinates, and once the
+    generated scene moves the camera they stop matching what is on screen.
+    """
+    problems = layout_problems(boxes, caption_top)
+    if not problems:
+        return None
+    return f"beat {beat} layout: " + "; ".join(problems[:MAX_REPORTED_PROBLEMS])
 
 
 def beat_record(index: int, start: float, end: float, narration_seconds: float) -> dict:
@@ -164,8 +177,8 @@ try:
         WHITE,
         FadeIn,
         FadeOut,
-        Scene,
         Text,
+        ThreeDScene,
         ValueTracker,
     )
     from manim.utils.color import (  # noqa: F401 - re-exported for generated scenes
@@ -204,7 +217,7 @@ if _MANIM_AVAILABLE:
         return type(mobject).__name__
 
 
-    class StoryScene(Scene):
+    class StoryScene(ThreeDScene):
         """Subclass as PaperStory, define beat_1 .. beat_n, never override
         construct. See the API cheat-sheet in agentlab.scene_code."""
 
@@ -219,6 +232,7 @@ if _MANIM_AVAILABLE:
                 raise ValueError(f"spec has {len(durations)} durations and {len(captions)} captions for {n} beats")
             self._caption = None
             self._timing: list[dict] = []
+            self._layout_warnings: list[str] = []
             for i in range(n):
                 method = getattr(self, f"beat_{i + 1}", None)
                 if method is None:
@@ -276,9 +290,15 @@ if _MANIM_AVAILABLE:
             return mobject
 
         def clear_stage(self, run_time: float = 0.4):
-            """Fade out everything except the caption."""
+            """Fade out everything except the caption. Value trackers draw
+            nothing and include the camera's own angles, so they stay and an
+            ambient camera rotation keeps turning."""
             keep = id(self._caption) if self._caption is not None else None
-            targets = [m for m in list(self.mobjects) if id(m) != keep]
+            targets = [
+                m
+                for m in list(self.mobjects)
+                if id(m) != keep and not isinstance(m, ValueTracker)
+            ]
             for m in targets:
                 m.clear_updaters()
             if targets:
@@ -291,9 +311,9 @@ if _MANIM_AVAILABLE:
         # -- owned by the base class -------------------------------------------
 
         def _audit_layout(self, beat: int):
-            """Fail the render when this beat's final frame is off-stage or on
-            the caption band. Runs after the beat method returns, so every
-            mobject is at its resting position."""
+            """Record what is off-stage or on the caption band at the end of
+            this beat. Runs after the beat method returns, so every mobject
+            is at its resting position. Never fails the render."""
             caption_top = None
             if self._caption is not None:
                 caption_top = float(self._caption.get_top()[1])
@@ -312,16 +332,9 @@ if _MANIM_AVAILABLE:
                         float(mobject.get_top()[1]),
                     )
                 )
-            problems = layout_problems(boxes, caption_top)
-            if problems:
-                raise ValueError(
-                    f"beat {beat} layout: "
-                    + "; ".join(problems[:MAX_REPORTED_PROBLEMS])
-                    + f". The stage is x {STAGE_LEFT} to {STAGE_RIGHT}, y "
-                    f"{STAGE_BOTTOM} to {STAGE_TOP}, and the caption band is "
-                    "below that. Place every element inside the stage and call "
-                    "self.fit on it."
-                )
+            warning = layout_warning(beat, boxes, caption_top)
+            if warning:
+                self._layout_warnings.append(warning)
 
         def _swap_caption(self, text: str):
             new = self.fit(
@@ -330,6 +343,7 @@ if _MANIM_AVAILABLE:
                 max_h=CAPTION_MAX_HEIGHT,
             )
             new.to_edge(DOWN, buff=0.3)
+            self.add_fixed_in_frame_mobjects(new)
             anims = [FadeIn(new)]
             if self._caption is not None:
                 anims.append(FadeOut(self._caption))
@@ -340,6 +354,9 @@ if _MANIM_AVAILABLE:
             path = os.environ.get(TIMING_ENV)
             if not path:
                 return
-            Path(path).write_text(
-                json.dumps({"beats": self._timing, "total": float(self.time)}, indent=1), encoding="utf-8"
-            )
+            timing = {
+                "beats": self._timing,
+                "total": float(self.time),
+                "layout_warnings": self._layout_warnings,
+            }
+            Path(path).write_text(json.dumps(timing, indent=1), encoding="utf-8")
