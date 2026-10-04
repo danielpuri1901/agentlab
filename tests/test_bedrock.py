@@ -28,6 +28,39 @@ def test_build_converse_request_places_cache_points_after_stable_prefixes():
         {"text": "This is a fix round.\nold code\nfeedback"},
     ]
     assert request["inferenceConfig"] == {"maxTokens": 12000}
+    assert "additionalModelRequestFields" not in request
+
+
+def test_build_converse_request_asks_for_the_output_effort():
+    request = build_converse_request(
+        [{"role": "user", "content": "Write the scene."}],
+        model="bedrock/arn:aws:bedrock:eu-west-1:123:application-inference-profile/x",
+        max_tokens=32000,
+        effort="high",
+    )
+
+    assert request["additionalModelRequestFields"] == {
+        "output_config": {"effort": "high"}
+    }
+    assert request["inferenceConfig"] == {"maxTokens": 32000}
+
+
+def test_response_from_converse_leaves_thinking_out_of_the_text():
+    response = response_from_converse(
+        {
+            "output": {
+                "message": {
+                    "content": [
+                        {"reasoningContent": {"reasoningText": {"text": "plan"}}},
+                        {"text": "answer"},
+                    ]
+                }
+            },
+            "usage": {"inputTokens": 1, "outputTokens": 2},
+        }
+    )
+
+    assert response.choices[0].message.content == "answer"
 
 
 def test_build_converse_request_keeps_retry_history_under_cache_point_limit():
@@ -73,8 +106,8 @@ def test_response_from_converse_preserves_cache_usage():
 def test_worker_uses_bedrock_converse_for_application_profile(monkeypatch):
     calls = []
 
-    def fake_converse(model, messages, *, max_tokens, timeout):
-        calls.append((model, messages, max_tokens, timeout))
+    def fake_converse(model, messages, *, max_tokens, timeout, effort=None):
+        calls.append((model, messages, max_tokens, timeout, effort))
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
             usage=SimpleNamespace(
@@ -97,9 +130,10 @@ def test_worker_uses_bedrock_converse_for_application_profile(monkeypatch):
         stage="video",
         usage_sink=usage,
         pricing_model="anthropic.claude-sonnet-4-6",
+        effort="high",
     )
 
     assert len(calls) == 1
-    assert calls[0][2:] == (100, 7)
+    assert calls[0][2:] == (100, 7, "high")
     assert usage[0].cache_read_input_tokens == 5
     assert usage[0].cache_write_input_tokens == 3

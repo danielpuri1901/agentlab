@@ -52,8 +52,15 @@ def _content_blocks(content, *, cache_stable_prefix: bool = False) -> list[dict]
 
 
 def build_converse_request(
-    messages: list[dict], *, model: str, max_tokens: int
+    messages: list[dict], *, model: str, max_tokens: int, effort: str | None = None
 ) -> dict:
+    """Map chat messages to one Converse request.
+
+    `effort`, when set, asks the model for that output effort through
+    additionalModelRequestFields (Bedrock accepted the field live on
+    2026-10-04). Thinking then comes back as reasoningContent blocks, which
+    response_from_converse leaves out of the text.
+    """
     system = []
     converse_messages = []
     first_user = True
@@ -76,12 +83,15 @@ def build_converse_request(
             converse_messages.append({"role": role, "content": blocks})
     if system and system[-1].get("cachePoint") is None:
         system.append({"cachePoint": {"type": "default"}})
-    return {
+    request = {
         "modelId": _model_id(model),
         "system": system,
         "messages": converse_messages,
         "inferenceConfig": {"maxTokens": max_tokens},
     }
+    if effort:
+        request["additionalModelRequestFields"] = {"output_config": {"effort": effort}}
+    return request
 
 
 def response_from_converse(response: dict):
@@ -104,7 +114,14 @@ def response_from_converse(response: dict):
     )
 
 
-def converse(model: str, messages: list[dict], *, max_tokens: int, timeout: int):
+def converse(
+    model: str,
+    messages: list[dict],
+    *,
+    max_tokens: int,
+    timeout: int,
+    effort: str | None = None,
+):
     import boto3
     from botocore.config import Config
 
@@ -116,6 +133,8 @@ def converse(model: str, messages: list[dict], *, max_tokens: int, timeout: int)
         ),
     )
     response = client.converse(
-        **build_converse_request(messages, model=model, max_tokens=max_tokens)
+        **build_converse_request(
+            messages, model=model, max_tokens=max_tokens, effort=effort
+        )
     )
     return response_from_converse(response)

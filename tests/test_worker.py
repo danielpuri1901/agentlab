@@ -796,7 +796,7 @@ def test_complete_long_allows_story_output_budget_and_timeout(monkeypatch):
                 },
                 {"role": "user", "content": "Write the scene."},
             ],
-            "max_tokens": 12000,
+            "max_tokens": 32000,
             "timeout": 37,
         }
     ]
@@ -823,6 +823,37 @@ def test_complete_long_rejects_truncated_output(monkeypatch, finish_reason):
 
     with pytest.raises(ValueError, match="token limit"):
         worker_mod._complete_long("bedrock/story-model", [])
+
+
+@pytest.mark.parametrize(("env", "effort"), [({}, "high"), ({"STORY_EFFORT": "max"}, "max")])
+def test_complete_long_sends_story_effort_through_bedrock_converse(
+    monkeypatch, env, effort
+):
+    calls = []
+
+    def fake_converse(model, messages, *, max_tokens, timeout, effort=None):
+        calls.append({"max_tokens": max_tokens, "timeout": timeout, "effort": effort})
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="complete"), finish_reason="stop"
+                )
+            ]
+        )
+
+    monkeypatch.setattr(worker_mod, "bedrock_converse", fake_converse)
+    monkeypatch.delenv("STORY_EFFORT", raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    text = worker_mod._complete_long(
+        "bedrock/arn:aws:bedrock:eu-west-1:123:application-inference-profile/opus",
+        [{"role": "user", "content": "Write the scene."}],
+        timeout=600,
+    )
+
+    assert text == "complete"
+    assert calls == [{"max_tokens": 32000, "timeout": 600, "effort": effort}]
 
 
 @pytest.mark.parametrize(

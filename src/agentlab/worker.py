@@ -73,6 +73,8 @@ _ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5})")
 EXPLAIN_TRACKS = ("core", "classic", "novel")
 DIGEST_URL_EXPIRY_SECONDS = 7 * 24 * 3600
 MODEL_CALL_TIMEOUT_SECONDS = 180
+LONG_COMPLETION_MAX_TOKENS = 32000
+DEFAULT_STORY_EFFORT = "high"
 DEFAULT_DEEP_READ_PRICE_MODEL = "bedrock/global.anthropic.claude-sonnet-4-6"
 DEFAULT_PICK_PRICE_MODEL = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -435,6 +437,7 @@ def _run_completion(
     stage: str,
     usage_sink: list[ModelCallUsage] | None = None,
     pricing_model: str | None = None,
+    effort: str | None = None,
 ):
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     import litellm
@@ -447,6 +450,7 @@ def _run_completion(
             messages,
             max_tokens=max_tokens,
             timeout=timeout,
+            effort=effort,
         )
     else:
         request_messages = messages
@@ -501,20 +505,24 @@ def _complete_long(
     pricing_model: str | None = None,
     timeout: int = MODEL_CALL_TIMEOUT_SECONDS,
 ) -> str:
-    """The story path's model calls allow complete generated scene files.
+    """The story path's model calls: storyboards and complete scene files.
 
-    A scene file does not fit the deep read's 3000-token budget, so this
-    completion allows 12000 output tokens and a 180 second timeout. The lazy
-    litellm import avoids the same circular import as `_complete`.
+    Opus 5.5 always thinks, and thinking counts against the output budget, so
+    this completion allows 32000 output tokens. STORY_EFFORT (default "high")
+    sets the output effort; only the Bedrock Converse path, which application
+    inference profile ARNs take, sends it. The story path passes the timeout
+    from the video's remaining budget. The lazy litellm import avoids the
+    same circular import as `_complete`.
     """
     response = _run_completion(
         model,
         messages,
-        max_tokens=12000,
+        max_tokens=LONG_COMPLETION_MAX_TOKENS,
         timeout=timeout,
         stage="video",
         usage_sink=usage_sink,
         pricing_model=pricing_model,
+        effort=os.environ.get("STORY_EFFORT", DEFAULT_STORY_EFFORT),
     )
     choice = response.choices[0]
     if getattr(choice, "finish_reason", None) in {"length", "max_tokens"}:
