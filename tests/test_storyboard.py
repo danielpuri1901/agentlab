@@ -272,10 +272,42 @@ def test_parse_storyboard_builds_question_beat_from_scene_plan(golden, plan):
     assert board.beats[-1].narration == plan.street_test_question
 
 
-def test_parse_storyboard_result_uses_a_grounded_key_number(golden, plan):
+def test_parse_storyboard_accepts_any_role_order_and_a_result_without_a_key_number(
+    golden, plan
+):
+    """The rule that the result beat must quote a key number killed the
+    approved "Scaling Laws for Neural Language Models" video on 2026-10-04
+    after three storyboard attempts. No rule places content in a beat now."""
     result = next(beat for beat in golden["beats"] if beat["role"] == "result")
     result["narration"] = "The system gets a useful result."
     result["on_screen_text"] = ["result"]
+    golden["beats"] = list(reversed(golden["beats"]))
+
     board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
-    assert board is None
-    assert "key number" in error
+
+    assert error == ""
+    assert [beat.role for beat in board.beats][-1] == "title"
+
+
+@pytest.mark.parametrize("escaped", [False, True])
+def test_parse_storyboard_turns_an_em_dash_into_a_hyphen(golden, plan, escaped):
+    golden["beats"][2]["narration"] = "The gate opens — then it checks."
+    golden["visual_focus"] = "A gate—and a path."
+
+    board, error = sb.parse_storyboard(
+        json.dumps(golden, ensure_ascii=escaped), DIGEST, plan
+    )
+
+    assert error == ""
+    assert board.beats[2].narration == "The gate opens - then it checks."
+    assert board.visual_focus == "A gate-and a path."
+
+
+def test_parse_storyboard_clips_a_definition_too_long_for_the_title_beat(golden, plan):
+    golden["simple_definition"] = "word " * 40
+
+    board, error = sb.parse_storyboard(json.dumps(golden), DIGEST, plan)
+
+    assert error == ""
+    assert len(board.beats[0].narration) <= sb.MAX_NARRATION
+    assert board.beats[0].narration.startswith(f"{plan.title}. word word")

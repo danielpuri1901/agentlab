@@ -67,17 +67,10 @@ class StoryboardInvalid(ValueError):
 
 
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?%|\d{3,}")
-_ANALOGY_OPEN_RE = re.compile(
-    r"\b(imagine|picture this|think of|it is like|it's like|as if)\b", re.IGNORECASE
-)
 
 
 def _normalise(text: str) -> str:
     return text.replace(",", "").replace(" %", "%")
-
-
-def _plain(text: str) -> str:
-    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
 
 
 def ungrounded_numbers(data: dict, digest: str, plan: ScenePlan) -> list[str]:
@@ -185,39 +178,16 @@ def _clip(data: dict) -> dict:
     return data
 
 
-def _structure_error(board: Storyboard, plan: ScenePlan) -> str:
-    if board.title != plan.title:
-        return "storyboard title must match the scene plan title exactly"
-    roles = [beat.role for beat in board.beats]
-    if roles[:2] != ["title", "problem"]:
-        return "beats 1 and 2 must have roles title and problem"
-    if roles[-4:] != ["result", "application", "limit", "question"]:
-        return "the final four beats must have roles result, application, limit, and question"
-    if any(role != "mechanism" for role in roles[2:-4]):
-        return "all beats between problem and result must have role mechanism"
-    first = board.beats[0]
-    if board.title not in first.on_screen_text:
-        return "beat 1 on_screen_text must contain the storyboard title exactly"
-    if _ANALOGY_OPEN_RE.search(first.narration):
-        return "beat 1 must start directly; do not open with an analogy"
-    required_start = f"{board.title}. {board.simple_definition}"
-    if not first.narration.startswith(required_start):
-        return "beat 1 narration must start with title, then simple_definition"
-    if _plain(board.beats[-1].narration) != _plain(plan.street_test_question):
-        return "the question beat must use the scene plan street-test question exactly"
-    if plan.key_numbers:
-        result_beat = next(beat for beat in board.beats if beat.role == "result")
-        result_text = result_beat.narration + " " + " ".join(result_beat.on_screen_text)
-        if not any(number.value in result_text for number in plan.key_numbers):
-            return "the result beat must use at least one grounded key number"
-    if "—" in board.model_dump_json():
-        return "use a plain hyphen or period instead of an em dash"
-    return ""
-
-
 def parse_storyboard(
     raw: str, digest: str, plan: ScenePlan
 ) -> tuple[Storyboard | None, str]:
+    """Only a JSON shape error or an ungrounded number rejects a storyboard.
+
+    Everything else is repaired in place: the title beat is rebuilt from the
+    plan, the application and question beats take the plan's grounded text,
+    numbers the source never states are replaced, and an em dash becomes a
+    hyphen. No rule decides which content goes in which beat.
+    """
     text = extract_json_object(raw)
     try:
         data = json.loads(text)
@@ -225,16 +195,17 @@ def parse_storyboard(
         return None, f"JSON parse error: {exc}"
     if not isinstance(data, dict):
         return None, "storyboard JSON must be an object"
+    data = json.loads(json.dumps(data, ensure_ascii=False).replace("—", "-"))
     data = _clip(data)
     try:
         board = Storyboard(**data)
     except ValidationError as exc:
         return None, str(exc)
     board.title = plan.title
-    title_narration = f"{plan.title}. {board.simple_definition}"
-    if len(title_narration) > MAX_NARRATION:
-        return None, "title and simple_definition exceed the narration limit"
-    board.beats[0].narration = title_narration
+    board.simple_definition = _fit_text(
+        board.simple_definition, MAX_NARRATION - len(plan.title) - 2
+    )
+    board.beats[0].narration = f"{plan.title}. {board.simple_definition}"
     board.beats[0].on_screen_text = [plan.title]
     if board.beats and board.beats[-1].role == "question":
         board.beats[-1].narration = plan.street_test_question
@@ -242,9 +213,6 @@ def parse_storyboard(
         if beat.role == "application":
             beat.narration = plan.application_or_implication
     _repair_ungrounded_numbers(board, digest, plan)
-    error = _structure_error(board, plan)
-    if error:
-        return None, error
     missing = ungrounded_numbers(board.model_dump(), digest, plan)
     if missing:
         return None, (
@@ -284,14 +252,12 @@ Each beat has role, narration, visual, and on_screen_text.
 The visual says what the viewer sees and how it moves.
 Narration has one or two short sentences. Each sentence has at most 22 words.
 Use common words. Define a necessary technical term before using it.
-Never use "imagine", "picture this", "think of", "it is like", or "as if" in the title beat.
 Never use an em dash.
 
 The first beat's on_screen_text must contain the exact storyboard title.
 The first beat's narration must contain simple_definition exactly.
 Use at most two short on-screen labels per beat.
 Every number must occur in the digest or scene plan.
-When the scene plan has key_numbers, the result beat states one of their values exactly.
 Everything must be drawable in Manim: text, shapes, paths, particles, 3D solids, colour, and camera moves.
 Nothing comes from image files.
 
