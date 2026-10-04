@@ -102,6 +102,15 @@ def _write_attempt(scene_dir: Path, attempt: int, source: str) -> Path:
     return scene_file
 
 
+def _saved_scene(data: dict) -> tuple[str, str | None]:
+    source, feedback = data["source"], data["feedback"]
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("saved scene has no source")
+    if feedback is not None and not isinstance(feedback, str):
+        raise TypeError("saved scene feedback is not text")
+    return source, feedback
+
+
 def _remaining_timeout(started: float, deadline_seconds: int, limit: int) -> int:
     remaining = deadline_seconds - (time.monotonic() - started)
     if remaining <= 0:
@@ -290,10 +299,25 @@ def _compose(
     }
     scene_dir = work_dir / "scene"
 
+    # The scene stage saves its file before each render and its error after
+    # each failure. A retry resumes there: a file with no known error renders
+    # again without a model call (the last run died mid-render), and a file
+    # with an error goes straight to an edit.
+    scene_fingerprint = fingerprint("scene", scene_model, board_fingerprint)
+
+    def remember(feedback_text: str | None) -> None:
+        checkpoints.save(
+            "scene", scene_fingerprint, {"source": source, "feedback": feedback_text}
+        )
+
     failures: list[str] = []
     attempt_records: list[dict] = []
     feedback: str | None = None
     source: str | None = None
+    saved_scene = checkpoints.load_parsed("scene", scene_fingerprint, _saved_scene)
+    if saved_scene is not None:
+        source, feedback = saved_scene
+    resume_render = saved_scene is not None and feedback is None
     attempt_limit = min(max_attempts, MAX_ATTEMPTS)
     for attempt in range(1, attempt_limit + 1):
         try:
@@ -303,7 +327,10 @@ def _compose(
         mode = "generate" if source is None else "edit"
         try:
             new_source = None
-            if source is not None:
+            if resume_render:
+                new_source, mode, resume_render = source, "resume", False
+                logger.info("scene: rendering the saved file without a model call")
+            elif source is not None:
                 new_source = edit_scene_code(
                     storyboard,
                     durations,
@@ -342,10 +369,12 @@ def _compose(
 
         source = new_source
         scene_file = _write_attempt(scene_dir, attempt, source)
+        remember(None)
         record = {"attempt": attempt, "mode": mode, "source_path": str(scene_file)}
         findings = check_scene_code(source, len(storyboard.beats))
         if findings:
             feedback = "The guard rejected the file:\n- " + "\n- ".join(findings)
+            remember(feedback)
             failures.append(f"attempt {attempt}: guard: {findings[0]}")
             attempt_records.append(
                 {**record, "status": "guard_rejected", "failure": feedback}
@@ -362,6 +391,7 @@ def _compose(
         except subprocess.CalledProcessError as exc:
             detail = _stderr_tail(exc)
             feedback = "Manim failed with this traceback:\n" + detail
+            remember(feedback)
             logger.warning("render failed on attempt %d:\n%s", attempt, detail)
             failures.append(f"attempt {attempt}: render error")
             attempt_records.append(
@@ -374,6 +404,7 @@ def _compose(
                 "is too heavy: use fewer or coarser mobjects, lighter updaters, "
                 "and shorter run_times."
             )
+            remember(feedback)
             logger.warning("render timed out on attempt %d", attempt)
             failures.append(f"attempt {attempt}: render timeout")
             attempt_records.append(
@@ -388,6 +419,7 @@ def _compose(
             feedback = (
                 f"The render timing is invalid: {error}. Fix the scene timing output."
             )
+            remember(feedback)
             logger.warning("render timing failed on attempt %d: %s", attempt, error)
             failures.append(f"attempt {attempt}: invalid timing")
             attempt_records.append(

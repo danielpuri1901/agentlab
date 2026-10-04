@@ -209,9 +209,7 @@ def test_guard_finding_is_fixed_with_an_edit(seams, tmp_path):
     ]
 
 
-def test_render_traceback_goes_to_an_edit_of_the_current_file(
-    seams, tmp_path, caplog
-):
+def test_render_traceback_goes_to_an_edit_of_the_current_file(seams, tmp_path, caplog):
     first = GOLDEN_SCENE + "\n# first attempt\n"
     seams["codes"] = [first]
     seams["render_errors"] = [_render_error()]
@@ -610,3 +608,45 @@ def test_a_storyboard_from_another_deep_read_is_not_reused(
     result = _compose_with(tmp_path, paper_checkpoints, plan_fingerprint="plan-1")
 
     assert result.storyboard == BOARD
+
+
+def test_a_run_that_dies_mid_render_resumes_by_rendering_the_saved_file(
+    seams, paper_checkpoints, tmp_path
+):
+    seams["render_errors"] = [RuntimeError("task stopped")]
+    with pytest.raises(StoryFailed):
+        _compose_with(tmp_path / "first", paper_checkpoints)
+    assert seams["coder"] == [None]
+
+    result = _compose_with(tmp_path / "second", paper_checkpoints)
+
+    assert seams["coder"] == [None]
+    assert seams["edits"] == []
+    assert result.scene_source == GOLDEN_SCENE
+    assert _modes_and_statuses(result) == [("resume", "shipped")]
+
+
+def test_a_saved_render_error_resumes_as_an_edit_of_that_file(
+    seams, paper_checkpoints, tmp_path
+):
+    from agentlab.stage_checkpoints import fingerprint
+
+    first = GOLDEN_SCENE + "\n# first attempt\n"
+    error = "Manim failed with this traceback:\nNameError: z"
+    scene_fingerprint = fingerprint(
+        "scene", "c", fingerprint("storyboard", "s", "plan-1")
+    )
+    paper_checkpoints.save(
+        "scene", scene_fingerprint, {"source": first, "feedback": error}
+    )
+
+    result = _compose_with(tmp_path, paper_checkpoints)
+
+    assert seams["coder"] == []
+    assert seams["edits"] == [(first, error)]
+    assert result.scene_source == EDITED_SCENE
+    assert _modes_and_statuses(result) == [("edit", "shipped")]
+    assert paper_checkpoints.load("scene", scene_fingerprint) == {
+        "source": EDITED_SCENE,
+        "feedback": None,
+    }
