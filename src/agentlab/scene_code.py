@@ -409,9 +409,10 @@ least its narration. You only write beat_1 .. beat_n."""
 SCENE_CODER_EXAMPLE = (
     Path(__file__).with_name("scene_coder_example.py").read_text(encoding="utf-8")
 )
-"""Original scene in 3Blue1Brown's style for the fictional SortNet paper
-(the deep-read prompt's example). Shown to the scene coder as style only,
-and used by the tests and the CI render as the golden scene."""
+"""Scene in 3Blue1Brown's style for the LoRA paper (arXiv 2106.09685), taken
+from the first local run of this pipeline and polished by hand. Shown to the
+scene coder as style only, and used by the tests and the CI render as the
+golden scene."""
 
 
 # Every rule below has a source in
@@ -496,15 +497,16 @@ use numeric functions and np.random. The guard rejects open, exec, eval, getattr
 setattr, type, object, and any direct use of self.camera, self.renderer, or config.
 - The stage is the frame above the subtitle strip: keep content between STAGE_LEFT and \
 STAGE_RIGHT and between STAGE_BOTTOM and STAGE_TOP. At the end of each beat, the base \
-class reports text that overlaps other text and anything that leaves the stage.
+class reports text that overlaps other text, text that spills out of its shape, \
+lines that cross text, and anything that leaves the stage.
 - Aim to finish each beat's animations before its narration ends. The base class pads \
 the rest with a still frame.
 - The render must finish within 10 minutes at 1280x720 and 30 fps, so keep 3D meshes \
 coarse (for example resolution=(16, 16)) and updaters light.
 - Keep the file under 12000 tokens.
 
-Example. The file below explains SortNet, a fictional paper, in this style. Copy its \
-style, never its content.
+Example. The file below explains the LoRA paper in this style. Copy its style, never \
+its content.
 
 <example_scene>
 """
