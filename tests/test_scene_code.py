@@ -12,7 +12,7 @@ GOLDEN_SCENE = Path(scene_code.__file__).with_name("scene_coder_example.py").rea
     encoding="utf-8"
 )
 GOLDEN_BOARD = json.loads(
-    (Path(__file__).parent / "fixtures" / "storyboard_golden.json").read_text(
+    (Path(__file__).parent / "fixtures" / "storyboard_example.json").read_text(
         encoding="utf-8"
     )
 )
@@ -24,7 +24,7 @@ def test_golden_scene_passes_the_guard():
 
 
 def test_visual_direction_reads_generated_scene_concept():
-    assert scene_code.visual_direction(GOLDEN_SCENE).startswith("One row of number tiles")
+    assert scene_code.visual_direction(GOLDEN_SCENE).startswith("The frozen weight matrix W0")
 
 
 def test_guard_requires_visual_direction_comment():
@@ -171,10 +171,10 @@ from numpy import array, cos
 
 
 def test_guard_requires_every_beat_method_and_no_extras():
-    missing = GOLDEN_SCENE.replace("def beat_5(self):", "def beat_9(self):")
+    missing = GOLDEN_SCENE.replace("def beat_5(self):", "def beat_12(self):")
     findings = scene_code.check_scene_code(missing, BEATS)
     assert any("beat_5" in f for f in findings)
-    assert any("beat_9" in f for f in findings)
+    assert any("beat_12" in f for f in findings)
 
 
 def test_guard_rejects_construct_override_and_wrong_class():
@@ -518,11 +518,11 @@ def test_example_scene_shows_the_3b1b_idioms():
     for idiom in (
         "MathTex",
         "TransformMatchingTex",
-        "ReplacementTransform(self.tiles[0][1].copy()",
+        "TransformFromCopy",
         "lag_ratio",
-        "self.move_camera(",
         "ValueTracker",
         "Brace(",
+        "Circumscribe(",
         "from story_scene import",
     ):
         assert idiom in example

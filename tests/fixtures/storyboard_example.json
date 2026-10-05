@@ -1,0 +1,119 @@
+{
+ "title": "LoRA: Low-Rank Adaptation of Large Language Models",
+ "simple_definition": "LoRA freezes a pretrained model and trains only tiny matrix pairs beside it, matching full fine-tuning quality with far fewer parameters.",
+ "visual_focus": "A weight matrix rectangle stays on screen throughout, with a small colored low-rank pair growing beside it, merging into it, and being swapped for tasks.",
+ "mapping": [
+  {
+   "paper_term": "Frozen pretrained weight W0",
+   "visual": "blue, a large solid rectangle that never changes"
+  },
+  {
+   "paper_term": "Low-rank matrix A",
+   "visual": "orange, a tall thin rectangle"
+  },
+  {
+   "paper_term": "Low-rank matrix B",
+   "visual": "orange, a wide thin rectangle"
+  },
+  {
+   "paper_term": "Merged weight W",
+   "visual": "green, the large rectangle after absorbing the orange product"
+  },
+  {
+   "paper_term": "Input x",
+   "visual": "white, a column vector arrow entering from the left"
+  }
+ ],
+ "beats": [
+  {
+   "role": "title",
+   "narration": "LoRA: Low-Rank Adaptation of Large Language Models. LoRA freezes a pretrained model and trains only tiny matrix pairs beside it, matching full fine-tuning quality with far fewer parameters.",
+   "visual": "Paper title fades in at center. Below it, a large blue rectangle labeled W0 appears, representing the pretrained weight. A small orange pair of thin rectangles appears beside it, hinting at the core idea.",
+   "on_screen_text": [
+    "LoRA: Low-Rank Adaptation of Large Language Models"
+   ]
+  },
+  {
+   "role": "problem",
+   "narration": "GPT-3 has 175 billion parameters. Fine-tuning all of them for each new task means storing a separate 350-gigabyte checkpoint every time.",
+   "visual": "The blue rectangle grows to dominate the screen with '175B params' inside it. Five full-size blue copies stack behind it, each labeled '350 GB'. The stack visually overflows the frame, conveying the storage problem.",
+   "on_screen_text": [
+    "175B params",
+    "350 GB per task"
+   ]
+  },
+  {
+   "role": "mechanism",
+   "narration": "First, freeze every weight in the pretrained model. A small lock icon snaps onto the matrix. No gradients flow through it.",
+   "visual": "The stacked copies disappear, leaving one blue rectangle. A lock icon animates onto its corner. The label inside reads W0. A faint gradient arrow approaches from below and fades out before reaching it, showing gradients are blocked.",
+   "on_screen_text": [
+    "W0 frozen"
+   ]
+  },
+  {
+   "role": "mechanism",
+   "narration": "Now add a parallel path. Two small matrices, A and B, sit beside the frozen weight. Their rank r can be as small as 1, while the full dimension is 12,288.",
+   "visual": "A white column vector x enters from the left. It forks into two paths: one arrow goes through the large blue W0 rectangle, another goes through a tall thin orange rectangle labeled A then into a wide thin orange rectangle labeled B. Dimension annotations appear: d=12288 on W0, r=1 between A and B.",
+   "on_screen_text": [
+    "r = 1",
+    "d = 12,288"
+   ]
+  },
+  {
+   "role": "mechanism",
+   "narration": "The two outputs are summed. Because B is initialized to zero, the sum starts as just W0 times x. Training begins exactly where the pretrained model left off.",
+   "visual": "Both paths converge at a plus symbol on the right, producing output h. The orange path's contribution is a faint zero vector that brightens gradually as a training progress bar fills beneath the scene. Tiny gradient arrows flow only into the orange A and B matrices, not into the blue W0.",
+   "on_screen_text": [
+    "h = W0 x + BA x"
+   ]
+  },
+  {
+   "role": "mechanism",
+   "narration": "For deployment, multiply B times A once and add the result directly into W0. You get one merged weight, the same shape, with zero extra cost at inference.",
+   "visual": "The orange A and B rectangles multiply together, producing a faint orange square the same size as W0. This orange square slides onto the blue rectangle; the combined rectangle transitions from blue to green, labeled W. The two-path diagram collapses into a single path through the green rectangle. A latency meter on the right stays at the same level, showing no increase.",
+   "on_screen_text": [
+    "W = W0 + BA"
+   ]
+  },
+  {
+   "role": "mechanism",
+   "narration": "Switching tasks is cheap. Subtract the old BA, swap in a new pair, and merge again. The 175-billion-parameter base stays in memory.",
+   "visual": "The green rectangle reverts to blue as a small orange square peels off and shrinks away. A new orange pair, labeled A-prime and B-prime in a slightly different orange shade, slides in and merges, turning the rectangle green again. A row of five tiny orange pairs lines up below, each labeled with a different task name.",
+   "on_screen_text": [
+    "Swap adapters"
+   ]
+  },
+  {
+   "role": "result",
+   "narration": "On GPT-3, LoRA cuts trainable parameters by 10,000 times. Checkpoints shrink from 350 gigabytes to 35 megabytes. Training is 25 percent faster.",
+   "visual": "A bar chart animates in. Left bar: full fine-tuning at 350 GB, tall blue bar. Right bar: LoRA at 35 MB, a tiny orange bar. Numeric labels appear above each bar. Below, a speedometer needle ticks from 32.5 to 43.1 tokens per second per V100.",
+   "on_screen_text": [
+    "350 GB vs 35 MB"
+   ]
+  },
+  {
+   "role": "application",
+   "narration": "Implication: A single shared base model can serve many specialized agent roles by storing only small per-task LoRA adapter pairs instead of full fine-tuned copies.",
+   "visual": "A single large blue rectangle sits at center. One hundred small orange rectangles fan out around it in a radial pattern, each with a tiny task icon. Lines connect each orange piece to the blue center. The word Implication appears in the corner.",
+   "on_screen_text": [
+    "1 base + 100 adapters"
+   ]
+  },
+  {
+   "role": "limit",
+   "narration": "The paper only adapts attention weight matrices. MLP layers, LayerNorm, and biases are left for future work, so generality across all weight types is not established.",
+   "visual": "A simplified transformer block diagram appears: attention weights glow orange, but MLP blocks and LayerNorm boxes remain gray with question marks. A dashed border around the gray sections pulses gently.",
+   "on_screen_text": [
+    "Attention only"
+   ]
+  },
+  {
+   "role": "question",
+   "narration": "If you needed 100 specialized versions of a 175-billion-parameter model, would you rather store 100 full copies or one base model plus 100 tiny adapter pairs?",
+   "visual": "The screen splits. Left side: a towering stack of 100 blue rectangles, labeled 35 petabytes total. Right side: one blue rectangle and a small shelf of 100 orange slivers, labeled 350 GB plus 3.5 GB. A question mark pulses between them.",
+   "on_screen_text": [
+    "Which would you choose?"
+   ]
+  }
+ ]
+}
