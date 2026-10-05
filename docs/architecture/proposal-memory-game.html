@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Where Your Verdict Goes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  color-scheme: light;
+  --ground:#eef1f5;
+  --panel:#ffffff;
+  --ink:#172033;
+  --muted:#5b6578;
+  --line:#cfd6e2;
+  --cobalt:#2f5bd3;
+  --amber:#c7731f;
+  --approve:#23845a;
+  --reject:#bf3a33;
+  --signal:#7a4fe0;
+  --ghost:#dde2ea;
+  --code:#f4f6fa;
+  --display:"Chivo","Arial Black",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#10151f;
+    --panel:#171e2b;
+    --ink:#e7ebf3;
+    --muted:#9aa4b7;
+    --line:#2c3547;
+    --cobalt:#7b9cff;
+    --amber:#f0a45a;
+    --approve:#4cc58e;
+    --reject:#f07a72;
+    --signal:#b196ff;
+    --ghost:#252e3f;
+    --code:#1d2535;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#10151f;
+  --panel:#171e2b;
+  --ink:#e7ebf3;
+  --muted:#9aa4b7;
+  --line:#2c3547;
+  --cobalt:#7b9cff;
+  --amber:#f0a45a;
+  --approve:#4cc58e;
+  --reject:#f07a72;
+  --signal:#b196ff;
+  --ghost:#252e3f;
+  --code:#1d2535;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--ground);color:var(--ink);font:15px/1.55 var(--body);
+  padding-inline:16px;padding-block:20px 48px;
+}
+.wrap{max-width:1120px;margin:0 auto;display:grid;gap:18px}
+header{display:grid;gap:6px}
+.eyebrow{font:500 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font:900 clamp(28px,5vw,46px)/1.02 var(--display);margin:0;letter-spacing:-.01em;text-wrap:balance}
+h1 em{font-style:normal;color:var(--signal)}
+.lede{margin:0;max-width:65ch;color:var(--muted)}
+.board{display:grid;grid-template-columns:260px 1fr;gap:18px;align-items:start}
+@media (max-width:760px){.board{grid-template-columns:1fr}}
+
+/* route: the real sequence of the proposer day */
+.route{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 12px}
+.route h2{font:700 13px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:2px 4px 12px}
+.route ol{list-style:none;margin:0;padding:0;position:relative}
+.route ol::before{content:"";position:absolute;left:15px;top:8px;bottom:8px;width:3px;background:var(--line);border-radius:2px}
+.route li{position:relative;display:grid;grid-template-columns:34px 1fr;align-items:center;gap:6px;padding:5px 0}
+.route .dot{width:14px;height:14px;border-radius:50%;background:var(--panel);border:3px solid var(--line);margin-left:9.5px;z-index:1;transition:all .25s}
+.route button{all:unset;cursor:pointer;font:500 13.5px/1.3 var(--body);color:var(--muted);padding:3px 6px;border-radius:6px}
+.route button:focus-visible{outline:2px solid var(--cobalt)}
+.route li.done .dot{border-color:var(--cobalt);background:var(--cobalt)}
+.route li.done button{color:var(--ink)}
+.route li.now .dot{border-color:var(--signal);background:var(--signal);box-shadow:0 0 0 5px color-mix(in srgb,var(--signal) 25%,transparent)}
+.route li.now button{color:var(--ink);font-weight:600}
+.route li.locked button{cursor:not-allowed;opacity:.55}
+.route .time{font:400 11px/1 var(--mono);color:var(--muted);display:block;margin-top:2px}
+
+/* station panel */
+.station{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px;display:grid;gap:14px;min-width:0}
+.station .tag{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.pill{font:500 11.5px/1 var(--mono);padding:5px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.pill.cobalt{color:var(--cobalt);border-color:color-mix(in srgb,var(--cobalt) 45%,transparent)}
+.pill.signal{color:var(--signal);border-color:color-mix(in srgb,var(--signal) 45%,transparent)}
+.station h3{font:700 clamp(21px,3vw,27px)/1.15 var(--display);margin:0;text-wrap:balance}
+.station p{margin:0;max-width:68ch}
+.station .facts{margin:0;padding-left:18px;display:grid;gap:4px;max-width:70ch}
+pre{margin:0;background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px;font:12.5px/1.5 var(--mono);overflow-x:auto;white-space:pre}
+code{font:13px var(--mono);background:var(--code);padding:1px 5px;border-radius:4px}
+.actions{display:flex;gap:10px;flex-wrap:wrap}
+.btn{font:600 14px/1 var(--body);padding:11px 16px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+.btn:hover{border-color:var(--cobalt)}
+.btn:focus-visible{outline:2px solid var(--cobalt);outline-offset:2px}
+.btn.primary{background:var(--cobalt);border-color:var(--cobalt);color:#fff}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.feedback{border-left:3px solid var(--line);padding:8px 12px;border-radius:0 6px 6px 0;background:var(--code)}
+.feedback.good{border-color:var(--approve)}
+.feedback.bad{border-color:var(--reject)}
+
+/* quiz */
+.quiz{display:grid;gap:8px}
+.quiz .q{font-weight:600}
+.opt{display:block;text-align:left;width:100%;font:500 14px/1.4 var(--body);padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+.opt:hover{border-color:var(--cobalt)}
+.opt.right{border-color:var(--approve);background:color-mix(in srgb,var(--approve) 12%,var(--panel))}
+.opt.wrong{border-color:var(--reject);background:color-mix(in srgb,var(--reject) 10%,var(--panel))}
+
+/* source hopper */
+.hopper{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+@media (max-width:520px){.hopper{grid-template-columns:1fr}}
+.bin{border:1px dashed var(--line);border-radius:8px;padding:10px;display:grid;gap:6px;align-content:start}
+.bin b{font:600 13px var(--body)}
+.bin small{color:var(--muted);font:12px/1.35 var(--mono)}
+.chips{display:flex;flex-wrap:wrap;gap:4px;min-height:22px}
+.chip{width:14px;height:14px;border-radius:3px;background:var(--amber);opacity:0;transform:translateY(-8px);transition:all .3s}
+.chip.in{opacity:1;transform:none}
+.chip.paper{background:var(--cobalt)}
+.chip.hn{background:var(--muted)}
+
+/* telegram cards */
+.tg{display:grid;gap:10px}
+.card{border:1px solid var(--line);border-radius:10px;padding:12px;display:grid;gap:8px;background:var(--panel)}
+.card .t{font-weight:600}
+.card .m{font:12px var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.card .row{display:flex;gap:8px;flex-wrap:wrap}
+.card .row .btn{padding:8px 12px;font-size:13px}
+.card.APPROVED{border-color:var(--approve)}
+.card.REJECTED{border-color:var(--reject)}
+.verdict{font:600 12px var(--mono)}
+.verdict.APPROVED{color:var(--approve)}
+.verdict.REJECTED{color:var(--reject)}
+
+/* route of a tap */
+.path{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font:12.5px var(--mono)}
+.path span{padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--code)}
+.path span.hit{border-color:var(--signal);color:var(--signal)}
+.path i{font-style:normal;color:var(--muted)}
+
+/* archive shelf */
+.shelf-wrap{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;gap:10px}
+.shelf-head{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline}
+.shelf-head h2{font:700 13px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0}
+.shelf-head span{font:12px var(--mono);color:var(--muted)}
+.shelf{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:6px}
+@media (max-width:560px){.shelf{grid-template-columns:repeat(5,minmax(0,1fr))}}
+.slot{height:46px;border-radius:6px;background:var(--ghost);position:relative;font:10.5px/1.2 var(--mono);color:var(--muted);padding:4px 5px;overflow:hidden;transition:background .3s,outline-color .3s}
+.slot .n{position:absolute;right:4px;bottom:3px;opacity:.7}
+.slot.APPROVED{background:color-mix(in srgb,var(--approve) 22%,var(--panel));color:var(--ink)}
+.slot.REJECTED{background:color-mix(in srgb,var(--reject) 20%,var(--panel));color:var(--ink)}
+.slot.PROPOSED{background:color-mix(in srgb,var(--cobalt) 16%,var(--panel));color:var(--ink)}
+.slot.mine{outline:3px solid var(--signal);outline-offset:-3px}
+.fell{font:12.5px var(--mono);color:var(--muted);min-height:1.2em}
+.fell b{color:var(--signal)}
+
+/* leak map */
+.leaks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media (max-width:620px){.leaks{grid-template-columns:1fr}}
+.leak{border:1px solid var(--line);border-radius:8px;padding:12px;display:grid;gap:4px}
+.leak b{font:600 14px var(--body)}
+.leak small{color:var(--muted);font-size:13px}
+.leak.reads{border-color:var(--approve)}
+.leak.never{border-color:var(--reject)}
+.check{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border:1px solid var(--line);border-radius:8px;cursor:pointer}
+.check input{margin-top:4px;accent-color:var(--cobalt)}
+.score{font:900 34px/1 var(--display);color:var(--signal)}
+.src{font:12px var(--mono);color:var(--muted)}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">AgentLab · proposer memory · code on main, 2026-09-28</div>
+    <h1>Where your <em>verdict</em> goes</h1>
+    <p class="lede">Play one proposer day. Tap APPROVE or REJECT like you do in Telegram, then follow your tap and see what the proposer remembers tomorrow. Every rule here comes from <code>proposer.py</code>, <code>proposals.py</code>, <code>sources.py</code> and <code>approvals_webhook.py</code>.</p>
+  </header>
+
+  <div class="board">
+    <nav class="route" aria-label="Proposer day">
+      <h2>The day</h2>
+      <ol id="route"></ol>
+    </nav>
+    <section class="station" id="station" aria-live="polite"></section>
+  </div>
+
+  <section class="shelf-wrap" aria-label="Archive">
+    <div class="shelf-head">
+      <h2>Short-term memory: the archive</h2>
+      <span id="shelfNote">list_recent(limit=20) · newest first</span>
+    </div>
+    <div class="shelf" id="shelf"></div>
+    <div class="fell" id="fell"></div>
+  </section>
+</div>
+
+<script>
+(() => {
+"use strict";
+
+// Real proposals from the agentlab-state ledger (titles and verdicts as recorded).
+const ARCHIVE_BEFORE = [
+  {title:"Unreal Agent Perception-Action Latency in Hierarchical Tool Binding", status:"APPROVED", day:"09-23"},
+  {title:"JevBench Decision Model Diagnostic Transfer to Agent Tool Diagnosis", status:"APPROVED", day:"09-23"},
+  {title:"LangGraph 1.2.12 State Boundary Stability Against Tool Binding Variance", status:"REJECTED", day:"09-23"},
+  {title:"Strands Harness SDK Integration for Agent Tool Binding Stability", status:"REJECTED", day:"09-22"},
+  {title:"Memory Persistence Heuristics in Agent Checkpoint Sequencing", status:"APPROVED", day:"09-22"},
+  {title:"DeepSeek Harness State Boundary Formalization", status:"REJECTED", day:"09-22"},
+];
+const OLDER = 14; // the rest of the 20 slots: older proposals, not shown here
+const TODAY = [
+  {pid:"prop-20260924T073141Z-7b22", title:"LensVLM Context Compression for Agent State Serialization", cite:"https://huggingface.co/apple/LensVLM-9B", youSaid:"APPROVED"},
+  {pid:"prop-20260924T073141Z-dd7b", title:"Mercury 2.5 Throughput Variance in Tool Binding Latency", cite:null, youSaid:"REJECTED"},
+  {pid:"prop-20260924T073141Z-4c68", title:"LangGraph 1.2.12 Determinism Against Concurrent Tool Binding", cite:null, youSaid:"REJECTED"},
+];
+
+const S = {step:0, maxStep:0, verdicts:{}, mine:null, days:0, answered:{}, finalChecked:false};
+
+const STEPS = [
+  {name:"Schedule fires", time:"09:30 Amsterdam", render:stepSchedule},
+  {name:"Daily cap check", time:"DAILY_CAP = 3", render:stepCap},
+  {name:"Gather sources", time:"gather()", render:stepGather},
+  {name:"Read the archive", time:"list_recent(20)", render:stepArchive},
+  {name:"Ask the model", time:"Haiku 4.5 default", render:stepModel},
+  {name:"File proposals", time:"DynamoDB + S3", render:stepFile},
+  {name:"You tap", time:"Telegram", render:stepTap},
+  {name:"Follow your tap", time:"webhook Lambda", render:stepFollow},
+  {name:"Days pass", time:"archive rolls", render:stepDays},
+  {name:"What is never read", time:"leak map", render:stepLeaks},
+];
+
+const $ = (sel, root=document) => root.querySelector(sel);
+const el = (tag, attrs={}, html="") => { const e=document.createElement(tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (html) e.innerHTML=html; return e; };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function go(i){ if (i > S.maxStep) return; S.step=i; render(); }
+function unlockNext(){ S.maxStep = Math.max(S.maxStep, S.step+1); renderRoute(); const n=$("#next"); if (n) n.disabled=false; }
+
+function renderRoute(){
+  const ol=$("#route"); ol.innerHTML="";
+  STEPS.forEach((s,i)=>{
+    const li=el("li",{class: i===S.step?"now": i<S.maxStep||i<S.step?"done": i>S.maxStep?"locked":""});
+    li.append(el("span",{class:"dot","aria-hidden":"true"}));
+    const b=el("button",{type:"button"}, `${esc(s.name)}<span class="time">${esc(s.time)}</span>`);
+    if (i>S.maxStep) b.setAttribute("aria-disabled","true");
+    b.addEventListener("click",()=>go(i));
+    li.append(b); ol.append(li);
+  });
+}
+
+function shell(tags, title, bodyHtml){
+  const st=$("#station"); st.innerHTML="";
+  const t=el("div",{class:"tag"}); tags.forEach(([cls,txt])=>t.append(el("span",{class:"pill "+cls},esc(txt))));
+  st.append(t, el("h3",{},title));
+  const body=el("div",{style:"display:grid;gap:14px"},bodyHtml); st.append(body);
+  const nav=el("div",{class:"actions"});
+  if (S.step>0){ const back=el("button",{class:"btn",type:"button"},"Back"); back.onclick=()=>go(S.step-1); nav.append(back); }
+  if (S.step<STEPS.length-1){
+    const next=el("button",{class:"btn primary",type:"button",id:"next"},"Next station");
+    next.disabled = S.maxStep<=S.step; next.onclick=()=>{ S.maxStep=Math.max(S.maxStep,S.step+1); go(S.step+1); };
+    nav.append(next);
+  }
+  st.append(nav);
+  return body;
+}
+
+function quiz(body, key, q, options, rightIdx, explain){
+  const box=el("div",{class:"quiz"}); box.append(el("div",{class:"q"},q));
+  const fb=el("div",{class:"feedback",hidden:""});
+  options.forEach((o,i)=>{
+    const b=el("button",{class:"opt",type:"button"},esc(o));
+    b.onclick=()=>{
+      [...box.querySelectorAll(".opt")].forEach((x,j)=>{ x.classList.remove("right","wrong"); if(j===rightIdx) x.classList.add("right"); });
+      if (i!==rightIdx) b.classList.add("wrong");
+      fb.hidden=false; fb.className="feedback "+(i===rightIdx?"good":"bad");
+      fb.innerHTML=(i===rightIdx?"<b>Right.</b> ":"<b>Not quite.</b> ")+explain;
+      S.answered[key]=i===rightIdx; unlockNext();
+    };
+    box.append(b);
+  });
+  box.append(fb); body.append(box);
+  if (key in S.answered) unlockNext();
+}
+
+// ---- stations ----
+function stepSchedule(){
+  const b=shell([["cobalt","EventBridge Scheduler"],["","ECS Fargate"]],"09:30: the proposer container starts",
+  `<p>The schedule <code>agentlab-propose-morning</code> starts the proposer task on Fargate with the command <code>worker propose</code>. The container lives for one run, then stops. Nothing in its memory survives. Everything it "remembers" comes from DynamoDB.</p>
+   <ul class="facts">
+     <li><code>agentlab-flush-pings</code> at 08:00 only delivers messages held during quiet hours.</li>
+     <li><code>agentlab-propose-midday</code> (12:00) is disabled.</li>
+     <li>The daily video run (<code>agentlab-explain</code>, 10:30) was disabled on 2026-09-24.</li>
+   </ul>`);
+  const a=el("div",{class:"actions"}); const f=el("button",{class:"btn primary",type:"button"},"Fire the schedule");
+  f.onclick=()=>{ f.disabled=true; f.textContent="Container running"; unlockNext(); };
+  if (S.maxStep>0){ f.disabled=true; f.textContent="Container running"; }
+  a.append(f); b.append(a);
+}
+
+function stepCap(){
+  const b=shell([["cobalt","proposals.py"]],"Is there room today?",
+  `<pre>slots = DAILY_CAP - count_created_today(table)   # DAILY_CAP = 3
+if slots &lt;= 0:
+    notify("The proposer ran. The daily cap of 3 proposals is already used.")</pre>
+   <p>At most 3 proposals a day. Today nothing ran yet, so <b>slots = 3</b>.</p>`);
+  quiz(b,"cap","If the midday run were still on, what would it do on most days?",
+    ["Propose 3 more ideas","Send \"cap already used\" and stop","Replace the morning proposals"],1,
+    "The morning run already used all 3 slots, so a second run only sends the cap message.");
+}
+
+function stepGather(){
+  const b=shell([["","sources.py"],["cobalt","gather() = gather_exploit()"]],"Gather fresh sources",
+  `<p>The proposer only reads the <b>exploit</b> pool. It never sees your interests list.</p>
+   <div class="hopper">
+     <div class="bin"><b>GitHub releases</b><small>5 tracked SDK repos × last 3 releases. No keyword filter.</small><div class="chips" id="c1"></div></div>
+     <div class="bin"><b>arXiv</b><small>25 newest cs.CL / cs.AI, kept if title or summary hits a keyword ("llm", "agent", ...).</small><div class="chips" id="c2"></div></div>
+     <div class="bin"><b>HN front page</b><small>30 hits, kept if the title hits a keyword.</small><div class="chips" id="c3"></div></div>
+   </div>
+   <p class="src">Tracked repos: inspect_ai, langgraph, claude-agent-sdk-python, strands harness-sdk, deepseek-harness.</p>`);
+  const fill=()=>{
+    const add=(id,n,cls)=>{ const c=$("#"+id); c.innerHTML=""; for(let i=0;i<n;i++){ const x=el("span",{class:"chip "+cls}); c.append(x); setTimeout(()=>x.classList.add("in"),40*i);} };
+    add("c1",15,""); add("c2",14,"paper"); add("c3",4,"hn");
+  };
+  const a=el("div",{class:"actions"}); const btn=el("button",{class:"btn",type:"button"},"Pour today's sources"); btn.onclick=fill; a.append(btn); b.append(a);
+  b.append(el("p",{class:"src"},"Chip counts are an example day: 15 release notes is the maximum, the arXiv and HN counts change daily."));
+  quiz(b,"gather","Look at your last 9 real proposal titles (the archive below). How many lead with a product, SDK, model or version name?",
+    ["About 2 of 9","About 5 of 9","8 of 9"],2,
+    "Only \"Memory Persistence Heuristics in Agent Checkpoint Sequencing\" is an idea without a product name. Release notes are short, concrete and change every week, so they are the easiest thing for a small model to turn into an experiment.");
+  if (S.maxStep>2) fill();
+}
+
+function stepArchive(){
+  const lines=ARCHIVE_BEFORE.map(p=>`- [${p.status}] ${p.title} :: ...`).join("\n");
+  const b=shell([["signal","short-term memory"],["","proposals.py"]],"The only memory: the last 20 proposals",
+  `<pre>archive = list_recent(table)          # limit = 20, newest first
+
+Recent archive (do not repeat these):
+${esc(lines)}
+- ... ${OLDER} older proposals</pre>
+   <p>Each line holds the status, the title and the one-line "distance" text. It does not hold <b>why</b> you decided. The prompt calls it a list of things <b>not to repeat</b>.</p>`);
+  quiz(b,"archive","You rejected \"Strands Harness SDK Integration ...\" on 09-22. What can the proposer learn from that?",
+    ["Daniel does not want SDK integration experiments","Do not propose this same idea again","Nothing at all"],1,
+    "It only sees a title with [REJECTED] and an instruction not to repeat it. It cannot tell if you disliked the topic, the source, or the framing. So the next SDK release gets a new proposal.");
+}
+
+function stepModel(){
+  const b=shell([["cobalt","litellm.completion"],["","max_tokens 3000"]],"One model call writes the proposals",
+  `<pre>model  = PROPOSER_MODEL or "bedrock/global.anthropic.claude-haiku-4-5-..."
+system = PROPOSER_SYSTEM   # rules: cite exactly one source URL, state distance,
+                           # do not repeat the archive, claim only what the source says
+user   = build_prompt(sources, archive, slots)</pre>
+   <p>The system prompt frames AgentLab as a lab that measures agent techniques with paired statistics. That pushes toward small, measurable knobs: "X version, stability under Y".</p>
+   <p class="src">Your working tree sets PROPOSER_MODEL to a Bedrock inference profile in infra/ecs.tf (not on main).</p>`);
+  quiz(b,"model","Which of these is in the prompt?",
+    ["docs/interests.md","Your COOL / MEH / SKIP video ratings","The last 20 proposal titles with their status"],2,
+    "Only sources and the archive go in. interests.md and the ratings feed the video picker, never the proposer.");
+}
+
+function stepFile(){
+  const b=shell([["cobalt","DynamoDB agentlab-state"],["","S3 results bucket"]],"Proposals are filed and sent",
+  `<pre>proposal#${TODAY[0].pid} / proposal
+  status: PROPOSED   kind: new_hypothesis
+  title, headline, citation, distance, created_ts
+
+s3://.../proposals/${TODAY[0].pid}/proposal.json</pre>
+   <p>A <code>registered_rerun</code> proposal that passes validation also stores a <code>submit_body</code> (a ready experiment). In practice almost every proposal is <code>new_hypothesis</code>, with no body.</p>
+   <p>Then one Telegram message goes out with an APPROVE and REJECT button per proposal.</p>`);
+  const a=el("div",{class:"actions"}); const f=el("button",{class:"btn primary",type:"button"},"Send to Telegram");
+  f.onclick=()=>{ f.disabled=true; f.textContent="Sent"; unlockNext(); };
+  if (S.maxStep>5){ f.disabled=true; f.textContent="Sent"; }
+  a.append(f); b.append(a);
+}
+
+function stepTap(){
+  const b=shell([["signal","your signal"],["","2026-09-24 real proposals"]],"New proposals. Tap to decide.",
+  `<p>These are the three proposals from 2026-09-24. Decide them yourself. The label under each card shows what you really tapped that day.</p>`);
+  const tg=el("div",{class:"tg"});
+  TODAY.forEach((p,i)=>{
+    const v=S.verdicts[p.pid];
+    const c=el("div",{class:"card "+(v||"")});
+    c.append(el("div",{class:"t"},`${i+1}. ${esc(p.title)}`));
+    c.append(el("div",{class:"m"},`Source: ${p.cite?esc(p.cite):"(citation not loaded here)"} · Kind: new_hypothesis`));
+    const row=el("div",{class:"row"});
+    if (v){ row.append(el("span",{class:"verdict "+v},`${v}: ${esc(p.pid)}`)); }
+    else {
+      ["APPROVED","REJECTED"].forEach(x=>{
+        const btn=el("button",{class:"btn",type:"button"},`${x==="APPROVED"?"APPROVE":"REJECT"} ${i+1}`);
+        btn.onclick=()=>{ S.verdicts[p.pid]=x; if(!S.mine) S.mine=p.pid; if (Object.keys(S.verdicts).length===3) S.maxStep=Math.max(S.maxStep,7); render(); };
+        row.append(btn);
+      });
+    }
+    c.append(row);
+    c.append(el("div",{class:"src"},`On 09-24 you tapped: ${p.youSaid}`));
+    tg.append(c);
+  });
+  b.append(tg);
+  if (Object.keys(S.verdicts).length===3){
+    b.append(el("div",{class:"feedback good"},"All three decided. Your first tap is marked in violet on the archive shelf. Follow it next."));
+    unlockNext();
+  }
+}
+
+function stepFollow(){
+  const pid=S.mine||TODAY[0].pid; const p=TODAY.find(x=>x.pid===pid); const v=S.verdicts[pid]||p.youSaid;
+  const approve=v==="APPROVED";
+  const b=shell([["signal","your tap"],["","approvals_webhook.py"]],`Your ${approve?"APPROVE":"REJECT"} on "${esc(p.title.split(" ").slice(0,3).join(" "))} ..."`,
+  `<div class="path">
+     <span class="hit">Telegram callback</span><i>→</i>
+     <span class="hit">Lambda: secret header + your user id</span><i>→</i>
+     <span class="hit">status PROPOSED → ${v} (first tap wins)</span>
+     ${approve?`<i>→</i><span>submit_body?</span><i>no →</i><span class="hit">ECS explain task on the citation: 1 video</span>`:`<i>→</i><span class="hit">done</span>`}
+   </div>
+   <pre>UpdateExpression    = "SET status = :v, verdict_ts = :ts, verdict_source = :src"
+ConditionExpression = "status = :proposed"</pre>
+   <p>${approve
+     ? "An approval with no prepared experiment now builds a video of the cited source (TRACK=core, EXPLAIN_URL=citation). That is the one video you got on 09-24."
+     : "A rejection writes three fields and stops. No reason, no topic, no source type is recorded."}</p>`);
+  quiz(b,"follow","Which fields about your decision exist in DynamoDB afterwards?",
+    ["status, verdict_ts, verdict_source","status plus a reason and a topic tag","A preference score for the source repo"],0,
+    "That is all. verdict_source is always \"telegram_tap\". The reason you decided exists only in your head.");
+}
+
+function stepDays(){
+  const b=shell([["signal","memory lifespan"],["","3 new proposals a day"]],"Days pass. Watch your verdict.",
+  `<p>Every morning 3 new proposals enter the archive at the front. The archive keeps only 20. Push days forward and watch the violet slot.</p>`);
+  const a=el("div",{class:"actions"});
+  const adv=el("button",{class:"btn primary",type:"button"},"Next morning");
+  const reset=el("button",{class:"btn",type:"button"},"Back to 09-24");
+  adv.onclick=()=>{ if (mineIndex()>=20) return; S.days++; renderShelf(); if (mineIndex()>=20){ adv.disabled=true; unlockNext(); } };
+  reset.onclick=()=>{ S.days=0; adv.disabled=false; renderShelf(); };
+  if (mineIndex()>=20) adv.disabled=true;
+  a.append(adv,reset); b.append(a);
+  b.append(el("div",{class:"feedback"},"At 3 proposals a day, any verdict leaves the 20-slot archive after 6 to 7 days. After that the proposer has no record that you ever saw it, so the same idea can return."));
+  if (mineIndex()>=20) unlockNext();
+}
+
+function stepLeaks(){
+  const b=shell([["","full map"]],"Tomorrow's proposer: what does it read?",
+  `<p>Tick every input the proposer reads when it writes tomorrow's proposals.</p>`);
+  const items=[
+    ["sources","Today's fresh sources (GitHub releases, arXiv, HN)",true],
+    ["archive","The last 20 proposals with status",true],
+    ["interests","docs/interests.md (your topic list)",false],
+    ["ratings","Your COOL / MEH / SKIP video ratings",false],
+    ["reasons","Why you approved or rejected",false],
+    ["seen","The seen-papers store",false],
+  ];
+  const form=el("div",{class:"quiz"});
+  items.forEach(([id,label])=>{ const l=el("label",{class:"check"}); const i=el("input",{type:"checkbox",id:"k-"+id}); l.append(i, el("span",{},esc(label))); form.append(l); });
+  const check=el("button",{class:"btn primary",type:"button"},"Check my answer");
+  const out=el("div",{hidden:""});
+  check.onclick=()=>{
+    let right=0; items.forEach(([id,,truth])=>{ if ($("#k-"+id).checked===truth) right++; });
+    out.hidden=false;
+    out.innerHTML=`<div class="score">${right} / ${items.length}</div>
+    <div class="leaks">
+      <div class="leak reads"><b>Read: fresh sources</b><small>Up to 15 SDK release notes plus keyword-filtered arXiv and HN. Main cause of the SDK and tooling bias.</small></div>
+      <div class="leak reads"><b>Read: last 20 proposals</b><small>Used only as "do not repeat". Forgets after about a week.</small></div>
+      <div class="leak never"><b>Never read: interests.md</b><small>Hand-edited. Only the video picker uses it.</small></div>
+      <div class="leak never"><b>Never read: video ratings</b><small>preferences.py turns them into topic scores for the video picker, and only after 30 ratings with at least 10 that are not COOL.</small></div>
+      <div class="leak never"><b>Never captured: your reasons</b><small>A tap stores status, time and "telegram_tap". Nothing else.</small></div>
+      <div class="leak never"><b>Never read: seen papers</b><small>Only the video picker checks it, to avoid repeats.</small></div>
+    </div>
+    <p style="margin-top:12px">So there is no flywheel on the proposal side today. Two loops exist, and they do not connect: the proposer loop (sources, archive, taps) and the video loop (interests, ratings, seen papers).</p>`;
+  };
+  const act=el("div",{class:"actions"}); act.append(check);
+  b.append(form, act, out);
+}
+
+// ---- archive shelf ----
+function archiveNow(){
+  // today's 3 at the front once filed, then days of future proposals push everything back
+  const filed = S.maxStep>=6 || S.step>=6;
+  const today = filed ? TODAY.map(p=>({title:p.title, status:S.verdicts[p.pid]||"PROPOSED", pid:p.pid, day:"09-24"})) : [];
+  const future=[]; for (let d=S.days; d>=1; d--) for (let k=0;k<3;k++) future.push({title:`future proposal, day +${d}`, status:"future", day:`+${d}`});
+  const older=[]; for (let i=0;i<OLDER;i++) older.push({title:"older proposal", status:"old", day:"earlier"});
+  return [...future, ...today, ...ARCHIVE_BEFORE, ...older];
+}
+function mineIndex(){ const pid=S.mine||TODAY[0].pid; return archiveNow().findIndex(x=>x.pid===pid); }
+function renderShelf(){
+  const all=archiveNow(); const shelf=$("#shelf"); shelf.innerHTML="";
+  all.slice(0,20).forEach((p,i)=>{
+    const cls=["slot"]; if (["APPROVED","REJECTED","PROPOSED"].includes(p.status)) cls.push(p.status);
+    if (p.pid && p.pid===(S.mine||"")) cls.push("mine");
+    const s=el("div",{class:cls.join(" "),title:`${p.status} · ${p.title}`},`${esc(p.day)}<br>${esc(p.status==="old"?"":p.status==="future"?"new":p.status)}<span class="n">${i+1}</span>`);
+    shelf.append(s);
+  });
+  const idx=mineIndex();
+  const fell=$("#fell");
+  if (S.mine && idx>=20) fell.innerHTML=`<b>Day +${S.days}: your verdict fell off the shelf.</b> The proposer can no longer see it.`;
+  else if (S.mine && idx>=0) fell.innerHTML=`Your verdict sits in slot <b>${idx+1} of 20</b>${S.days?` on day +${S.days}`:""}.`;
+  else fell.textContent="Filled from the real ledger. Green = approved, red = rejected, grey = older proposals not shown.";
+}
+
+function render(){ renderRoute(); STEPS[S.step].render(); renderShelf(); }
+render();
+})();
+</script>
+</body>
+</html>
