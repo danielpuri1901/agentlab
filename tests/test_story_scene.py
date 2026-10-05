@@ -92,8 +92,10 @@ def test_golden_scene_renders_and_writes_timing(tmp_path):
     assert [b["beat"] for b in timing["beats"]] == list(
         range(1, len(board["beats"]) + 1)
     )
-    assert all(b["overrun"] < 0.05 for b in timing["beats"])
-    assert abs(timing["total"] - sum(durations)) < 0.2
+    # Holds round up to whole frames: at most one frame per beat at 15 fps.
+    frame = 1 / 15
+    assert all(b["overrun"] < frame + 1e-6 for b in timing["beats"])
+    assert abs(timing["total"] - sum(durations)) < frame * len(durations)
     assert timing["layout_warnings"] == []
     assert abs(video_render.ffprobe_duration(video) - sum(durations)) < 0.5
 
