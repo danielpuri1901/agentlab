@@ -42,7 +42,7 @@ Daniel set this rule on 2026-10-05, after a draft rule ("3D only when the idea i
 - No forced metaphor. The video only has to explain the idea.
 - LaTeX on.
 - Fewer restrictions. Keep only the security core.
-- Captions dropped. Narration is audio only.
+- Captions dropped at first. Later the same day Daniel asked for subtitles: one chunk of at most two lines at a time, in a slim strip at the bottom. The stage ends above that strip, at y = -2.9.
 - Approach: prompt rules plus one example scene. Not a prompt rewrite alone, and not a helper library.
 - Ground truth: 3b1b's videos and the code behind them.
 - Illustrative numbers are allowed inside vectors and matrices. Numbers presented as results stay grounded in the source.
@@ -146,7 +146,7 @@ The implementation checks every row against Manim CE 0.21 and removes a row that
 
 Example scene:
 
-- One original scene file for SortNet, the fictional paper that the deep-read prompt already uses as its example.
+- One real scene: LoRA (arXiv 2106.09685), taken from the first local run of the new pipeline and polished by hand (Daniel: the one-shot example should be real). It replaced an earlier invented SortNet scene.
 - It follows the rules above: a colour key, transforms from copies, staggered groups, a camera pan, and `MathTex`.
 - It is written for this repository. No 3b1b code is copied, because `3b1b/videos` is licensed CC BY-NC-SA 4.0.
 - The prompt says: copy the style, never the content.
@@ -209,6 +209,8 @@ New audit at the end of each beat:
 - When the camera is flat, map each box to screen coordinates: screen point = (world point - frame center) x zoom.
 - Report text that leaves the frame margin.
 - Report two text objects whose boxes overlap by more than 10% of the smaller box.
+- Report text that lies partly inside a rectangle or polygon: more than 10% and less than 90% of it inside. Fully inside is a label in its box; fully outside is a label beside it.
+- Report a line or arrow that runs through the middle of a text (the text box shrunk by 15% on each side), so an arrow that stops at a label's edge stays quiet. Curves are left out, because their boxes would flag every label near a graph.
 - Skip a box that lies wholly outside the frame.
   When the camera pans across a large board, the parts it does not show are off screen on purpose.
 - Count each text object once.
