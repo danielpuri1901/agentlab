@@ -48,9 +48,6 @@ def test_guard_requires_visual_direction_comment():
         ("x = open('/etc/passwd')\n", "open"),
         ("y = __import__('os')\n", "__import__"),
         ("z = ().__class__.__mro__\n", "__class__"),
-        ("from manim import MathTex\n", "MathTex"),
-        ("from manim import DecimalNumber\n", "DecimalNumber"),
-        ("from manim import BarChart\n", "BarChart"),
         ("w = self.camera.frame\n", "camera"),
     ],
 )
@@ -58,6 +55,45 @@ def test_guard_flags_forbidden_things(snippet, needle):
     source = snippet + GOLDEN_SCENE
     findings = scene_code.check_scene_code(source, BEATS)
     assert any(needle in f for f in findings), findings
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "from manim import MathTex, DecimalNumber, Matrix, BarChart, TransformMatchingTex, Title\n",
+        "from manim import Axes\nAXES = Axes(x_range=[0, 1], axis_config={'include_numbers': True})\n",
+        "from manim import Axes\nAXES = Axes(x_range=[0, 1]).add_coordinates()\n",
+        "from manim import Code\nSNIPPET = Code(code_string='x = 1', language='python')\n",
+        "import numpy as np\nNOISE = np.random.uniform(0, 1, 5) + np.tanh(np.eye(5)).sum()\n",
+        "from manim import VGroup\n\n\nclass Row(VGroup):\n    def __init__(self):\n        super().__init__()\n",
+    ],
+    ids=["latex", "include-numbers", "coordinates", "code-string", "numpy-random", "helper-class"],
+)
+def test_guard_allows_latex_code_strings_numpy_random_and_helper_classes(snippet):
+    assert scene_code.check_scene_code(snippet + GOLDEN_SCENE, BEATS) == []
+
+
+@pytest.mark.parametrize(
+    "snippet, needle",
+    [
+        ("w = getattr(1, 'real')\n", "getattr"),
+        ("from manim import ImageMobject\n", "ImageMobject"),
+        ("from manim import SVGMobject\n", "SVGMobject"),
+        ("from manim import Code\nC = Code('secrets.txt')\n", "Code takes code_string"),
+        ("from manim import Code\nC = Code(code_file='secrets.txt')\n", "Code takes code_string"),
+        ("import numpy as np\nD = np.load('x.npy')\n", "np.load"),
+        ("import numpy as np\nB = np.random.bit_generator\n", "np.random.bit_generator"),
+    ],
+)
+def test_guard_still_blocks_files_secrets_and_media(snippet, needle):
+    findings = scene_code.check_scene_code(snippet + GOLDEN_SCENE, BEATS)
+    assert any(needle in f for f in findings), findings
+
+
+def test_guard_flags_a_second_scene_class():
+    source = GOLDEN_SCENE + "\n\nclass Other(StoryScene):\n    pass\n"
+    findings = scene_code.check_scene_code(source, BEATS)
+    assert any("helper class Other must not be a scene" in f for f in findings), findings
 
 
 def test_guard_allows_the_camera_and_3d_api():
@@ -134,16 +170,6 @@ from numpy import array, cos
         "self.hold(0.6)",
     )
     assert scene_code.check_scene_code(source, BEATS) == []
-
-
-def test_guard_flags_include_numbers_true():
-    source = GOLDEN_SCENE.replace(
-        "self.hold(0.6)",
-        "self.axes = Axes(x_range=[0, 1], axis_config={'include_numbers': True}); self.hold(0.6)",
-    )
-    source = source.replace("from manim import (", "from manim import (\n    Axes,")
-    findings = scene_code.check_scene_code(source, BEATS)
-    assert any("include_numbers" in f for f in findings)
 
 
 def test_guard_requires_every_beat_method_and_no_extras():
@@ -426,8 +452,8 @@ def test_prompt_rejects_duration_count_mismatch():
     [
         ("class Helper:\n    pass\n", "exactly one top-level class named PaperStory"),
         (
-            "class PaperStory(StoryScene):\n    pass\n\nclass Helper:\n    pass\n",
-            "exactly one top-level class named PaperStory",
+            "class PaperStory(StoryScene):\n    pass\n\nclass Helper(StoryScene):\n    pass\n",
+            "helper class Helper must not be a scene",
         ),
         (
             "class PaperStory(other.StoryScene):\n    pass\n",

@@ -123,8 +123,37 @@ ALLOWED_NUMPY_MEMBERS = frozenset(
     }
 )
 
+ALLOWED_NUMPY_MEMBERS = ALLOWED_NUMPY_MEMBERS | frozenset(
+    {
+        # Added 2026-10-05: maths that 3Blue1Brown-style scenes use
+        # (docs/superpowers/specs/2026-10-05-3b1b-style-videos-design.md).
+        "convolve",
+        "cosh",
+        "diag",
+        "exp2",
+        "eye",
+        "flip",
+        "histogram",
+        "identity",
+        "log2",
+        "meshgrid",
+        "mod",
+        "polyfit",
+        "polyval",
+        "repeat",
+        "roll",
+        "sinh",
+        "tanh",
+        "tile",
+        "transpose",
+    }
+)
+
 ALLOWED_NUMPY_NAMESPACES = {
     "linalg": frozenset({"det", "eig", "eigh", "inv", "norm", "solve"}),
+    "random": frozenset(
+        {"choice", "default_rng", "normal", "randint", "random", "seed", "uniform"}
+    ),
 }
 
 FORBIDDEN_NAMES = frozenset(
@@ -142,7 +171,6 @@ FORBIDDEN_NAMES = frozenset(
         "delattr",
         "type",
         "object",
-        "super",
         "dir",
         "vars",
         "breakpoint",
@@ -166,42 +194,33 @@ FORBIDDEN_NAMES = frozenset(
         "file_writer",
         "window",
         "config",
-        # anything that needs LaTeX (the video image has none)
-        "Tex",
-        "MathTex",
-        "SingleStringMathTex",
-        "DecimalNumber",
-        "Integer",
-        "Variable",
-        "Title",
-        "BulletedList",
-        "Matrix",
-        "IntegerMatrix",
-        "DecimalMatrix",
-        "MobjectMatrix",
-        "Table",
-        "MathTable",
-        "IntegerTable",
-        "DecimalTable",
-        "MobjectTable",
-        "BarChart",
-        "TransformMatchingTex",
-        "get_axis_labels",
-        "get_x_axis_label",
-        "get_y_axis_label",
-        "add_coordinates",
-        "get_text",
-        "get_tex",
         # media and files
         "ImageMobject",
         "SVGMobject",
-        "Code",
         "add_sound",
         "interactive_embed",
     }
 )
 
 _BEAT_RE = re.compile(r"^beat_(\d+)$")
+SCENE_BASES = frozenset({BASE_CLASS, SCENE_CLASS, "Scene", "ThreeDScene", "MovingCameraScene"})
+
+
+def _is_super_init(node: ast.Attribute) -> bool:
+    """super().__init__, the one dunder a helper class needs."""
+    return (
+        node.attr == "__init__"
+        and isinstance(node.value, ast.Call)
+        and _call_name(node.value) == "super"
+    )
+
+
+def _call_name(node: ast.Call) -> str | None:
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return None
 _VISUAL_DIRECTION_RE = re.compile(r"^# Visual direction:\s*(\S.*)$", re.MULTILINE)
 
 
@@ -272,7 +291,7 @@ def check_scene_code(source: str, beat_count: int) -> list[str]:
         elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
             findings.append(f"forbidden name: {node.id}")
         elif isinstance(node, ast.Attribute):
-            if node.attr.startswith("_"):
+            if node.attr.startswith("_") and not _is_super_init(node):
                 findings.append(f"private attribute not allowed: {node.attr}")
             elif node.attr in FORBIDDEN_NAMES:
                 findings.append(f"forbidden attribute: {node.attr}")
@@ -286,30 +305,29 @@ def check_scene_code(source: str, beat_count: int) -> list[str]:
         ):
             findings.append(f"dunder name literal not allowed: {node.value}")
         elif (
-            isinstance(node, ast.keyword)
-            and node.arg == "include_numbers"
-            and isinstance(node.value, ast.Constant)
-            and node.value.value is True
-        ):
-            findings.append(
-                "include_numbers=True needs LaTeX, which the render image does not have"
+            isinstance(node, ast.Call)
+            and _call_name(node) == "Code"
+            and (
+                node.args
+                or not any(k.arg == "code_string" for k in node.keywords)
+                or any(k.arg in (None, "code_file") for k in node.keywords)
             )
-        elif isinstance(node, ast.Dict):
-            for key, value in zip(node.keys, node.values, strict=True):
-                if (
-                    isinstance(key, ast.Constant)
-                    and key.value == "include_numbers"
-                    and isinstance(value, ast.Constant)
-                    and value.value is True
-                ):
-                    findings.append(
-                        "include_numbers=True needs LaTeX, which the render image does not have"
-                    )
+        ):
+            findings.append("Code takes code_string=... only, never a file path")
     classes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
-    if len(classes) != 1 or classes[0].name != SCENE_CLASS:
+    scenes = [c for c in classes if c.name == SCENE_CLASS]
+    if len(scenes) != 1:
         findings.append(f"exactly one top-level class named {SCENE_CLASS} is required")
         return _dedup(findings)
-    cls = classes[0]
+    cls = scenes[0]
+    for helper in classes:
+        if helper is not cls and any(
+            isinstance(base, ast.Name) and base.id in SCENE_BASES for base in helper.bases
+        ):
+            findings.append(
+                f"helper class {helper.name} must not be a scene; "
+                f"only {SCENE_CLASS} subclasses {BASE_CLASS}"
+            )
     if (
         len(cls.bases) != 1
         or not isinstance(cls.bases[0], ast.Name)
