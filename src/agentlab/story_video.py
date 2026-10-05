@@ -25,6 +25,8 @@ from pathlib import Path
 
 from agentlab import story_scene
 from agentlab.scene_code import (
+    SCENE_CODE_SYSTEM,
+    STORY_SCENE_API,
     check_scene_code,
     edit_scene_code,
     visual_direction,
@@ -33,7 +35,12 @@ from agentlab.scene_code import (
 from agentlab.scene_plan import ScenePlan
 from agentlab.stage_checkpoints import NoCheckpoints, fingerprint
 from agentlab.story_scene import SCENE_CLASS, TIMING_ENV, beat_lengths
-from agentlab.storyboard import Storyboard, StoryboardInvalid, design_storyboard
+from agentlab.storyboard import (
+    STORYBOARD_SYSTEM,
+    Storyboard,
+    StoryboardInvalid,
+    design_storyboard,
+)
 from agentlab.video_render import (
     build_srt,
     concat_audio,
@@ -49,10 +56,22 @@ MODEL_CALL_TIMEOUT = 600
 VIDEO_DEADLINE_SECONDS = 2400
 MAX_ATTEMPTS = 6
 """The first file plus up to five fix rounds."""
+OUTPUT_SATURATION = 1.5
+"""3Blue1Brown's render saturation (3b1b/videos custom_config.yml)."""
+LAYOUT_ROUND_MIN_SECONDS = MODEL_CALL_TIMEOUT + RENDER_TIMEOUT + 60
+"""Time one layout round may need: an edit call, a render, and the mux."""
 STDERR_TAIL_LINES = 40
 TIMING_TOLERANCE = 0.001
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _Rendered:
+    video: Path
+    timing: dict
+    source: str
+    attempt: int
 
 
 class StoryFailed(Exception):
@@ -270,7 +289,11 @@ def _compose(
     started = time.monotonic()
     bounded_complete = _deadline_bound_completion(complete, started, deadline_seconds)
     work_dir.mkdir(parents=True, exist_ok=True)
-    board_fingerprint = fingerprint("storyboard", story_model, plan_fingerprint)
+    # The prompts are part of each fingerprint, so a prompt change never
+    # reuses a storyboard or scene saved under the old prompt.
+    board_fingerprint = fingerprint(
+        "storyboard", story_model, plan_fingerprint, STORYBOARD_SYSTEM
+    )
     storyboard = checkpoints.load_parsed(
         "storyboard", board_fingerprint, Storyboard.model_validate
     )
@@ -299,7 +322,9 @@ def _compose(
     # each failure. A retry resumes there: a file with no known error renders
     # again without a model call (the last run died mid-render), and a file
     # with an error goes straight to an edit.
-    scene_fingerprint = fingerprint("scene", scene_model, board_fingerprint)
+    scene_fingerprint = fingerprint(
+        "scene", scene_model, board_fingerprint, SCENE_CODE_SYSTEM, STORY_SCENE_API
+    )
 
     def remember(feedback_text: str | None) -> None:
         checkpoints.save(
@@ -308,6 +333,44 @@ def _compose(
 
     failures: list[str] = []
     attempt_records: list[dict] = []
+
+    def ship(chosen: _Rendered, attempts_made: int) -> StoryResult:
+        lengths = beat_lengths(chosen.timing)
+        audio = concat_audio(
+            clips,
+            work_dir / "narration.mp3",
+            target_seconds=lengths,
+            timeout_seconds=_remaining_timeout(
+                started, deadline_seconds, RENDER_TIMEOUT
+            ),
+        )
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        srt_path = out_path.with_suffix(".srt")
+        srt_path.write_text(build_srt(clips, durations=lengths), encoding="utf-8")
+        video_path = mux_final(
+            chosen.video,
+            audio,
+            out_path,
+            timeout_seconds=_remaining_timeout(
+                started, deadline_seconds, RENDER_TIMEOUT
+            ),
+            saturation=OUTPUT_SATURATION,
+        )
+        return StoryResult(
+            video_path=Path(video_path),
+            srt_path=srt_path,
+            storyboard=storyboard,
+            scene_source=chosen.source,
+            visual_direction=visual_direction(chosen.source),
+            attempts=attempts_made,
+            timing=chosen.timing,
+            selected_attempt=chosen.attempt,
+            attempt_records=attempt_records,
+        )
+
+    # A render with only layout problems gets one edit round. It stays as
+    # the fallback, so that round can never cost the day's video.
+    fallback: _Rendered | None = None
     feedback: str | None = None
     source: str | None = None
     saved_scene = checkpoints.load_parsed("scene", scene_fingerprint, _saved_scene)
@@ -316,9 +379,14 @@ def _compose(
     resume_render = saved_scene is not None and feedback is None
     attempt_limit = min(max_attempts, MAX_ATTEMPTS)
     for attempt in range(1, attempt_limit + 1):
+        if fallback is not None and attempt > fallback.attempt + 1:
+            # The one layout round did not ship; the first render does.
+            return ship(fallback, attempt - 1)
         try:
             _remaining_timeout(started, deadline_seconds, 1)
         except _DeadlineExceeded as exc:
+            if fallback is not None:
+                return ship(fallback, attempt)
             raise StoryFailed(str(exc)) from exc
         mode = "generate" if source is None else "edit"
         try:
@@ -383,6 +451,8 @@ def _compose(
             )
             video, timing = _render(scene_file, spec, render_timeout)
         except _DeadlineExceeded as exc:
+            if fallback is not None:
+                return ship(fallback, attempt)
             raise StoryFailed(str(exc)) from exc
         except subprocess.CalledProcessError as exc:
             detail = _stderr_tail(exc)
@@ -428,39 +498,38 @@ def _compose(
             )
             continue
 
+        rendered = _Rendered(video, timing, source, attempt)
+        warnings = timing.get("layout_warnings") or []
+        if warnings and fallback is not None:
+            attempt_records.append(
+                {**record, "status": "layout_still_wrong", "timing": timing}
+            )
+            return ship(fallback, attempt)
+        if (
+            warnings
+            and attempt < attempt_limit
+            and deadline_seconds - (time.monotonic() - started)
+            >= LAYOUT_ROUND_MIN_SECONDS
+        ):
+            fallback = rendered
+            feedback = (
+                "The video rendered, but the layout has problems at the end of "
+                "these beats:\n- "
+                + "\n- ".join(warnings)
+                + "\nMove or shrink the named objects so no text overlaps other "
+                "text and nothing crosses the frame margin. Keep everything else "
+                "the same."
+            )
+            remember(feedback)
+            attempt_records.append(
+                {**record, "status": "layout_round", "failure": feedback, "timing": timing}
+            )
+            continue
         attempt_records.append({**record, "status": "shipped", "timing": timing})
-        lengths = beat_lengths(timing)
-        audio = concat_audio(
-            clips,
-            work_dir / "narration.mp3",
-            target_seconds=lengths,
-            timeout_seconds=_remaining_timeout(
-                started, deadline_seconds, RENDER_TIMEOUT
-            ),
-        )
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        srt_path = out_path.with_suffix(".srt")
-        srt_path.write_text(build_srt(clips, durations=lengths), encoding="utf-8")
-        video_path = mux_final(
-            video,
-            audio,
-            out_path,
-            timeout_seconds=_remaining_timeout(
-                started, deadline_seconds, RENDER_TIMEOUT
-            ),
-        )
-        return StoryResult(
-            video_path=Path(video_path),
-            srt_path=srt_path,
-            storyboard=storyboard,
-            scene_source=source,
-            visual_direction=visual_direction(source),
-            attempts=attempt,
-            timing=timing,
-            selected_attempt=attempt,
-            attempt_records=attempt_records,
-        )
+        return ship(rendered, attempt)
 
+    if fallback is not None:
+        return ship(fallback, attempt_limit)
     raise StoryFailed(
         f"no renderable scene in {attempt_limit} attempts: " + "; ".join(failures)
     )
