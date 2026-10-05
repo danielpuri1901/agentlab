@@ -70,13 +70,12 @@ def test_golden_scene_renders_and_writes_timing(tmp_path):
     shutil.copy(GOLDEN_SCENE, scene_dir / "paper_story.py")
     shutil.copy(Path(story_scene.__file__), scene_dir / "story_scene.py")
     durations = [6.0] * len(board["beats"])
-    captions = [b["narration"] for b in board["beats"]]
     timing_path = tmp_path / "beat_times.json"
 
     video = video_render.render_scene_video(
         scene_dir / "paper_story.py",
         "PaperStory",
-        {"storyboard": board, "durations": durations, "captions": captions},
+        {"storyboard": board, "durations": durations},
         tmp_path / "media",
         quality="l",
         extra_env={"SCENE_TIMING_OUT": str(timing_path)},
@@ -93,7 +92,7 @@ def test_golden_scene_renders_and_writes_timing(tmp_path):
     assert abs(video_render.ffprobe_duration(video) - sum(durations)) < 0.5
 
 
-CAMERA_SCENE = '''# Visual direction: A sphere under an orbiting camera, a square lost off stage.
+CAMERA_SCENE = '''# Visual direction: A sphere under a tilted camera, then a flat board with a square half off the left edge.
 from manim import DEGREES, LEFT, Create, FadeIn, Sphere, Square
 from story_scene import StoryScene
 
@@ -103,10 +102,10 @@ class PaperStory(StoryScene):
         self.ball = Sphere(radius=1.0, resolution=(8, 8))
         self.play(Create(self.ball), run_time=0.5)
         self.move_camera(phi=70 * DEGREES, theta=-45 * DEGREES, zoom=0.8, run_time=1.0)
-        self.begin_ambient_camera_rotation(rate=0.4)
 
     def beat_2(self):
-        self.lost = Square(side_length=1.0).shift(LEFT * 8)
+        self.set_camera_orientation(phi=0, theta=-90 * DEGREES, zoom=1)
+        self.lost = Square(side_length=1.0).shift(LEFT * 6.8)
         self.play(FadeIn(self.lost), run_time=0.5)
 
     def beat_3(self):
@@ -136,7 +135,6 @@ def test_camera_moves_render_and_layout_problems_only_warn(tmp_path):
         {
             "storyboard": {"beats": [{}, {}, {}]},
             "durations": durations,
-            "captions": ["one", "two", "three"],
         },
         tmp_path / "media",
         quality="l",
@@ -147,6 +145,7 @@ def test_camera_moves_render_and_layout_problems_only_warn(tmp_path):
     timing = json.loads(timing_path.read_text(encoding="utf-8"))
     assert [b["beat"] for b in timing["beats"]] == [1, 2, 3]
     assert timing["beats"][2]["overrun"] > 0.5
+    assert timing["layout_skipped"] == [1]
     assert len(timing["layout_warnings"]) == 1
     assert timing["layout_warnings"][0].startswith("beat 2 layout:")
     assert "left edge" in timing["layout_warnings"][0]
@@ -167,13 +166,12 @@ def test_fractional_narration_durations_are_padded_to_whole_frames(tmp_path):
     durations = [
         fractional[index % len(fractional)] for index in range(len(board["beats"]))
     ]
-    captions = [beat["narration"] for beat in board["beats"]]
     timing_path = tmp_path / "beat_times.json"
 
     video_render.render_scene_video(
         scene_dir / "paper_story.py",
         "PaperStory",
-        {"storyboard": board, "durations": durations, "captions": captions},
+        {"storyboard": board, "durations": durations},
         tmp_path / "media",
         quality="l",
         extra_env={"SCENE_TIMING_OUT": str(timing_path)},
@@ -190,7 +188,7 @@ def test_fractional_narration_durations_are_padded_to_whole_frames(tmp_path):
 def test_layout_problems_passes_a_frame_inside_the_stage():
     boxes = [("title", -2.0, 2.0, 2.0, 3.0), ("diagram", -3.0, 3.0, -1.0, 1.0)]
 
-    assert story_scene.layout_problems(boxes, caption_top=-2.0) == []
+    assert story_scene.layout_problems(boxes) == []
 
 
 def test_layout_problems_names_the_element_that_leaves_the_stage():
@@ -209,31 +207,10 @@ def test_layout_problems_catches_every_edge():
     assert len(problems) == 4
 
 
-def test_layout_problems_catches_the_caption_band():
-    """The judge called this "the rectangle clips the caption band"."""
-    boxes = [("'Fine-tuning not evaluated'", -1.0, 1.0, -2.2, -1.6)]
-
-    problems = story_scene.layout_problems(boxes, caption_top=-2.0)
-
-    assert problems == ["'Fine-tuning not evaluated' sits on the caption band"]
-
-
-def test_layout_problems_allows_a_box_resting_above_the_caption():
-    boxes = [("bar", -1.0, 1.0, -1.8, -1.0)]
-
-    assert story_scene.layout_problems(boxes, caption_top=-2.0) == []
-
-
 def test_layout_problems_tolerates_stroke_width_at_the_edge():
     boxes = [("panel", story_scene.STAGE_LEFT - 0.01, 1.0, 0.0, 1.0)]
 
     assert story_scene.layout_problems(boxes) == []
-
-
-def test_layout_problems_ignores_the_caption_band_before_a_caption_exists():
-    boxes = [("intro", -1.0, 1.0, story_scene.STAGE_BOTTOM, -1.0)]
-
-    assert story_scene.layout_problems(boxes, caption_top=None) == []
 
 
 def test_layout_warning_names_the_beat_and_the_element_instead_of_raising():
@@ -247,7 +224,7 @@ def test_layout_warning_names_the_beat_and_the_element_instead_of_raising():
 def test_layout_warning_is_none_when_everything_is_on_stage():
     boxes = [("title", -2.0, 2.0, 2.0, 3.0)]
 
-    assert story_scene.layout_warning(1, boxes, caption_top=-2.0) is None
+    assert story_scene.layout_warning(1, boxes) is None
 
 
 def test_layout_warning_lists_at_most_a_few_problems():
@@ -263,3 +240,40 @@ def test_layout_problems_ignores_mobjects_that_draw_nothing():
     boxes = [("ValueTracker", 175.0, 175.0, 0.0, 0.0)]
 
     assert story_scene.layout_problems(boxes) == []
+
+
+def test_stage_is_the_full_frame_minus_3b1b_edge_buffer():
+    assert story_scene.STAGE_TOP == 3.5 and story_scene.STAGE_BOTTOM == -3.5
+    assert story_scene.STAGE_RIGHT == 6.61 and story_scene.STAGE_LEFT == -6.61
+    assert story_scene.BACKGROUND == "#000000"
+    assert story_scene.YELLOW == "#FFFF00"
+
+
+def test_layout_problems_reports_text_that_overlaps_text():
+    texts = [("'Query'", -1.0, 1.0, 0.0, 0.5), ("'Key'", 0.0, 2.0, 0.1, 0.6)]
+    assert story_scene.layout_problems([], texts) == ["'Query' overlaps 'Key'"]
+
+
+def test_layout_problems_ignores_a_sliver_of_overlap():
+    texts = [("'a'", 0.0, 1.0, 0.0, 1.0), ("'b'", 0.95, 2.0, 0.0, 1.0)]
+    assert story_scene.layout_problems([], texts) == []
+
+
+def test_layout_problems_skips_the_board_the_camera_is_not_showing():
+    """After a pan, the first board sits wholly off screen on purpose."""
+    boxes = [("title", -18.0, -10.0, 3.0, 3.5)]
+    texts = [("'a'", -18.0, -17.0, 0.0, 1.0), ("'b'", -18.0, -17.0, 0.0, 1.0)]
+    assert story_scene.layout_problems(boxes, texts) == []
+
+
+def test_to_screen_applies_a_pan_and_a_zoom():
+    box = ("grid", 12.0, 16.0, -1.0, 1.0)
+    assert story_scene.to_screen(box, 14.0, 0.0, 1.0) == ("grid", -2.0, 2.0, -1.0, 1.0)
+    assert story_scene.to_screen(box, 14.0, 0.0, 0.5) == ("grid", -1.0, 1.0, -0.5, 0.5)
+
+
+def test_camera_is_flat_until_it_tilts():
+    import math
+
+    assert story_scene.camera_is_flat(0.0, -math.pi / 2, 0.0)
+    assert not story_scene.camera_is_flat(70 * math.pi / 180, -math.pi / 2, 0.0)

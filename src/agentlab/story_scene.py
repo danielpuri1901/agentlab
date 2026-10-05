@@ -1,5 +1,6 @@
 """StoryScene: the base class every generated paper scene subclasses
-(docs/specs/2026-09-05-metaphor-videos.md, section 4).
+(docs/specs/2026-09-05-metaphor-videos.md, section 4; the 3Blue1Brown look
+from docs/superpowers/specs/2026-10-05-3b1b-style-videos-design.md).
 
 Executed standalone by manim (`python -m manim` in the video image, `uvx
 manim` on the laptop), so like video_scenes.py it imports ONLY manim and
@@ -8,16 +9,18 @@ generated scene and puts that directory on PYTHONPATH, which is why the
 generated code says `from story_scene import StoryScene`.
 
 Reads SCENE_SPEC_JSON: {"storyboard": <Storyboard.model_dump()>,
-"durations": [seconds per beat], "captions": [text per beat]}.
+"durations": [seconds per beat]}.
 Writes SCENE_TIMING_OUT at the end of construct: {"beats": [{"beat",
-"start", "end", "narration", "overrun"}], "total", "layout_warnings"}.
+"start", "end", "narration", "overrun"}], "total", "layout_warnings",
+"layout_skipped"}.
 
-The base class owns: background, the caption band (bottom of frame,
-swapped at the start of every beat and pinned to the screen so camera
-moves never tilt it), safe-margin fitting, and timing (each beat is padded
-with a hold so its length is at least its narration's length, so the audio
-muxed later lines up). The generated class owns everything the viewer
-watches: one method per beat, beat_1 .. beat_n.
+The base class owns: the 3Blue1Brown look (black background, CMU Serif
+text, the palette below), safe-margin fitting, the end-of-beat layout
+audit, and timing (each beat is padded with a hold so its length is at
+least its narration's length, so the audio muxed later lines up). There
+are no captions: the narration is audio only (Daniel's ruling,
+2026-10-05). The generated class owns everything the viewer watches: one
+method per beat, beat_1 .. beat_n.
 
 StoryScene is a ThreeDScene, so the generated code may move the camera and
 draw 3D mobjects. The camera starts flat, looking straight at the stage,
@@ -29,39 +32,60 @@ Final holds are rounded up by one frame when Manim truncates a fractional
 static wait, so a visual beat never ends before its narration.
 
 The pure helpers above the manim import (beat_record, layout_warning,
-beat_midpoints, beat_lengths, wrap_text, load_spec) are importable from the
-main venv without manim, and story_video.py uses them.
+to_screen, camera_is_flat, beat_midpoints, beat_lengths, wrap_text,
+load_spec) are importable from the main venv without manim, and
+story_video.py uses them.
 """
 
 import json
+import math
 import os
 import textwrap
 from pathlib import Path
 
-BACKGROUND = "#05070c"
-ACCENT = "#2f6fd6"
-GOLD = "#e8c547"
-GREEN = "#4caf7d"
-RED = "#d9534f"
+# 3Blue1Brown's look: background and font from 3b1b/videos custom_config.yml,
+# colours from 3b1b/manim manimlib/default_config.yml (both read 2026-10-05).
+# Manim Community has the same values except YELLOW (#F7D96F there) and
+# BLUE_E (#236B8E there), so generated scenes import colours from here.
+BACKGROUND = "#000000"
+FONT = "CMU Serif"
+BLUE = "#58C4DD"
+BLUE_E = "#1C758A"
+TEAL = "#5CD0B3"
+GREEN = "#83C167"
+YELLOW = "#FFFF00"
+GOLD = "#F0AC5F"
+RED = "#FC6255"
+MAROON = "#C55F73"
+MAROON_B = "#EC92AB"
+PURPLE = "#9A72AC"
+PINK = "#D147BD"
+ORANGE = "#FF862F"
+GREY_A = "#DDDDDD"
+GREY_B = "#BBBBBB"
+GREY_C = "#888888"
+GREY_D = "#444444"
+GREY_E = "#222222"
+GREY_BROWN = "#736357"
+WHITE = "#FFFFFF"
+BLACK = "#000000"
 
-STAGE_TOP = 3.6
-STAGE_BOTTOM = -2.3
-STAGE_LEFT = -6.4
-STAGE_RIGHT = 6.4
+FRAME_HALF_WIDTH = 64 / 9
+"""Half of Manim's default frame width: 16:9 at a frame height of 8."""
+FRAME_HALF_HEIGHT = 4.0
+EDGE_MARGIN = 0.5
+"""3b1b's DEFAULT_MOBJECT_TO_EDGE_BUFF: content stays this far inside."""
+
+STAGE_TOP = FRAME_HALF_HEIGHT - EDGE_MARGIN
+STAGE_BOTTOM = -STAGE_TOP
+STAGE_RIGHT = round(FRAME_HALF_WIDTH - EDGE_MARGIN, 2)
+STAGE_LEFT = -STAGE_RIGHT
 STAGE_WIDTH = STAGE_RIGHT - STAGE_LEFT
 STAGE_HEIGHT = STAGE_TOP - STAGE_BOTTOM
 
 SCENE_CLASS = "PaperStory"
 TIMING_ENV = "SCENE_TIMING_OUT"
 SPEC_ENV = "SCENE_SPEC_JSON"
-
-CAPTION_FONT_SIZE = 20
-CAPTION_RENDER_SIZE = 72
-"""Pango drops and squeezes word spaces at small font sizes, so a caption is
-drawn at this size and scaled down to CAPTION_FONT_SIZE."""
-CAPTION_WRAP_WIDTH = 60
-CAPTION_MAX_HEIGHT = 1.4
-CAPTION_SWAP_SECONDS = 0.25
 
 FRAME_TIME_TOLERANCE = 1e-6
 
@@ -80,28 +104,77 @@ LAYOUT_TOLERANCE = 0.05
 """Slack before a box counts as off-stage. Anti-aliasing and stroke width
 put a few hundredths of a unit outside a mobject's nominal bounds."""
 
-CAPTION_CLEARANCE = 0.12
-"""Gap a mobject must keep above the caption band."""
+OVERLAP_SHARE = 0.10
+"""Two text boxes overlap when the shared area passes this share of the
+smaller box, so text that only touches stays quiet."""
+
+FLAT_TOLERANCE = 1e-3
 
 MAX_REPORTED_PROBLEMS = 4
 
 
-def layout_problems(boxes, caption_top=None) -> list[str]:
-    """Name every box that leaves the stage or sits on the caption band.
+def camera_is_flat(phi: float, theta: float, gamma: float) -> bool:
+    """True while the camera looks straight at the stage, as it starts.
+    Pans and zooms keep it flat; a tilt or a roll does not."""
+    return (
+        abs(phi) < FLAT_TOLERANCE
+        and abs(theta + math.pi / 2) < FLAT_TOLERANCE
+        and abs(gamma) < FLAT_TOLERANCE
+    )
 
-    Pure geometry, deliberately: the faults the frame judge once described
-    in prose ("the context window rectangle clips the caption band") are
-    exact rectangle arithmetic. The result is advisory, see layout_warning.
 
-    `boxes` is [(name, left, right, bottom, top)]. `caption_top` is the top
-    of the caption band, or None when there is no caption yet.
+def to_screen(box, center_x: float = 0.0, center_y: float = 0.0, zoom: float = 1.0):
+    """Map a world box to screen units for a flat camera: a pan moves the
+    frame center and a zoom scales distances from it."""
+    name, left, right, bottom, top = box
+    return (
+        name,
+        (left - center_x) * zoom,
+        (right - center_x) * zoom,
+        (bottom - center_y) * zoom,
+        (top - center_y) * zoom,
+    )
+
+
+def _on_screen(box) -> bool:
+    _, left, right, bottom, top = box
+    return (
+        right > -FRAME_HALF_WIDTH
+        and left < FRAME_HALF_WIDTH
+        and top > -FRAME_HALF_HEIGHT
+        and bottom < FRAME_HALF_HEIGHT
+    )
+
+
+def _area(box) -> float:
+    return max(box[2] - box[1], 0.0) * max(box[4] - box[3], 0.0)
+
+
+def _overlap_area(first, second) -> float:
+    width = min(first[2], second[2]) - max(first[1], second[1])
+    height = min(first[4], second[4]) - max(first[3], second[3])
+    return width * height if width > 0 and height > 0 else 0.0
+
+
+def layout_problems(boxes, texts=()) -> list[str]:
+    """Name every box that crosses the frame margin and every pair of texts
+    that overlap. Pure screen-space geometry, deliberately: the faults the
+    frame judge once described in prose are exact rectangle arithmetic.
+    Advisory, see layout_warning.
+
+    `boxes` and `texts` are [(name, left, right, bottom, top)] in screen
+    units. A box wholly outside the frame belongs to a part of the board
+    the camera is not showing, so it is skipped.
     """
     problems: list[str] = []
-    for name, left, right, bottom, top in boxes:
+    for box in boxes:
+        name, left, right, bottom, top = box
         # A box with no extent draws nothing. ValueTracker is the one that
         # matters: it is a single point whose x coordinate IS the number it
-        # stores, so a counter running to 175 parks it far off the stage.
+        # stores, so a tracker running to 175 parks it far off the stage.
         if right - left < LAYOUT_TOLERANCE and top - bottom < LAYOUT_TOLERANCE:
+            continue
+        if not _on_screen(box):
             continue
         if left < STAGE_LEFT - LAYOUT_TOLERANCE:
             problems.append(f"{name} runs off the left edge")
@@ -111,23 +184,20 @@ def layout_problems(boxes, caption_top=None) -> list[str]:
             problems.append(f"{name} runs off the top edge")
         if bottom < STAGE_BOTTOM - LAYOUT_TOLERANCE:
             problems.append(f"{name} runs off the bottom edge")
-        if (
-            caption_top is not None
-            and bottom < caption_top + CAPTION_CLEARANCE
-            and top > caption_top - LAYOUT_TOLERANCE
-        ):
-            problems.append(f"{name} sits on the caption band")
+    shown = [t for t in texts if _on_screen(t) and _area(t) > 0]
+    for index, first in enumerate(shown):
+        for second in shown[index + 1 :]:
+            if _overlap_area(first, second) > OVERLAP_SHARE * min(_area(first), _area(second)):
+                problems.append(f"{first[0]} overlaps {second[0]}")
     return problems
 
 
-def layout_warning(beat: int, boxes, caption_top=None) -> str | None:
-    """One line naming what sits off the stage at the end of a beat, or None.
-
-    Advisory: the base class records it in the timing output and never
-    fails a render on it. The boxes are world coordinates, and once the
-    generated scene moves the camera they stop matching what is on screen.
-    """
-    problems = layout_problems(boxes, caption_top)
+def layout_warning(beat: int, boxes, texts=()) -> str | None:
+    """One line naming what crosses the frame margin or overlaps at the end
+    of a beat, or None. The base class records it in the timing output and
+    never fails a render on it; story_video.py spends at most one edit
+    round on it."""
+    problems = layout_problems(boxes, texts)
     if not problems:
         return None
     return f"beat {beat} layout: " + "; ".join(problems[:MAX_REPORTED_PROBLEMS])
@@ -155,19 +225,14 @@ def beat_lengths(timing: dict) -> list[float]:
 try:
     from manim import (
         BOLD,
-        DOWN,
-        WHITE,
-        FadeIn,
+        DecimalNumber,
         FadeOut,
+        MarkupText,
+        Paragraph,
+        SingleStringMathTex,
         Text,
         ThreeDScene,
         ValueTracker,
-    )
-    from manim.utils.color import (  # noqa: F401 - re-exported for generated scenes
-        GREY_A,
-        GREY_B,
-        GREY_C,
-        GREY_D,
     )
 
     _MANIM_AVAILABLE = True
@@ -176,6 +241,13 @@ except ImportError:  # pragma: no cover - only hit without manim installed
 
 
 if _MANIM_AVAILABLE:
+    TEXT_TYPES = (Text, MarkupText, Paragraph, SingleStringMathTex, DecimalNumber)
+    """Tex and MathTex subclass SingleStringMathTex; Integer subclasses
+    DecimalNumber."""
+
+    def _label_of(mobject):
+        text = getattr(mobject, "text", None) or getattr(mobject, "tex_string", None)
+        return text if isinstance(text, str) and text.strip() else None
 
     def _describe_mobject(mobject) -> str:
         """A name the scene coder can act on.
@@ -184,12 +256,12 @@ if _MANIM_AVAILABLE:
         inside it, so a group reads as "the group holding 'Context window'"
         instead of the bare "VGroup" that tells the coder nothing.
         """
-        own = getattr(mobject, "text", None)
-        if isinstance(own, str) and own.strip():
+        own = _label_of(mobject)
+        if own:
             return repr(" ".join(own.split())[:40])
         for child in mobject.get_family():
-            text = getattr(child, "text", None)
-            if isinstance(text, str) and text.strip():
+            text = _label_of(child)
+            if text:
                 label = repr(" ".join(text.split())[:40])
                 return f"the group holding {label}"
         shapes = [type(c).__name__ for c in mobject.submobjects]
@@ -198,6 +270,19 @@ if _MANIM_AVAILABLE:
             return f"the {type(mobject).__name__} of {len(shapes)} {'/'.join(kinds[:2])}"
         return type(mobject).__name__
 
+    def _texts_in(mobject) -> list:
+        """The outermost text objects in a family: a MathTex inside a group
+        counts once, its glyphs never separately."""
+        if isinstance(mobject, TEXT_TYPES):
+            return [mobject]
+        found = []
+        for sub in mobject.submobjects:
+            found.extend(_texts_in(sub))
+        return found
+
+    def _visible(mobject) -> bool:
+        return max(mobject.get_fill_opacity(), mobject.get_stroke_opacity()) > 0.05
+
 
     class StoryScene(ThreeDScene):
         """Subclass as PaperStory, define beat_1 .. beat_n, never override
@@ -205,22 +290,22 @@ if _MANIM_AVAILABLE:
 
         def construct(self):
             self.camera.background_color = BACKGROUND
+            Text.set_default(font=FONT)
+            MarkupText.set_default(font=FONT)
             spec = load_spec()
             self.storyboard = spec["storyboard"]
             durations = spec["durations"]
-            captions = spec["captions"]
             n = len(self.storyboard["beats"])
-            if len(durations) != n or len(captions) != n:
-                raise ValueError(f"spec has {len(durations)} durations and {len(captions)} captions for {n} beats")
-            self._caption = None
+            if len(durations) != n:
+                raise ValueError(f"spec has {len(durations)} durations for {n} beats")
             self._timing: list[dict] = []
             self._layout_warnings: list[str] = []
+            self._layout_skipped: list[int] = []
             for i in range(n):
                 method = getattr(self, f"beat_{i + 1}", None)
                 if method is None:
                     raise AttributeError(f"{SCENE_CLASS} is missing beat_{i + 1}")
                 start = self.time
-                self._swap_caption(captions[i])
                 method()
                 remaining = durations[i] - (self.time - start)
                 if remaining > 0:
@@ -253,34 +338,11 @@ if _MANIM_AVAILABLE:
             kwargs = {"weight": BOLD} if bold else {}
             return self.fit(Text(wrap_text(text, width), font_size=size, color=color, line_spacing=1.2, **kwargs))
 
-        def counter(self, start: float, end: float, suffix: str = "", size: int = 44, color=ACCENT, decimals: int = 0):
-            """A text number that counts from start to end. Returns (mobject,
-            animation): place the mobject, then self.play(animation, run_time=...).
-            Call self.freeze(mobject) before any FadeOut/Transform that includes it."""
-            tracker = ValueTracker(float(start))
-
-            def render(value: float):
-                return Text(f"{value:.{decimals}f}{suffix}", font_size=size, color=color, weight=BOLD)
-
-            mobject = render(float(start))
-            mobject.add_updater(lambda m: m.become(render(tracker.get_value()).move_to(m.get_center())))
-            return mobject, tracker.animate.set_value(float(end))
-
-        def freeze(self, mobject):
-            """Stop a counter updating so later group animations are safe."""
-            mobject.clear_updaters()
-            return mobject
-
         def clear_stage(self, run_time: float = 0.4):
-            """Fade out everything except the caption. Value trackers draw
-            nothing and include the camera's own angles, so they stay and an
-            ambient camera rotation keeps turning."""
-            keep = id(self._caption) if self._caption is not None else None
-            targets = [
-                m
-                for m in list(self.mobjects)
-                if id(m) != keep and not isinstance(m, ValueTracker)
-            ]
+            """Fade out everything. Value trackers draw nothing and include
+            the camera's own angles, so they stay and an ambient camera
+            rotation keeps turning."""
+            targets = [m for m in list(self.mobjects) if not isinstance(m, ValueTracker)]
             for m in targets:
                 m.clear_updaters()
             if targets:
@@ -293,46 +355,47 @@ if _MANIM_AVAILABLE:
         # -- owned by the base class -------------------------------------------
 
         def _audit_layout(self, beat: int):
-            """Record what is off-stage or on the caption band at the end of
-            this beat. Runs after the beat method returns, so every mobject
-            is at its resting position. Never fails the render."""
-            caption_top = None
-            if self._caption is not None:
-                caption_top = float(self._caption.get_top()[1])
-            boxes = []
+            """Record text that overlaps text, or anything that crosses the
+            frame margin, at the end of this beat, in screen units. Runs
+            after the beat method returns, so every mobject is at its
+            resting position. A tilted camera turns boxes into perspective
+            shapes, so that beat is recorded as skipped. Never fails the
+            render."""
+            camera = self.camera
+            if not camera_is_flat(camera.get_phi(), camera.get_theta(), camera.get_gamma()):
+                self._layout_skipped.append(beat)
+                return
+            center = camera.frame_center
+            zoom = float(camera.get_zoom())
+            fixed = camera.fixed_in_frame_mobjects
+
+            def screen_box(mobject):
+                box = (
+                    _describe_mobject(mobject),
+                    float(mobject.get_left()[0]),
+                    float(mobject.get_right()[0]),
+                    float(mobject.get_bottom()[1]),
+                    float(mobject.get_top()[1]),
+                )
+                if mobject in fixed:
+                    return box
+                return to_screen(box, float(center[0]), float(center[1]), zoom)
+
+            boxes, texts, seen = [], [], set()
             for mobject in self.mobjects:
-                if mobject is self._caption:
-                    continue
                 if not mobject.get_all_points().size:
                     continue
-                boxes.append(
-                    (
-                        _describe_mobject(mobject),
-                        float(mobject.get_left()[0]),
-                        float(mobject.get_right()[0]),
-                        float(mobject.get_bottom()[1]),
-                        float(mobject.get_top()[1]),
-                    )
-                )
-            warning = layout_warning(beat, boxes, caption_top)
+                boxes.append(screen_box(mobject))
+                for text in _texts_in(mobject):
+                    # Swap and similar animations leave a group holding
+                    # mobjects that already sit in another family.
+                    if id(text) in seen or not _visible(text):
+                        continue
+                    seen.add(id(text))
+                    texts.append(screen_box(text))
+            warning = layout_warning(beat, boxes, texts)
             if warning:
                 self._layout_warnings.append(warning)
-
-        def _swap_caption(self, text: str):
-            caption = Text(
-                wrap_text(text, CAPTION_WRAP_WIDTH),
-                font_size=CAPTION_RENDER_SIZE,
-                color=WHITE,
-                line_spacing=1.15,
-            ).scale(CAPTION_FONT_SIZE / CAPTION_RENDER_SIZE)
-            new = self.fit(caption, max_w=STAGE_WIDTH, max_h=CAPTION_MAX_HEIGHT)
-            new.to_edge(DOWN, buff=0.3)
-            self.add_fixed_in_frame_mobjects(new)
-            anims = [FadeIn(new)]
-            if self._caption is not None:
-                anims.append(FadeOut(self._caption))
-            self.play(*anims, run_time=CAPTION_SWAP_SECONDS)
-            self._caption = new
 
         def _write_timing(self):
             path = os.environ.get(TIMING_ENV)
@@ -342,5 +405,6 @@ if _MANIM_AVAILABLE:
                 "beats": self._timing,
                 "total": float(self.time),
                 "layout_warnings": self._layout_warnings,
+                "layout_skipped": self._layout_skipped,
             }
             Path(path).write_text(json.dumps(timing, indent=1), encoding="utf-8")

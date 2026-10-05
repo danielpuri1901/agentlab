@@ -221,7 +221,7 @@ def test_cheat_sheet_names_every_public_story_scene_method():
         and not n.name.startswith("_")
         and n.name != "construct"
     }
-    assert public == {"fit", "label", "counter", "freeze", "clear_stage", "hold"}
+    assert public == {"fit", "label", "clear_stage", "hold"}
     for name in public:
         assert f"self.{name}(" in scene_code.STORY_SCENE_API
 
