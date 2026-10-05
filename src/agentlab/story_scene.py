@@ -9,18 +9,20 @@ generated scene and puts that directory on PYTHONPATH, which is why the
 generated code says `from story_scene import StoryScene`.
 
 Reads SCENE_SPEC_JSON: {"storyboard": <Storyboard.model_dump()>,
-"durations": [seconds per beat]}.
+"durations": [seconds per beat], "subtitles": [narration per beat]}.
+"subtitles" is optional.
 Writes SCENE_TIMING_OUT at the end of construct: {"beats": [{"beat",
 "start", "end", "narration", "overrun"}], "total", "layout_warnings",
 "layout_skipped"}.
 
 The base class owns: the 3Blue1Brown look (black background, CMU Serif
 text, the palette below), safe-margin fitting, the end-of-beat layout
-audit, and timing (each beat is padded with a hold so its length is at
-least its narration's length, so the audio muxed later lines up). There
-are no captions: the narration is audio only (Daniel's ruling,
-2026-10-05). The generated class owns everything the viewer watches: one
-method per beat, beat_1 .. beat_n.
+audit, the subtitles, and timing (each beat is padded with a hold so its
+length is at least its narration's length, so the audio muxed later lines
+up). Subtitles show the narration one chunk of at most two lines at a time
+in a slim strip at the bottom (Daniel, 2026-10-05: "i need subtitles"); the
+stage ends above that strip. The generated class owns everything else the
+viewer watches: one method per beat, beat_1 .. beat_n.
 
 StoryScene is a ThreeDScene, so the generated code may move the camera and
 draw 3D mobjects. The camera starts flat, looking straight at the stage,
@@ -40,6 +42,7 @@ story_video.py uses them.
 import json
 import math
 import os
+import re
 import textwrap
 from pathlib import Path
 
@@ -76,8 +79,18 @@ FRAME_HALF_HEIGHT = 4.0
 EDGE_MARGIN = 0.5
 """3b1b's DEFAULT_MOBJECT_TO_EDGE_BUFF: content stays this far inside."""
 
+SUBTITLE_FONT_SIZE = 22
+SUBTITLE_RENDER_SIZE = 72
+"""Pango drops and squeezes word spaces at small font sizes, so a subtitle
+is drawn at this size and scaled down to SUBTITLE_FONT_SIZE."""
+SUBTITLE_WRAP_WIDTH = 64
+SUBTITLE_MAX_LINES = 2
+SUBTITLE_BOTTOM_BUFF = 0.25
+SUBTITLE_STRIP = 1.1
+"""Height kept free for two subtitle lines at the bottom of the frame."""
+
 STAGE_TOP = FRAME_HALF_HEIGHT - EDGE_MARGIN
-STAGE_BOTTOM = -STAGE_TOP
+STAGE_BOTTOM = -FRAME_HALF_HEIGHT + SUBTITLE_STRIP
 STAGE_RIGHT = round(FRAME_HALF_WIDTH - EDGE_MARGIN, 2)
 STAGE_LEFT = -STAGE_RIGHT
 STAGE_WIDTH = STAGE_RIGHT - STAGE_LEFT
@@ -110,7 +123,40 @@ smaller box, so text that only touches stays quiet."""
 
 FLAT_TOLERANCE = 1e-3
 
+SPILL_SHARE = (0.10, 0.90)
+"""Text spills out of a box when this much of it, and no more, lies inside:
+fully inside is a label in its box, fully outside is a label beside it."""
+CROSS_MARGIN = 0.15
+"""A line crosses text when it enters the text box shrunk by this share on
+each side, so an arrow that stops at a label's edge stays quiet."""
+
 MAX_REPORTED_PROBLEMS = 4
+
+
+def subtitle_chunks(
+    text: str,
+    seconds: float,
+    width: int = SUBTITLE_WRAP_WIDTH,
+    max_lines: int = SUBTITLE_MAX_LINES,
+) -> list[tuple[float, str]]:
+    """Split one beat's narration into chunks of at most max_lines lines,
+    each with its start offset in the beat.
+
+    ponytail: offsets follow each chunk's share of the characters, an
+    estimate of when the voice reaches it; Polly sentence speech marks give
+    exact times if subtitles drift.
+    """
+    chunks = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        lines = textwrap.wrap(sentence, width)
+        for start in range(0, len(lines), max_lines):
+            chunks.append("\n".join(lines[start : start + max_lines]))
+    total = sum(len(chunk) for chunk in chunks) or 1
+    cues, done = [], 0
+    for chunk in chunks:
+        cues.append((seconds * done / total, chunk))
+        done += len(chunk)
+    return cues
 
 
 def camera_is_flat(phi: float, theta: float, gamma: float) -> bool:
@@ -156,15 +202,44 @@ def _overlap_area(first, second) -> float:
     return width * height if width > 0 and height > 0 else 0.0
 
 
-def layout_problems(boxes, texts=()) -> list[str]:
-    """Name every box that crosses the frame margin and every pair of texts
-    that overlap. Pure screen-space geometry, deliberately: the faults the
+def _segment_hits_box(x0: float, y0: float, x1: float, y1: float, box) -> bool:
+    """Liang-Barsky clip: does the segment enter the box?"""
+    _, left, right, bottom, top = box
+    dx, dy = x1 - x0, y1 - y0
+    low, high = 0.0, 1.0
+    for p, q in ((-dx, x0 - left), (dx, right - x0), (-dy, y0 - bottom), (dy, top - y0)):
+        if p == 0:
+            if q < 0:
+                return False
+            continue
+        u = q / p
+        if p < 0:
+            low = max(low, u)
+        else:
+            high = min(high, u)
+        if low > high:
+            return False
+    return True
+
+
+def _shrunk(box, share: float):
+    name, left, right, bottom, top = box
+    width, height = right - left, top - bottom
+    return (name, left + share * width, right - share * width, bottom + share * height, top - share * height)
+
+
+def layout_problems(boxes, texts=(), shapes=(), segments=()) -> list[str]:
+    """Name every box that leaves the stage, every pair of texts that
+    overlap, every text that spills out of a box, and every line that runs
+    through a text. Pure screen-space geometry, deliberately: the faults the
     frame judge once described in prose are exact rectangle arithmetic.
     Advisory, see layout_warning.
 
-    `boxes` and `texts` are [(name, left, right, bottom, top)] in screen
-    units. A box wholly outside the frame belongs to a part of the board
-    the camera is not showing, so it is skipped.
+    `boxes`, `texts`, and `shapes` (closed shapes such as rectangles) are
+    [(name, left, right, bottom, top)] in screen units; `segments` (lines
+    and arrows) are [(name, x0, y0, x1, y1)]. A box wholly outside the
+    frame belongs to a part of the board the camera is not showing, so it
+    is skipped.
     """
     problems: list[str] = []
     for box in boxes:
@@ -189,15 +264,24 @@ def layout_problems(boxes, texts=()) -> list[str]:
         for second in shown[index + 1 :]:
             if _overlap_area(first, second) > OVERLAP_SHARE * min(_area(first), _area(second)):
                 problems.append(f"{first[0]} overlaps {second[0]}")
-    return problems
+    for text in shown:
+        for shape in shapes:
+            inside = _overlap_area(text, shape) / _area(text)
+            if SPILL_SHARE[0] < inside < SPILL_SHARE[1]:
+                problems.append(f"{text[0]} spills out of {shape[0]}")
+        core = _shrunk(text, CROSS_MARGIN)
+        for name, x0, y0, x1, y1 in segments:
+            if _segment_hits_box(x0, y0, x1, y1, core):
+                problems.append(f"the {name} crosses {text[0]}")
+    return list(dict.fromkeys(problems))
 
 
-def layout_warning(beat: int, boxes, texts=()) -> str | None:
+def layout_warning(beat: int, boxes, texts=(), shapes=(), segments=()) -> str | None:
     """One line naming what crosses the frame margin or overlaps at the end
     of a beat, or None. The base class records it in the timing output and
     never fails a render on it; story_video.py spends at most one edit
     round on it."""
-    problems = layout_problems(boxes, texts)
+    problems = layout_problems(boxes, texts, shapes, segments)
     if not problems:
         return None
     return f"beat {beat} layout: " + "; ".join(problems[:MAX_REPORTED_PROBLEMS])
@@ -225,14 +309,18 @@ def beat_lengths(timing: dict) -> list[float]:
 try:
     from manim import (
         BOLD,
+        DOWN,
         DecimalNumber,
         FadeOut,
+        Line,
         MarkupText,
         Paragraph,
+        Polygram,
         SingleStringMathTex,
         Text,
         ThreeDScene,
         ValueTracker,
+        VMobject,
     )
 
     _MANIM_AVAILABLE = True
@@ -280,6 +368,15 @@ if _MANIM_AVAILABLE:
             found.extend(_texts_in(sub))
         return found
 
+    def _shapes_in(mobject) -> list:
+        """Lines and closed polygons in a family, outside any text."""
+        if isinstance(mobject, TEXT_TYPES):
+            return []
+        found = [mobject] if isinstance(mobject, (Line, Polygram)) else []
+        for sub in mobject.submobjects:
+            found.extend(_shapes_in(sub))
+        return found
+
     def _visible(mobject) -> bool:
         return max(mobject.get_fill_opacity(), mobject.get_stroke_opacity()) > 0.05
 
@@ -295,9 +392,13 @@ if _MANIM_AVAILABLE:
             spec = load_spec()
             self.storyboard = spec["storyboard"]
             durations = spec["durations"]
+            subtitles = spec.get("subtitles")
             n = len(self.storyboard["beats"])
-            if len(durations) != n:
-                raise ValueError(f"spec has {len(durations)} durations for {n} beats")
+            if len(durations) != n or (subtitles is not None and len(subtitles) != n):
+                raise ValueError(f"spec durations and subtitles do not match {n} beats")
+            self._subtitle = None
+            self._subtitle_text = None
+            self._subtitle_cues: list[tuple[float, str]] = []
             self._timing: list[dict] = []
             self._layout_warnings: list[str] = []
             self._layout_skipped: list[int] = []
@@ -306,6 +407,8 @@ if _MANIM_AVAILABLE:
                 if method is None:
                     raise AttributeError(f"{SCENE_CLASS} is missing beat_{i + 1}")
                 start = self.time
+                if subtitles is not None:
+                    self._start_subtitles(start, subtitles[i], durations[i])
                 method()
                 remaining = durations[i] - (self.time - start)
                 if remaining > 0:
@@ -339,10 +442,14 @@ if _MANIM_AVAILABLE:
             return self.fit(Text(wrap_text(text, width), font_size=size, color=color, line_spacing=1.2, **kwargs))
 
         def clear_stage(self, run_time: float = 0.4):
-            """Fade out everything. Value trackers draw nothing and include
+            """Fade out everything but the subtitle. Value trackers draw nothing and include
             the camera's own angles, so they stay and an ambient camera
             rotation keeps turning."""
-            targets = [m for m in list(self.mobjects) if not isinstance(m, ValueTracker)]
+            targets = [
+                m
+                for m in list(self.mobjects)
+                if m is not self._subtitle and not isinstance(m, ValueTracker)
+            ]
             for m in targets:
                 m.clear_updaters()
             if targets:
@@ -381,9 +488,15 @@ if _MANIM_AVAILABLE:
                     return box
                 return to_screen(box, float(center[0]), float(center[1]), zoom)
 
-            boxes, texts, seen = [], [], set()
+            def screen_point(mobject, point):
+                x, y = float(point[0]), float(point[1])
+                if mobject in fixed:
+                    return x, y
+                return (x - float(center[0])) * zoom, (y - float(center[1])) * zoom
+
+            boxes, texts, shapes, segments, seen = [], [], [], [], set()
             for mobject in self.mobjects:
-                if not mobject.get_all_points().size:
+                if mobject is self._subtitle or not mobject.get_all_points().size:
                     continue
                 boxes.append(screen_box(mobject))
                 for text in _texts_in(mobject):
@@ -393,9 +506,55 @@ if _MANIM_AVAILABLE:
                         continue
                     seen.add(id(text))
                     texts.append(screen_box(text))
-            warning = layout_warning(beat, boxes, texts)
+                for shape in _shapes_in(mobject):
+                    if id(shape) in seen or not _visible(shape) or not shape.points.size:
+                        continue
+                    seen.add(id(shape))
+                    if isinstance(shape, Line):
+                        name = type(shape).__name__.lower()
+                        start = screen_point(shape, shape.get_start())
+                        end = screen_point(shape, shape.get_end())
+                        segments.append((name, *start, *end))
+                    else:
+                        shapes.append(screen_box(shape))
+            warning = layout_warning(beat, boxes, texts, shapes, segments)
             if warning:
                 self._layout_warnings.append(warning)
+
+        def _start_subtitles(self, start: float, text: str, seconds: float):
+            self._subtitle_cues = [
+                (start + offset, chunk) for offset, chunk in subtitle_chunks(text, seconds)
+            ]
+            if self._subtitle is None:
+                self._subtitle = VMobject()
+                # A dt argument makes the updater time-based, so it also runs
+                # through static waits, where a chunk change can fall.
+                self._subtitle.add_updater(lambda m, dt: self._show_subtitle(m))
+            if self._subtitle not in self.mobjects:
+                # The beat's own code may have removed it; bring it back.
+                self.add_fixed_in_frame_mobjects(self._subtitle)
+            self._show_subtitle(self._subtitle)
+
+        def _show_subtitle(self, mobject):
+            current = None
+            for at, chunk in self._subtitle_cues:
+                if self.time + FRAME_TIME_TOLERANCE >= at:
+                    current = chunk
+            if current == self._subtitle_text:
+                return
+            self._subtitle_text = current
+            if current is None:
+                mobject.become(VMobject())
+                return
+            text = Text(
+                current, font_size=SUBTITLE_RENDER_SIZE, color=WHITE, line_spacing=1.1
+            ).scale(SUBTITLE_FONT_SIZE / SUBTITLE_RENDER_SIZE)
+            text.set_stroke(BLACK, width=5, background=True)
+            text.to_edge(DOWN, buff=SUBTITLE_BOTTOM_BUFF)
+            mobject.become(text)
+            # become() swaps in new glyphs; pin them too, so camera moves
+            # never carry the subtitle along.
+            self.camera.add_fixed_in_frame_mobjects(mobject)
 
         def _write_timing(self):
             path = os.environ.get(TIMING_ENV)

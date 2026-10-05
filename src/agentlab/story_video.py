@@ -315,7 +315,11 @@ def _compose(
     narrations = [beat.narration for beat in storyboard.beats]
     clips = narrate(polly_client, narrations, voice_id, work_dir / "narration")
     durations = [clip.seconds for clip in clips]
-    spec = {"storyboard": storyboard.model_dump(), "durations": durations}
+    spec = {
+        "storyboard": storyboard.model_dump(),
+        "durations": durations,
+        "subtitles": narrations,
+    }
     scene_dir = work_dir / "scene"
 
     # The scene stage saves its file before each render and its error after

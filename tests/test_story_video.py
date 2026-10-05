@@ -16,7 +16,7 @@ from agentlab.video_render import NarrationClip
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BOARD = Storyboard(
-    **json.loads((FIXTURES / "storyboard_golden.json").read_text(encoding="utf-8"))
+    **json.loads((FIXTURES / "storyboard_example.json").read_text(encoding="utf-8"))
 )
 PLAN = ScenePlan(
     **json.loads((FIXTURES / "sample_plan.json").read_text(encoding="utf-8"))
@@ -182,7 +182,7 @@ def test_first_successful_render_ships_without_a_judge(seams, tmp_path):
     assert seams["targets"] == [5.0] * N
     assert result.srt_path.exists()
     assert "class PaperStory" in result.scene_source
-    assert result.visual_direction.startswith("One row of number tiles")
+    assert result.visual_direction.startswith("The frozen weight matrix W0")
     assert result.timing == _timing()
     assert seams["edits"] == []
     assert _modes_and_statuses(result) == [("generate", "shipped")]
@@ -739,3 +739,18 @@ def test_checkpoint_fingerprints_cover_the_prompts(seams, tmp_path, monkeypatch)
         story_video.SCENE_CODE_SYSTEM in parts and story_video.STORY_SCENE_API in parts
         for parts in seen
     )
+
+
+def test_the_scene_gets_the_narration_as_subtitles(seams, tmp_path, monkeypatch):
+    specs = []
+    real_render = story_video.render_scene_video
+
+    def spying_render(scene_file, scene_class, spec, *args, **kwargs):
+        specs.append(spec)
+        return real_render(scene_file, scene_class, spec, *args, **kwargs)
+
+    monkeypatch.setattr(story_video, "render_scene_video", spying_render)
+
+    _compose(tmp_path)
+
+    assert specs[0]["subtitles"] == [beat.narration for beat in BOARD.beats]

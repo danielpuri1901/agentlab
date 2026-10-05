@@ -384,12 +384,12 @@ it). It gives you:
 Constants (import them from story_scene): BACKGROUND (#000000), the 3Blue1Brown palette \
 BLUE, BLUE_E, TEAL, GREEN, YELLOW, GOLD, RED, MAROON, MAROON_B, PURPLE, PINK, ORANGE, \
 GREY_A, GREY_B, GREY_C, GREY_D, GREY_E, GREY_BROWN, WHITE, BLACK, and the stage bounds \
-STAGE_TOP (3.5), STAGE_BOTTOM (-3.5), STAGE_LEFT (-6.61), STAGE_RIGHT (6.61).
+STAGE_TOP (3.5), STAGE_BOTTOM (-2.9), STAGE_LEFT (-6.61), STAGE_RIGHT (6.61).
 
 Methods:
 - self.fit(mobject, max_w=None, max_h=None): shrink to the stage or the given bounds; returns the mobject.
 - self.label(text, size=28, color=WHITE, width=44, bold=False): a wrapped, fitted Text.
-- self.clear_stage(run_time=0.4): fade out everything. The camera stays where it is.
+- self.clear_stage(run_time=0.4): fade out everything except the subtitle. The camera stays where it is.
 - self.hold(seconds): wait, to let a change sink in.
 
 Camera and 3D (angles in radians, for example 70 * DEGREES):
@@ -401,9 +401,9 @@ Camera and 3D (angles in radians, for example 70 * DEGREES):
 - Render cost: the renderer draws every face of every 3D mobject on every frame, and the whole video must render within 10 minutes on 4 CPUs. Use 3D mobjects for a few large objects only. Draw grids, particles, and other repeated small shapes with flat Dot, Line, and Circle.
 The camera starts flat, looking straight at the stage (phi=0, theta=-90 * DEGREES), and stays wherever you leave it.
 
-The base class already sets the black background and the CMU Serif font, and pads each \
-beat so it lasts at least its narration. There are no captions: the narration is audio \
-only. You only write beat_1 .. beat_n."""
+The base class already sets the black background and the CMU Serif font, shows the \
+narration as subtitles in a strip below STAGE_BOTTOM, and pads each beat so it lasts at \
+least its narration. You only write beat_1 .. beat_n."""
 
 
 SCENE_CODER_EXAMPLE = (
@@ -494,9 +494,9 @@ subclass) are allowed outside PaperStory, but they must not be scenes.
 dataclasses, typing, colorsys. Name every imported name: no wildcard imports. From numpy \
 use numeric functions and np.random. The guard rejects open, exec, eval, getattr, \
 setattr, type, object, and any direct use of self.camera, self.renderer, or config.
-- The whole frame is the stage. Keep content 0.5 units inside the frame edges. At the \
-end of each beat, the base class reports text that overlaps other text and anything that \
-crosses the frame margin.
+- The stage is the frame above the subtitle strip: keep content between STAGE_LEFT and \
+STAGE_RIGHT and between STAGE_BOTTOM and STAGE_TOP. At the end of each beat, the base \
+class reports text that overlaps other text and anything that leaves the stage.
 - Aim to finish each beat's animations before its narration ends. The base class pads \
 the rest with a still frame.
 - The render must finish within 10 minutes at 1280x720 and 30 fps, so keep 3D meshes \

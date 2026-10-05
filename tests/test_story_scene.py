@@ -6,7 +6,9 @@ import pytest
 from agentlab import story_scene
 
 GOLDEN_SCENE = Path(story_scene.__file__).with_name("scene_coder_example.py")
-GOLDEN_BOARD = Path(__file__).parent / "fixtures" / "storyboard_golden.json"
+GOLDEN_BOARD = Path(__file__).parent / "fixtures" / "storyboard_example.json"
+# The narration lengths of the LoRA run the example scene was polished from.
+EXAMPLE_DURATIONS = [12.792, 11.04, 8.328, 11.856, 10.776, 9.984, 10.272, 12.552, 9.864, 11.064, 11.064]
 
 
 def test_module_imports_without_manim_and_exposes_pure_helpers():
@@ -69,13 +71,17 @@ def test_golden_scene_renders_and_writes_timing(tmp_path):
     scene_dir.mkdir()
     shutil.copy(GOLDEN_SCENE, scene_dir / "paper_story.py")
     shutil.copy(Path(story_scene.__file__), scene_dir / "story_scene.py")
-    durations = [6.0] * len(board["beats"])
+    durations = EXAMPLE_DURATIONS
     timing_path = tmp_path / "beat_times.json"
 
     video = video_render.render_scene_video(
         scene_dir / "paper_story.py",
         "PaperStory",
-        {"storyboard": board, "durations": durations},
+        {
+            "storyboard": board,
+            "durations": durations,
+            "subtitles": [b["narration"] for b in board["beats"]],
+        },
         tmp_path / "media",
         quality="l",
         extra_env={"SCENE_TIMING_OUT": str(timing_path)},
@@ -162,10 +168,7 @@ def test_fractional_narration_durations_are_padded_to_whole_frames(tmp_path):
     scene_dir.mkdir()
     shutil.copy(GOLDEN_SCENE, scene_dir / "paper_story.py")
     shutil.copy(Path(story_scene.__file__), scene_dir / "story_scene.py")
-    fractional = [6.013, 7.021, 7.039, 6.077, 8.111]
-    durations = [
-        fractional[index % len(fractional)] for index in range(len(board["beats"]))
-    ]
+    durations = EXAMPLE_DURATIONS
     timing_path = tmp_path / "beat_times.json"
 
     video_render.render_scene_video(
@@ -243,7 +246,7 @@ def test_layout_problems_ignores_mobjects_that_draw_nothing():
 
 
 def test_stage_is_the_full_frame_minus_3b1b_edge_buffer():
-    assert story_scene.STAGE_TOP == 3.5 and story_scene.STAGE_BOTTOM == -3.5
+    assert story_scene.STAGE_TOP == 3.5 and story_scene.STAGE_BOTTOM == -2.9
     assert story_scene.STAGE_RIGHT == 6.61 and story_scene.STAGE_LEFT == -6.61
     assert story_scene.BACKGROUND == "#000000"
     assert story_scene.YELLOW == "#FFFF00"
@@ -277,3 +280,47 @@ def test_camera_is_flat_until_it_tilts():
 
     assert story_scene.camera_is_flat(0.0, -math.pi / 2, 0.0)
     assert not story_scene.camera_is_flat(70 * math.pi / 180, -math.pi / 2, 0.0)
+
+
+def test_subtitle_chunks_follow_sentences_and_their_share_of_the_beat():
+    text = "LoRA freezes the weights. It trains two tiny matrices instead."
+    cues = story_scene.subtitle_chunks(text, 10.0)
+    assert [chunk for _, chunk in cues] == [
+        "LoRA freezes the weights.",
+        "It trains two tiny matrices instead.",
+    ]
+    assert cues[0][0] == 0.0
+    assert cues[1][0] == pytest.approx(10.0 * 25 / 61)
+
+
+def test_a_long_sentence_splits_into_chunks_of_two_lines():
+    sentence = " ".join(["word"] * 60) + "."
+    cues = story_scene.subtitle_chunks(sentence, 12.0, width=40)
+    assert len(cues) > 1
+    assert all(chunk.count("\n") <= 1 for _, chunk in cues)
+    assert [at for at, _ in cues] == sorted(at for at, _ in cues)
+
+
+def test_text_that_spills_out_of_its_box_is_reported():
+    text = ("'Attention Wq Wk Wv'", -1.5, 1.5, 0.0, 0.4)
+    box = ("the RoundedRectangle", -1.0, 1.0, -0.2, 0.6)
+    assert story_scene.layout_problems([], [text], [box]) == [
+        "'Attention Wq Wk Wv' spills out of the RoundedRectangle"
+    ]
+
+
+def test_text_inside_or_beside_a_box_is_fine():
+    label = ("'W'", -0.3, 0.3, -0.2, 0.2)
+    inside = ("box", -1.0, 1.0, -1.0, 1.0)
+    beside = ("box", 1.0, 3.0, -1.0, 1.0)
+    assert story_scene.layout_problems([], [label], [inside, beside]) == []
+
+
+def test_a_line_through_a_title_is_reported_but_an_arrow_to_its_edge_is_not():
+    title = ("'Which would you choose?'", -2.0, 2.0, 2.0, 2.6)
+    divider = ("line", 0.0, -3.0, 0.0, 3.4)
+    to_edge = ("arrow", 0.0, 0.0, 0.0, 2.0)
+    underline = ("line", -2.0, 1.95, 2.0, 1.95)
+    assert story_scene.layout_problems([], [title], [], [divider, to_edge, underline]) == [
+        "the line crosses 'Which would you choose?'"
+    ]
