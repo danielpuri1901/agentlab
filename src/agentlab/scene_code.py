@@ -153,7 +153,16 @@ ALLOWED_NUMPY_MEMBERS = ALLOWED_NUMPY_MEMBERS | frozenset(
 ALLOWED_NUMPY_NAMESPACES = {
     "linalg": frozenset({"det", "eig", "eigh", "inv", "norm", "solve"}),
     "random": frozenset(
-        {"choice", "default_rng", "normal", "randint", "random", "seed", "uniform"}
+        {
+            "RandomState",
+            "choice",
+            "default_rng",
+            "normal",
+            "randint",
+            "random",
+            "seed",
+            "uniform",
+        }
     ),
 }
 

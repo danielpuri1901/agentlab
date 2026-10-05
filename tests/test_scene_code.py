@@ -62,9 +62,10 @@ def test_guard_flags_forbidden_things(snippet, needle):
         "from manim import Axes\nAXES = Axes(x_range=[0, 1]).add_coordinates()\n",
         "from manim import Code\nSNIPPET = Code(code_string='x = 1', language='python')\n",
         "import numpy as np\nNOISE = np.random.uniform(0, 1, 5) + np.tanh(np.eye(5)).sum()\n",
+        "import numpy as np\nRNG = np.random.RandomState(42)\n",
         "from manim import VGroup\n\n\nclass Row(VGroup):\n    def __init__(self):\n        super().__init__()\n",
     ],
-    ids=["latex", "include-numbers", "coordinates", "code-string", "numpy-random", "helper-class"],
+    ids=["latex", "include-numbers", "coordinates", "code-string", "numpy-random", "random-state", "helper-class"],
 )
 def test_guard_allows_latex_code_strings_numpy_random_and_helper_classes(snippet):
     assert scene_code.check_scene_code(snippet + GOLDEN_SCENE, BEATS) == []

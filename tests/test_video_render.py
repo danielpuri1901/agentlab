@@ -744,3 +744,16 @@ def test_manim_command_prefers_in_env_manim(monkeypatch):
         lambda name: None if name == "manim" else real_find_spec(name),
     )
     assert _manim_command() == ["uvx", "--python", "3.12", "manim"]
+
+
+def test_render_env_keeps_the_real_uv_cache(tmp_path, monkeypatch):
+    """With HOME moved to the scene folder, uvx lost its cache and rebuilt
+    manim from source for every render (2026-10-05)."""
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+    env = video_render.render_env(tmp_path, tmp_path / "spec.json")
+    assert env["UV_CACHE_DIR"] == str(Path.home() / ".cache" / "uv")
+    assert env["HOME"] == str(tmp_path)
+
+    monkeypatch.setenv("UV_CACHE_DIR", "/elsewhere/uv")
+    env = video_render.render_env(tmp_path, tmp_path / "spec.json")
+    assert env["UV_CACHE_DIR"] == "/elsewhere/uv"

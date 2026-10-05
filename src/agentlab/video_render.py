@@ -265,6 +265,13 @@ def render_env(scene_dir: Path, spec_path: Path, extra_env: dict | None = None) 
     env = {key: os.environ[key] for key in RENDER_ENV_KEYS if key in os.environ}
     env["HOME"] = str(scene_dir)
     env["TMPDIR"] = str(scene_dir)
+    # HOME points at the scene folder, which would move uv's cache there too.
+    # On the laptop, uvx then rebuilt manim (pycairo from source) for every
+    # render, and a failed compile sank every fix round of a run on
+    # 2026-10-05. The cache path is not a secret, so the real one goes in.
+    env["UV_CACHE_DIR"] = os.environ.get("UV_CACHE_DIR") or str(
+        Path.home() / ".cache" / "uv"
+    )
     env["PYTHONPATH"] = str(scene_dir)
     env["SCENE_SPEC_JSON"] = str(spec_path)
     if extra_env:
