@@ -61,8 +61,13 @@
 # list from Manim's installation docs (v0.21.0) without ctex, plus
 # cm-unicode for 3Blue1Brown's CMU Serif text font.
 FROM python:3.12-slim AS tex
+# libfontconfig1: tlmgr builds the XeTeX formats, and the xetex binary needs
+# it (Manim's builder stage gets it through Pango). gnupg: tlmgr verifies
+# package signatures with it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
+        gnupg \
+        libfontconfig1 \
         perl \
         wget \
     && rm -rf /var/lib/apt/lists/*
