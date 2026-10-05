@@ -14,6 +14,7 @@ import math
 import re
 from collections.abc import Callable
 from decimal import ROUND_DOWN, Decimal
+from pathlib import Path
 
 from agentlab.bedrock import FIX_ROUND
 from agentlab.storyboard import Storyboard
@@ -371,61 +372,136 @@ def _dedup(items: list[str]) -> list[str]:
 STORY_SCENE_API = """The base class is a ThreeDScene (already written, do not redefine \
 it). It gives you:
 
-Constants (import them from story_scene if you want them): BACKGROUND (#05070c, the \
-background), ACCENT, GOLD, GREEN, RED, GREY_A, GREY_B, GREY_C, GREY_D, WHITE, STAGE_TOP \
-(3.6), STAGE_BOTTOM (-2.3), STAGE_LEFT (-6.4), STAGE_RIGHT (6.4). The palette is free: \
-use these colours or any others.
+Constants (import them from story_scene): BACKGROUND (#000000), the 3Blue1Brown palette \
+BLUE, BLUE_E, TEAL, GREEN, YELLOW, GOLD, RED, MAROON, MAROON_B, PURPLE, PINK, ORANGE, \
+GREY_A, GREY_B, GREY_C, GREY_D, GREY_E, GREY_BROWN, WHITE, BLACK, and the stage bounds \
+STAGE_TOP (3.5), STAGE_BOTTOM (-3.5), STAGE_LEFT (-6.61), STAGE_RIGHT (6.61).
 
 Methods:
 - self.fit(mobject, max_w=None, max_h=None): shrink to the stage or the given bounds; returns the mobject.
 - self.label(text, size=28, color=WHITE, width=44, bold=False): a wrapped, fitted Text.
-- self.counter(start, end, suffix="", size=44, color=ACCENT, decimals=0): returns (mobject, animation). Place the mobject, then self.play(animation, run_time=...) to count it up. Call self.freeze(mobject) afterwards, before any FadeOut or Transform that includes it.
-- self.freeze(mobject): stop a counter updating.
-- self.clear_stage(run_time=0.4): fade out everything except the caption. The camera stays where it is.
+- self.clear_stage(run_time=0.4): fade out everything. The camera stays where it is.
 - self.hold(seconds): wait, to let a change sink in.
 
 Camera and 3D (angles in radians, for example 70 * DEGREES):
-- self.move_camera(phi=..., theta=..., zoom=..., frame_center=..., run_time=...): animate the camera. added_anims=[...] plays other animations at the same time.
+- self.move_camera(phi=..., theta=..., zoom=..., frame_center=..., run_time=...): animate the camera. added_anims=[...] plays other animations at the same time. With phi and theta left alone, it pans and zooms a flat board.
 - self.set_camera_orientation(phi=..., theta=..., zoom=...): set the camera at once.
-- self.begin_ambient_camera_rotation(rate=0.2) and self.stop_ambient_camera_rotation(): a slow orbit that runs until you stop it.
-- self.add_fixed_in_frame_mobjects(mobject): pin text or an overlay to the screen, so camera moves never tilt or move it. It adds the mobject to the scene at once, so call it just before you animate the mobject in.
-- 3D mobjects: Surface, Sphere, Cube, Prism, Cylinder, Line3D, Arrow3D, Dot3D, and ThreeDAxes without labels.
-- Render cost: the renderer draws every face of every 3D mobject on every frame, and the whole video must render within 10 minutes on 4 CPUs. Use 3D mobjects for a few large hero objects only. Draw lattices, grids, particles, and other repeated small shapes with flat Dot, Line, and Circle.
+- self.begin_ambient_camera_rotation(rate=0.02) and self.stop_ambient_camera_rotation(): a slow orbit that runs until you stop it. rate is radians per second.
+- self.add_fixed_in_frame_mobjects(mobject): pin text or a formula to the screen, so camera moves never tilt or move it. It adds the mobject to the scene at once, so call it just before you animate the mobject in.
+- 3D mobjects: Surface, Sphere, Cube, Prism, Cylinder, Line3D, Arrow3D, Dot3D, and ThreeDAxes.
+- Render cost: the renderer draws every face of every 3D mobject on every frame, and the whole video must render within 10 minutes on 4 CPUs. Use 3D mobjects for a few large objects only. Draw grids, particles, and other repeated small shapes with flat Dot, Line, and Circle.
 The camera starts flat, looking straight at the stage (phi=0, theta=-90 * DEGREES), and stays wherever you leave it.
 
-The base class already sets the dark background, pins each beat's caption to the bottom band, and pads each beat so it lasts at least its narration. You only write beat_1 .. beat_n."""
+The base class already sets the black background and the CMU Serif font, and pads each \
+beat so it lasts at least its narration. There are no captions: the narration is audio \
+only. You only write beat_1 .. beat_n."""
 
 
-SCENE_CODE_SYSTEM = """Make the most visually striking explanation you can. Invent the visuals. \
-Colour, motion, camera moves and 3D are all allowed.
+SCENE_CODER_EXAMPLE = (
+    Path(__file__).with_name("scene_coder_example.py").read_text(encoding="utf-8")
+)
+"""Original scene in 3Blue1Brown's style for the fictional SortNet paper
+(the deep-read prompt's example). Shown to the scene coder as style only,
+and used by the tests and the CI render as the golden scene."""
+
+
+# Every rule below has a source in
+# docs/superpowers/specs/2026-10-05-3b1b-style-videos-design.md (section 2).
+SCENE_CODE_SYSTEM = (
+    """Animate it the way 3Blue1Brown does: clean, smooth, and every motion explains something.
 
 You write one Manim Community v0.21 scene file for a short research-paper video. The \
-storyboard gives the facts, their order, and a visual metaphor to start from.
+storyboard gives the facts, their order, the visual approach, and the colour key.
+
+Look:
+- The base class sets the black background and the CMU Serif font.
+- Import colours from story_scene: they are 3Blue1Brown's values. Manim's own YELLOW \
+and BLUE_E differ.
+- Follow the storyboard's colour key: one colour per concept, the same in every formula \
+and picture.
+- On-screen text is short: one to eight words. Titles use font_size 60 to 72, labels 24 \
+to 36.
+- Put titles and equations at the top edge. Put a label next to the thing it names.
+- Text over lines or grids gets a black background stroke: set_stroke(BLACK, 5, \
+background=True).
+
+Motion:
+- Most animations use the default run_time of 1 second. Bigger moves take 2 to 5 \
+seconds. Only a process that shows time passing runs longer. Keep the default rate_func.
+- Stagger groups: FadeIn(group, lag_ratio=...), LaggedStart, or LaggedStartMap. Use a \
+lag_ratio of about 0.5 for a few objects and 0.01 to 0.25 for many.
+- Build objects early and transform them: ReplacementTransform, FadeTransform, \
+TransformMatchingTex, MoveToTarget. Grow a new object out of a copy of an old one \
+(TransformFromCopy, or ReplacementTransform of a .copy()), so the viewer sees where it \
+comes from.
+- Bring things in with Write, Create, GrowArrow, or FadeIn with a small shift.
+- To point at something, dim the rest (set_opacity 0.25 to 0.35), then use \
+SurroundingRectangle, Circumscribe, or ShowPassingFlash.
+- Show continuous change with a ValueTracker and add_updater or always_redraw. Use \
+DecimalNumber for a number that changes.
+- Use the camera as a layout tool: build one large board and pan or zoom across it with \
+self.move_camera(frame_center=..., zoom=...).
+- Use 3D only for spatial ideas. Orbit slowly: 4 to 12 seconds per camera move, or \
+begin_ambient_camera_rotation with a rate near 0.02. Pin 2D formulas over a 3D view with \
+self.add_fixed_in_frame_mobjects.
+- Nothing moves for decoration.
+
+Math and numbers:
+- Write formulas with MathTex and raw strings. Pass the parts as separate strings and \
+colour them from the colour key, or use tex_to_color_map with whole symbols.
+- Axes, NumberLine, NumberPlane, axis labels, include_numbers, Matrix, DecimalNumber, and \
+Brace with get_text are all available.
+- Draw a vector as a bracketed column of numbers and a matrix with brackets and ellipses. \
+Label a large size with a Brace.
+- Words and result numbers on screen come from the storyboard. You may shorten a label. \
+Entries inside vectors and matrices may be illustrative values that stand for learned \
+numbers; never present them as results.
+
+If you know 3Blue1Brown's own manim (manimgl), translate it to Manim Community:
+- ShowCreation becomes Create.
+- Tex for math becomes MathTex. TexText becomes Tex.
+- t2c={...} becomes tex_to_color_map={...}.
+- TransformMatchingStrings becomes TransformMatchingTex or TransformMatchingShapes.
+- FlashAround becomes Circumscribe, or ShowPassingFlash on a SurroundingRectangle.
+- VFadeIn becomes FadeIn. GlowDot becomes Dot.
+- frame.reorient(0, 0, 0, center, height) becomes self.move_camera(frame_center=center, \
+zoom=8 / height).
+- frame.reorient(theta, phi) becomes self.move_camera(phi=..., theta=...), in radians.
+- frame.add_ambient_rotation() becomes self.begin_ambient_camera_rotation(rate=...).
+- fix_in_frame() becomes self.add_fixed_in_frame_mobjects(...).
+- .animate.f().set_anim_args(run_time=2) becomes .animate(run_time=2).f().
+- set_backstroke(BLACK, 5) becomes set_stroke(BLACK, 5, background=True).
 
 Hard technical facts:
 - The file starts with one comment line, `# Visual direction: ...`, that names the \
-composition and motion concept this file implements.
-- Exactly one class, `class PaperStory(StoryScene):`, with one method per beat, beat_1 \
-to beat_n, n equal to the storyboard's beat count. Do not override construct. Import \
-StoryScene from story_scene. Keep objects that live across beats on self (self.name, \
-never self._name).
-- No LaTeX: the render image has none. Never use Tex, MathTex, DecimalNumber, Integer, \
-Title, Variable, Matrix, Table, BarChart, axis labels, or include_numbers=True. Write \
-numbers with Text or self.counter(...).
-- No files, network, images, SVG, or sound.
+visual approach this file implements.
+- Exactly one scene class, `class PaperStory(StoryScene):`, with one method per beat, \
+beat_1 to beat_n, n equal to the storyboard's beat count. Do not override construct. \
+Import StoryScene from story_scene. Keep objects that live across beats on self \
+(self.name, never self._name). Helper functions and helper classes (for example a VGroup \
+subclass) are allowed outside PaperStory, but they must not be scenes.
+- No files, network, images, SVG, or sound. Code() takes code_string= only.
 - Only these imports: manim, story_scene, math, random, itertools, functools, numpy, \
 dataclasses, typing, colorsys. Name every imported name: no wildcard imports. From numpy \
-use plain numeric functions only (np.random is blocked, use the random module). The \
-guard also rejects open, exec, eval, getattr, setattr, type, super, object, and any \
-direct use of self.camera, self.renderer, or config.
-- Every word and number on screen comes from the storyboard. You may shorten a label.
-- The base class draws each beat's caption in the bottom band, below y = -2.3. Keep \
-important content above it.
+use numeric functions and np.random. The guard rejects open, exec, eval, getattr, \
+setattr, type, object, and any direct use of self.camera, self.renderer, or config.
+- The whole frame is the stage. Keep content 0.5 units inside the frame edges. At the \
+end of each beat, the base class reports text that overlaps other text and anything that \
+crosses the frame margin.
 - Aim to finish each beat's animations before its narration ends. The base class pads \
 the rest with a still frame.
 - The render must finish within 10 minutes at 1280x720 and 30 fps, so keep 3D meshes \
 coarse (for example resolution=(16, 16)) and updaters light.
-- Keep the file under 12000 tokens."""
+- Keep the file under 12000 tokens.
+
+Example. The file below explains SortNet, a fictional paper, in this style. Copy its \
+style, never its content.
+
+<example_scene>
+"""
+    + SCENE_CODER_EXAMPLE
+    + "\n</example_scene>"
+)
 
 EDIT_FORMAT = """Fix the current file with the smallest edits that remove this failure. \
 Answer only with search/replace blocks in this exact format, as many as you need:

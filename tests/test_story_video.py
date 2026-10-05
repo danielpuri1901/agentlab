@@ -21,7 +21,9 @@ BOARD = Storyboard(
 PLAN = ScenePlan(
     **json.loads((FIXTURES / "sample_plan.json").read_text(encoding="utf-8"))
 )
-GOLDEN_SCENE = (FIXTURES / "paper_story_golden.py").read_text(encoding="utf-8")
+GOLDEN_SCENE = Path(story_video.__file__).with_name("scene_coder_example.py").read_text(
+    encoding="utf-8"
+)
 EDITED_SCENE = GOLDEN_SCENE + "\n# edited\n"
 DIGEST = "# Digest\n0% and 44% on 50 items.\n## Limits\nNone."
 N = len(BOARD.beats)
@@ -180,7 +182,7 @@ def test_first_successful_render_ships_without_a_judge(seams, tmp_path):
     assert seams["targets"] == [5.0] * N
     assert result.srt_path.exists()
     assert "class PaperStory" in result.scene_source
-    assert result.visual_direction.startswith("A crowded house")
+    assert result.visual_direction.startswith("One row of number tiles")
     assert result.timing == _timing()
     assert seams["edits"] == []
     assert _modes_and_statuses(result) == [("generate", "shipped")]

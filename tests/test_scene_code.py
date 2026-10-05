@@ -8,7 +8,7 @@ from agentlab import scene_code, story_scene
 from agentlab.bedrock import build_converse_request
 from agentlab.storyboard import Storyboard
 
-GOLDEN_SCENE = (Path(__file__).parent / "fixtures" / "paper_story_golden.py").read_text(
+GOLDEN_SCENE = Path(scene_code.__file__).with_name("scene_coder_example.py").read_text(
     encoding="utf-8"
 )
 GOLDEN_BOARD = json.loads(
@@ -24,14 +24,11 @@ def test_golden_scene_passes_the_guard():
 
 
 def test_visual_direction_reads_generated_scene_concept():
-    assert scene_code.visual_direction(GOLDEN_SCENE).startswith("A crowded house")
+    assert scene_code.visual_direction(GOLDEN_SCENE).startswith("One row of number tiles")
 
 
 def test_guard_requires_visual_direction_comment():
-    source = GOLDEN_SCENE.replace(
-        "# Visual direction: A crowded house compresses into one case while the needed item stays visible.\n",
-        "",
-    )
+    source = GOLDEN_SCENE.split("\n", 1)[1]
 
     assert (
         "visual direction"
@@ -247,8 +244,8 @@ def test_prompt_requires_scene_to_fit_below_completion_limit():
 
 def test_prompt_opens_with_daniels_brief_verbatim():
     assert scene_code.SCENE_CODE_SYSTEM.startswith(
-        "Make the most visually striking explanation you can. Invent the visuals. "
-        "Colour, motion, camera moves and 3D are all allowed.\n"
+        "Animate it the way 3Blue1Brown does: clean, smooth, and every motion "
+        "explains something.\n"
     )
 
 
@@ -264,15 +261,18 @@ def test_prompt_keeps_only_hard_technical_facts():
         "self.set_camera_orientation(",
         "self.begin_ambient_camera_rotation(",
         "self.add_fixed_in_frame_mobjects(",
-        "ThreeDAxes without labels",
+        "ThreeDAxes",
     ):
         assert call in api
-    assert "The palette is free" in api
+    assert "the 3Blue1Brown palette" in api
     for old_rule in (
         "No camera moves",
         "the one accent colour",
         "the render fails if",
         "small intentional colour palette",
+        "Invent the visuals",
+        "No LaTeX",
+        "one bold visual metaphor",
     ):
         assert old_rule not in system + api
 
@@ -489,3 +489,39 @@ def test_write_scene_code_fix_round_includes_previous_source_and_feedback():
     assert source == GOLDEN_SCENE.strip()
     user = seen[0][-1]["content"]
     assert "OLD SOURCE" in user and "beat 2 ran 1.2 s over" in user
+
+
+def test_prompt_embeds_the_example_scene_as_style_only():
+    system = scene_code.SCENE_CODE_SYSTEM
+    assert scene_code.SCENE_CODER_EXAMPLE in system
+    assert "Copy its style, never its content." in system
+
+
+def test_prompt_translates_3b1b_manim_idioms():
+    system = scene_code.SCENE_CODE_SYSTEM
+    for theirs, ours in (
+        ("ShowCreation", "Create"),
+        ("TexText", "Tex"),
+        ("t2c=", "tex_to_color_map="),
+        (
+            "frame.reorient(0, 0, 0, center, height)",
+            "self.move_camera(frame_center=center, zoom=8 / height)",
+        ),
+        ("set_backstroke(BLACK, 5)", "set_stroke(BLACK, 5, background=True)"),
+    ):
+        assert theirs in system and ours in system
+
+
+def test_example_scene_shows_the_3b1b_idioms():
+    example = scene_code.SCENE_CODER_EXAMPLE
+    for idiom in (
+        "MathTex",
+        "TransformMatchingTex",
+        "ReplacementTransform(self.tiles[0][1].copy()",
+        "lag_ratio",
+        "self.move_camera(",
+        "ValueTracker",
+        "Brace(",
+        "from story_scene import",
+    ):
+        assert idiom in example

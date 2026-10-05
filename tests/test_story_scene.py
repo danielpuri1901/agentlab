@@ -5,7 +5,7 @@ import pytest
 
 from agentlab import story_scene
 
-GOLDEN_SCENE = Path(__file__).parent / "fixtures" / "paper_story_golden.py"
+GOLDEN_SCENE = Path(story_scene.__file__).with_name("scene_coder_example.py")
 GOLDEN_BOARD = Path(__file__).parent / "fixtures" / "storyboard_golden.json"
 
 
