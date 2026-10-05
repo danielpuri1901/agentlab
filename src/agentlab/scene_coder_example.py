@@ -160,7 +160,7 @@ class PaperStory(StoryScene):
             FadeIn(percent, shift=0.2 * UP),
             run_time=1.2,
         )
-        self.play(FadeIn(brace), Write(held_out))
+        self.play(FadeIn(brace), Write(held_out), run_time=1)
         # 12 comparisons on average, as a number that counts up.
         caption = Text("comparisons on average", font_size=26, color=COMPARATOR)
         caption.next_to(held_out, DOWN, buff=0.35).shift(0.4 * RIGHT)
