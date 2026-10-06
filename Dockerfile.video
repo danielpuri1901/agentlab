@@ -73,16 +73,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY docker/texlive-profile.txt /tmp/texlive-profile.txt
 ENV PATH="/usr/local/texlive/bin/aarch64-linux:/usr/local/texlive/bin/x86_64-linux:$PATH"
-RUN wget -q -O /tmp/install-tl-unx.tar.gz https://mirror.ctan.org/systems/texlive/tlnet/install-tl-unx.tar.gz \
-    && mkdir /tmp/install-tl \
-    && tar -xzf /tmp/install-tl-unx.tar.gz -C /tmp/install-tl --strip-components=1 \
-    && /tmp/install-tl/install-tl --profile=/tmp/texlive-profile.txt \
-    && tlmgr install \
-        amsmath babel-english cbfonts-fd cm-super count1to doublestroke dvisvgm \
-        everysel fontspec frcursive fundus-calligra gnu-freefont jknapltx latex-bin \
-        mathastext microtype multitoc physics prelim2e preview ragged2e relsize rsfs \
-        setspace standalone tipa wasy wasysym xcolor xetex xkeyval \
-        cm-unicode \
+# mirror.ctan.org sends each request to some mirror, and one bad mirror failed
+# a pull request build on 2026-10-06. Retry the whole install up to three
+# times; each try starts clean and gets a mirror again.
+RUN for attempt in 1 2 3; do \
+        rm -rf /tmp/install-tl /tmp/install-tl-unx.tar.gz /usr/local/texlive \
+        && wget -nv -O /tmp/install-tl-unx.tar.gz https://mirror.ctan.org/systems/texlive/tlnet/install-tl-unx.tar.gz \
+        && mkdir /tmp/install-tl \
+        && tar -xzf /tmp/install-tl-unx.tar.gz -C /tmp/install-tl --strip-components=1 \
+        && /tmp/install-tl/install-tl --profile=/tmp/texlive-profile.txt \
+        && tlmgr install \
+            amsmath babel-english cbfonts-fd cm-super count1to doublestroke dvisvgm \
+            everysel fontspec frcursive fundus-calligra gnu-freefont jknapltx latex-bin \
+            mathastext microtype multitoc physics prelim2e preview ragged2e relsize rsfs \
+            setspace standalone tipa wasy wasysym xcolor xetex xkeyval \
+            cm-unicode \
+        && break; \
+        if [ "$attempt" = 3 ]; then exit 1; fi; \
+        echo "TeX Live install failed on try $attempt, retrying"; \
+        sleep 20; \
+    done \
     && rm -rf /tmp/install-tl /tmp/install-tl-unx.tar.gz
 
 FROM python:3.12-slim AS base

@@ -7,6 +7,6 @@ terraform.tfvars
 *.auto.tfvars
 *.auto.tfvars.json
 image_tag.auto.tfvars
-tfplan
+tfplan*
 .build/
 video_image_tag.auto.tfvars
