@@ -143,20 +143,13 @@ resource "aws_scheduler_schedule" "proposer" {
   }
 }
 
-# The daily-paper-video schedule (spec stage "Schedule and cost": "One new
-# EventBridge Scheduler entry (10:30 Amsterdam) runs `worker explain` on the
-# video image"). A single explicit resource rather than folding into the
-# `proposer_schedules` for_each above: that for_each shares one task
-# definition and one hardcoded container name ("proposer") across all its
-# entries, neither of which holds here (different task definition,
-# container name "explain") - a clone of the same block shape, targeting
-# the explain task definition instead.
-#
-# Disabled 2026-09-24: videos now come only from approved proposals
-# (approvals_webhook.py starts the explain task on the cited URL).
-resource "aws_scheduler_schedule" "explain" {
-  name                         = "agentlab-explain"
-  state                        = "DISABLED"
+# The built lane's daily lessons (docs/superpowers/specs/2026-10-05-built-lane-design.md):
+# `worker explain` with TRACK=built sends the next two study-map topics. It
+# replaces the old all-tracks daily schedule, disabled on 2026-09-24 because
+# paper videos now come only from approved proposals (approvals_webhook.py
+# starts the explain task on the cited URL).
+resource "aws_scheduler_schedule" "built_lessons" {
+  name                         = "agentlab-built-lessons"
   schedule_expression          = "cron(30 10 * * ? *)"
   schedule_expression_timezone = "Europe/Amsterdam"
 
@@ -182,8 +175,9 @@ resource "aws_scheduler_schedule" "explain" {
     input = jsonencode({
       containerOverrides = [
         {
-          name    = "explain"
-          command = ["worker", "explain"]
+          name        = "explain"
+          command     = ["worker", "explain"]
+          environment = [{ name = "TRACK", value = "built" }]
         }
       ]
     })

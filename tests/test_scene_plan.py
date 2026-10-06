@@ -9,7 +9,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from agentlab import source_text
+from agentlab import scene_plan, source_text
 from agentlab.scene_plan import (
     ScenePlan,
     build_pick_prompt,
@@ -925,3 +925,51 @@ def test_diagram_edge_label_max_length_enforced_directly():
     DiagramEdge(source="a", target="b", label="x" * MAX_EDGE_LABEL)
     with pytest.raises(ValidationError):
         DiagramEdge(source="a", target="b", label="x" * (MAX_EDGE_LABEL + 1))
+
+
+def test_lesson_prompt_keeps_the_scene_plan_rules_and_drops_the_paper_opening():
+    lesson = scene_plan.LESSON_READ_SYSTEM
+    assert lesson.startswith("You are the deep-read writer for AgentLab's lesson videos.")
+    assert scene_plan._PLAN_RULES in lesson
+    assert scene_plan._PLAN_RULES in scene_plan.DEEP_READ_SYSTEM
+    assert "anchor idea" in lesson and "Components:" in lesson
+    assert "what the paper shows" not in lesson
+    assert scene_plan.DEEP_READ_SYSTEM.startswith(
+        "You are the deep-read writer for AgentLab's daily paper videos."
+    )
+
+
+def test_deep_read_sends_the_system_prompt_it_is_given():
+    seen = []
+
+    class Stop(Exception):
+        pass
+
+    def complete(model, messages):
+        seen.append(messages[0]["content"])
+        raise Stop
+
+    with pytest.raises(Stop):
+        scene_plan.deep_read(
+            "topic://p/01-a",
+            lambda url: "<pre>source</pre>",
+            complete,
+            system=scene_plan.LESSON_READ_SYSTEM,
+        )
+    with pytest.raises(Stop):
+        scene_plan.deep_read("https://example.com/x", lambda url: "<p>x</p>", complete)
+
+    assert seen == [scene_plan.LESSON_READ_SYSTEM, scene_plan.DEEP_READ_SYSTEM]
+
+
+def test_the_worked_example_is_a_real_paper_that_follows_its_own_rules():
+    """Daniel, 2026-10-06: examples are real papers, not invented ones."""
+    plan = ScenePlan.model_validate(scene_plan._EXAMPLE_PLAN)
+
+    assert plan.citation_url == "https://arxiv.org/abs/2106.09685"
+    assert not scene_plan._ungrounded_source_numbers(
+        scene_plan._EXAMPLE_DIGEST, plan, scene_plan._EXAMPLE_SOURCE
+    )
+    for system in (scene_plan.DEEP_READ_SYSTEM, scene_plan.LESSON_READ_SYSTEM):
+        assert scene_plan._EXAMPLE_SOURCE in system
+        assert "SortNet" not in system

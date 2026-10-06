@@ -754,3 +754,28 @@ def test_the_scene_gets_the_narration_as_subtitles(seams, tmp_path, monkeypatch)
     _compose(tmp_path)
 
     assert specs[0]["subtitles"] == [beat.narration for beat in BOARD.beats]
+
+
+def test_lesson_subject_reaches_the_storyboard(seams, tmp_path, monkeypatch):
+    subjects = []
+
+    def board(digest, plan, complete, model, **kwargs):
+        subjects.append(kwargs.get("subject"))
+        return BOARD
+
+    monkeypatch.setattr(story_video, "design_storyboard", board)
+
+    story_video.compose_story_video(
+        DIGEST,
+        PLAN,
+        polly_client=None,
+        voice_id="Ivy",
+        complete=lambda model, messages: "",
+        work_dir=tmp_path / "work",
+        out_path=tmp_path / "out" / "video.mp4",
+        story_model="s",
+        scene_model="c",
+        subject="lesson",
+    )
+
+    assert subjects == ["lesson"]

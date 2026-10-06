@@ -26,6 +26,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from decimal import Decimal
 from functools import partial as bind
+from html import escape as escape_html
 from pathlib import Path
 
 import boto3
@@ -58,8 +59,10 @@ from agentlab.repo_files import CLASSICS_PATH, GOLDEN_PAPERS_PATH, INTERESTS_PAT
 from agentlab.report import render_report
 from agentlab.results import extract_results, mean_score, total_cost, total_tokens
 from agentlab.scene_plan import (
+    DEEP_READ_SYSTEM,
     DEFAULT_DEEP_READ_MODEL,
     DEFAULT_PICK_MODEL,
+    LESSON_READ_SYSTEM,
     ScenePlan,
     deep_read,
     rank_papers,
@@ -73,7 +76,12 @@ from agentlab.video_render import verify_voice
 worker_app = typer.Typer()
 
 _ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5})")
-EXPLAIN_TRACKS = ("core", "classic", "novel")
+EXPLAIN_TRACKS = ("core", "classic", "novel", "built")
+BUILT_VIDEOS_PER_DAY = 2
+"""Daniel's ruling 2026-10-05: two built-lane videos a day until the backlog
+is done (docs/superpowers/specs/2026-10-05-built-lane-design.md)."""
+TOPIC_BACKLOG_KEY = "topics/backlog.json"
+TOPICS_EXHAUSTED_ID = "explain-topics-exhausted"
 DIGEST_URL_EXPIRY_SECONDS = 7 * 24 * 3600
 MODEL_CALL_TIMEOUT_SECONDS = 180
 LONG_COMPLETION_MAX_TOKENS = 32000
@@ -560,6 +568,28 @@ def _load_classics() -> list[dict]:
 CLASSICS_EXHAUSTED_ID = "explain-classics-exhausted"
 
 
+def _warn_once(table, ssm_client, marker_id: str, size: int, text: str) -> bool:
+    """Ping once per corpus size. The marker records the size it warned
+    about, so a bigger corpus arms the warning again without a reset."""
+    try:
+        item = table.get_item(Key={"experiment_id": marker_id, "sk": "marker"}).get("Item")
+        if item and int(item.get("corpus_size", 0)) >= size:
+            return False
+        table.put_item(
+            Item={
+                "experiment_id": marker_id,
+                "sk": "marker",
+                "corpus_size": size,
+                "ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            }
+        )
+        notify(table, ssm_client, text)
+        return True
+    except Exception as exc:  # noqa: BLE001 - a warning must never fail the run
+        typer.echo(f"{marker_id} warning failed: {exc}", err=True)
+        return False
+
+
 def _warn_classics_exhausted(table, ssm_client) -> bool:
     """Ping once when the classic track has sent every paper it has.
 
@@ -570,30 +600,78 @@ def _warn_classics_exhausted(table, ssm_client) -> bool:
     """
     try:
         size = len(_load_classics())
-        item = table.get_item(
-            Key={"experiment_id": CLASSICS_EXHAUSTED_ID, "sk": "marker"}
-        ).get("Item")
-        if item and int(item.get("corpus_size", 0)) >= size:
-            return False
-        table.put_item(
-            Item={
-                "experiment_id": CLASSICS_EXHAUSTED_ID,
-                "sk": "marker",
-                "corpus_size": size,
-                "ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-            }
-        )
-        notify(
-            table,
-            ssm_client,
-            "The classic track is out of papers. It has sent all "
-            f"{size} entries in docs/classics.json. Add more entries to "
-            "start it again.",
-        )
-        return True
     except Exception as exc:  # noqa: BLE001 - a warning must never fail the run
         typer.echo(f"classics-exhausted warning failed: {exc}", err=True)
         return False
+    return _warn_once(
+        table,
+        ssm_client,
+        CLASSICS_EXHAUSTED_ID,
+        size,
+        "The classic track is out of papers. It has sent all "
+        f"{size} entries in docs/classics.json. Add more entries to "
+        "start it again.",
+    )
+
+
+def _load_topic_backlog(s3_client, bucket: str) -> list[dict]:
+    """The built lane's ordered topics; empty before the first export."""
+    try:
+        body = s3_client.get_object(Bucket=bucket, Key=TOPIC_BACKLOG_KEY)["Body"].read()
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+            return []
+        raise
+    return json.loads(body)
+
+
+def _topic_identity(entry: dict) -> str:
+    """Exact on purpose: two topics with similar titles are still two."""
+    return f"topic:{entry['project']}/{entry['slug']}"
+
+
+def _next_unseen_topic(table, s3_client, bucket: str) -> dict | None:
+    """First backlog topic not already sent, in backlog order."""
+    for entry in _load_topic_backlog(s3_client, bucket):
+        identity = _topic_identity(entry)
+        if not is_seen(table, identity):
+            return {
+                "url": f"topic://{entry['project']}/{entry['slug']}",
+                "title": entry["title"],
+                "source": "study-map",
+                "pool": "built",
+                "pack_key": entry["pack_key"],
+                "identity": identity,
+            }
+    return None
+
+
+def _topic_pack_page(s3_client, bucket: str, key: str) -> str:
+    """A pack as escaped HTML. The deep read extracts text with an HTML
+    parser, and code full of < and > would lose text without the escape."""
+    text = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
+    return "<pre>" + escape_html(text) + "</pre>"
+
+
+def _warn_topics_exhausted(table, ssm_client, s3_client, bucket: str) -> bool:
+    """Ping once when every exported topic has been sent. Before the first
+    export there is no backlog, and nothing to warn about."""
+    try:
+        size = len(_load_topic_backlog(s3_client, bucket))
+    except Exception as exc:  # noqa: BLE001 - a warning must never fail the run
+        typer.echo(f"topics-exhausted warning failed: {exc}", err=True)
+        return False
+    if size == 0:
+        return False
+    return _warn_once(
+        table,
+        ssm_client,
+        TOPICS_EXHAUSTED_ID,
+        size,
+        f"The built track is out of topics. It has sent all {size} topics in "
+        "the backlog. Run scripts/export_study_topics.py for the next project "
+        "to start it again.",
+    )
 
 
 def _next_unseen_classic(table) -> dict | None:
@@ -773,6 +851,16 @@ def _run_explain_track(
         exploration_status = "none"
         feedback_status = "fixed-classic"
         selection_probability = 1
+    elif track == "built":
+        candidate = _next_unseen_topic(table, s3_client, bucket)
+        if candidate is None:
+            return "empty"
+        candidate_set = [_candidate_record(candidate, 1, 1)]
+        baseline_rank = 1
+        baseline_selection = candidate_set[0]
+        exploration_status = "none"
+        feedback_status = "fixed-study-map"
+        selection_probability = 1
     else:
         pool = gather_exploit() if track == "core" else gather_explore()
         fresh = _fresh_candidates(pool, table)
@@ -813,7 +901,7 @@ def _run_explain_track(
 
     # New candidates are recorded as seen the moment they are picked, not
     # when fetched, so an unpicked candidate can resurface later.
-    identity = paper_identity(url, title)
+    identity = candidate.get("identity") or paper_identity(url, title)
     if forced_candidate is None:
         mark_seen(table, identity, url, title, candidate.get("source", track), track)
         partial["identity"] = identity
@@ -821,16 +909,24 @@ def _run_explain_track(
     # A retry of this paper (the second chance below, or a re-approval)
     # loads each finished stage from S3 instead of paying for it again.
     checkpoints = StageCheckpoints(s3_client, bucket, identity)
-    read_fingerprint = fingerprint("deep_read", deep_read_model, url)
+    lesson = track == "built"
+    read_system = LESSON_READ_SYSTEM if lesson else DEEP_READ_SYSTEM
+    read_fingerprint = fingerprint("deep_read", deep_read_model, url, read_system)
     saved_read = checkpoints.load_parsed(
         "deep_read", read_fingerprint, _saved_deep_read
     )
     if saved_read is None:
+        fetch = (
+            (lambda _url: _topic_pack_page(s3_client, bucket, candidate["pack_key"]))
+            if lesson
+            else _fetch_text
+        )
         digest, plan = deep_read(
             url,
-            _fetch_text,
+            fetch,
             bind(complete, extra_fields=_deep_read_extra_fields()),
             model=deep_read_model,
+            system=read_system,
         )
         checkpoints.save(
             "deep_read",
@@ -870,6 +966,7 @@ def _run_explain_track(
                 recent_visual_directions=_recent_visual_directions(table),
                 checkpoints=checkpoints,
                 plan_fingerprint=read_fingerprint,
+                subject="lesson" if lesson else "paper",
             )
         except StoryFailed as exc:
             transition(
@@ -1013,7 +1110,7 @@ def explain_command() -> None:
     tracks = list(EXPLAIN_TRACKS) if track_env == "all" else [track_env]
     if any(t not in EXPLAIN_TRACKS for t in tracks):
         typer.echo(
-            f"error: invalid TRACK '{track_env}' (must be core, classic, novel, or all)",
+            f"error: invalid TRACK '{track_env}' (must be core, classic, novel, built, or all)",
             err=True,
         )
         raise typer.Exit(1)
@@ -1047,11 +1144,16 @@ def explain_command() -> None:
         typer.echo(f"cost explorer unavailable: {str(exc)[:200]}", err=True)
         aws_mtd_cost = None
 
-    statuses: dict[str, str] = {}
-    for track in tracks:
+    statuses: dict[str, list[str]] = {}
+    runs = [
+        track
+        for track in tracks
+        for _ in range(BUILT_VIDEOS_PER_DAY if track == "built" else 1)
+    ]
+    for track in runs:
         partial: dict = {}
         try:
-            statuses[track] = _run_explain_track(
+            status = _run_explain_track(
                 track,
                 table,
                 ssm_client,
@@ -1067,8 +1169,9 @@ def explain_command() -> None:
                 forced_candidate,
                 pid=pid,
             )
+            statuses.setdefault(track, []).append(status)
         except Exception as exc:  # noqa: BLE001 - one track's failure must not sink the others
-            statuses[track] = "failed"
+            statuses.setdefault(track, []).append("failed")
 
             # Give the paper back for one more try. See
             # papers_db.release_after_failure for why it is one and not
@@ -1123,8 +1226,12 @@ def explain_command() -> None:
             except Exception as ping_exc:  # noqa: BLE001 - never mask the track error
                 typer.echo(f"fallback ping failed for {track}: {ping_exc}", err=True)
 
-    if statuses.get("classic") == "empty":
+    if "empty" in statuses.get("classic", []):
         _warn_classics_exhausted(table, ssm_client)
+    if "empty" in statuses.get("built", []):
+        _warn_topics_exhausted(table, ssm_client, s3_client, results_bucket)
 
-    summary = " ".join(f"{t}={statuses[t]}" for t in EXPLAIN_TRACKS if t in statuses)
+    summary = " ".join(
+        f"{t}={','.join(statuses[t])}" for t in EXPLAIN_TRACKS if t in statuses
+    )
     typer.echo(f"explain: {summary}")

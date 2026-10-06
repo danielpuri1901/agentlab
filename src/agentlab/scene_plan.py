@@ -229,84 +229,193 @@ above. A step usually activates one to three ids: the node or nodes doing \
 the work, plus the edge between them if something moves from one node to \
 another."""
 
+# The worked example is the real LoRA paper (arXiv 2106.09685), the same paper
+# as the scene coder's example. Daniel ruled on 2026-10-06 that examples must
+# be real papers. The numbers come from the abstract; the source below is an
+# abridged summary, and the reply uses nothing that is not in it.
+_EXAMPLE_SOURCE = (
+    "LoRA freezes a pretrained weight matrix W0 and learns its update as the "
+    "product of two small matrices, B times A, of low rank r. A maps the input "
+    "x down to r numbers, and B maps them back up. The output adds both paths: "
+    "h = W0 x + B A x. Only A and B are trained. After training, B A can be "
+    "added into W0, so inference has no additional latency. Compared to GPT-3 "
+    "175B fine-tuned with Adam, LoRA reduces the number of trainable "
+    "parameters by 10,000 times and the GPU memory requirement by 3 times. It "
+    "performs on par with or better than fine-tuning on RoBERTa, DeBERTa, "
+    "GPT-2, and GPT-3."
+)
+
 _EXAMPLE_DIGEST = (
     "# Headline\n"
-    "SortNet sorts by comparing at inference time, not by memorizing an order.\n\n"
+    "LoRA adapts a huge model by training two small matrices beside each "
+    "frozen weight matrix.\n\n"
     "## What the paper shows\n"
-    "100% correct across 200 held-out lists, averaging 12 comparisons each.\n\n"
+    "Compared to GPT-3 175B fine-tuned with Adam, LoRA trains 10,000 times "
+    "fewer parameters and needs 3 times less GPU memory. Its quality matches "
+    "or beats fine-tuning on RoBERTa, DeBERTa, GPT-2, and GPT-3.\n\n"
     "## Mechanism\n"
-    "Components: input list, comparator, sorted output.\n"
-    "The comparator reads two items from the input list, decides their "
-    "order, and writes the result into the sorted output.\n\n"
+    "Components: input x, frozen weights W0, small matrix A, small matrix B, "
+    "output h.\n"
+    "The input x takes two paths. One path goes through the frozen weights W0. "
+    "The other goes through A, which maps x down to r numbers, and then B, "
+    "which maps them back up. The two results add up: h = W0 x + B A x. Only A "
+    "and B learn. After training, B A is added into W0, so the model runs as "
+    "fast as before.\n\n"
     "## How it connects to AgentLab\n"
-    "Similar to a judge model comparing two candidate outputs.\n\n"
+    "Possible use: keep one base model and train one small A and B pair per "
+    "task.\n\n"
     "## Limits\n"
-    "The paper does not test lists longer than 50 items."
+    "The paper reports quality only for RoBERTa, DeBERTa, GPT-2, and GPT-3."
 )
 
 _EXAMPLE_PLAN = {
-    "title": "SortNet sorts by comparing",
+    "title": "LoRA trains two small matrices, not the whole model",
     "one_line_claim": (
-        "A tiny comparator sorts lists at inference time instead of "
-        "memorizing a fixed order."
+        "LoRA freezes the pretrained weights and trains a small low-rank "
+        "update beside them, with no added inference latency."
     ),
     "diagram": {
         "nodes": [
-            {"id": "input-list", "label": "Input list", "icon": "\U0001f4cb"},
-            {"id": "comparator", "label": "Comparator", "icon": "⚖️"},
-            {"id": "sorted-output", "label": "Sorted output", "icon": "✅"},
+            {"id": "input-x", "label": "Input x"},
+            {"id": "frozen-weights", "label": "Frozen weights W0", "icon": "❄️"},
+            {"id": "matrix-a", "label": "Small matrix A"},
+            {"id": "matrix-b", "label": "Small matrix B"},
+            {"id": "output-h", "label": "Output h"},
         ],
         "edges": [
-            {"source": "input-list", "target": "comparator", "label": "reads"},
-            {"source": "comparator", "target": "sorted-output", "label": "writes"},
+            {"source": "input-x", "target": "frozen-weights", "label": "multiplies"},
+            {"source": "input-x", "target": "matrix-a", "label": "maps down"},
+            {"source": "matrix-a", "target": "matrix-b", "label": "maps up"},
+            {"source": "frozen-weights", "target": "output-h", "label": "adds"},
+            {"source": "matrix-b", "target": "output-h", "label": "adds"},
         ],
     },
     "mechanism_steps": [
         {
-            "label": "Read",
-            "detail": "Reads two items from the input list.",
-            "narration": "SortNet reads two items from the list.",
+            "label": "Freeze",
+            "detail": "The pretrained weights W0 stay fixed. They get no updates.",
+            "narration": (
+                "Start with a huge pretrained model. Freeze its weights. "
+                "They will not change."
+            ),
+            "kind": "gate",
+            "activates": ["frozen-weights"],
+        },
+        {
+            "label": "Two paths",
+            "detail": "The input x goes through W0 and, beside it, through A and B.",
+            "narration": (
+                "Each input now takes two paths. One goes through the frozen "
+                "weights. One goes through two small new matrices."
+            ),
+            "kind": "split",
+            "activates": ["input-x", "input-x->frozen-weights", "input-x->matrix-a"],
+        },
+        {
+            "label": "Low-rank update",
+            "detail": "A maps x down to r numbers. B maps them back up. Only A and B learn.",
+            "narration": (
+                "The first small matrix squeezes the input down to a few "
+                "numbers. The second expands them back. Only these two learn."
+            ),
             "kind": "transform",
-            "activates": ["input-list", "input-list->comparator", "comparator"],
+            "activates": ["matrix-a", "matrix-a->matrix-b", "matrix-b"],
         },
         {
-            "label": "Compare",
-            "detail": "Decides which item comes first.",
-            "narration": "It decides which one comes first.",
-            "kind": "compare",
-            "activates": ["comparator"],
+            "label": "Add",
+            "detail": "The two results add up: h = W0 x + B A x.",
+            "narration": "The two paths meet again. Their results simply add up.",
+            "kind": "transform",
+            "activates": [
+                "frozen-weights->output-h",
+                "matrix-b->output-h",
+                "output-h",
+            ],
         },
         {
-            "label": "Write",
-            "detail": "Writes the result into the sorted output.",
-            "narration": "The result lands in the sorted output.",
+            "label": "Merge",
+            "detail": "After training, B A is added into W0. Inference gets no extra latency.",
+            "narration": (
+                "After training, fold the small product into the frozen "
+                "matrix. The model runs exactly as fast as before."
+            ),
             "kind": "store",
-            "activates": ["comparator->sorted-output", "sorted-output"],
+            "activates": ["matrix-b", "frozen-weights"],
         },
     ],
     "key_numbers": [
-        {"value": "12", "meaning": "average comparisons per 200-item held-out list."}
+        {
+            "value": "10,000",
+            "meaning": "times fewer trainable parameters than GPT-3 175B fine-tuned with Adam.",
+        },
+        {
+            "value": "3",
+            "meaning": "times less GPU memory than GPT-3 175B fine-tuned with Adam.",
+        },
     ],
     "application_or_implication": (
-        "Possible use: compare candidate agent outputs before choosing one."
+        "Possible use: keep one base model and swap in a small A and B pair "
+        "per task."
     ),
-    "limits_or_caveats": "The paper does not test lists longer than 50 items.",
-    "street_test_question": "Would a pairwise comparator beat your current sort step.",
-    "citation_url": "https://example.com/sortnet",
+    "limits_or_caveats": (
+        "The paper does not claim the same quality for models beyond RoBERTa, "
+        "DeBERTa, GPT-2, and GPT-3."
+    ),
+    "street_test_question": (
+        "Why can two small matrices stand in for an update of a huge weight matrix?"
+    ),
+    "citation_url": "https://arxiv.org/abs/2106.09685",
 }
 
 _EXAMPLE_BLOCK = (
-    "\n\nWorked example (a FICTIONAL paper, invented only to show the exact "
-    "shape of a correct reply; never treat its content as real, never reuse "
-    "it):\n\n"
-    'Fictional source: "SortNet sorts a list purely by pairwise comparisons '
-    "made at inference time. On 200 held-out lists it sorts correctly 100% "
-    'of the time using 12 comparisons on average."\n\n'
+    "\n\nWorked example (the real LoRA paper, arXiv 2106.09685, with its "
+    "source abridged; it shows the exact shape of a correct reply. Copy the "
+    "shape, never the content):\n\n"
+    f'Source (abridged): "{_EXAMPLE_SOURCE}"\n\n'
     f"{_EXAMPLE_DIGEST}\n\n"
     "```json\n" + json.dumps(_EXAMPLE_PLAN) + "\n```"
 )
 
 DEEP_READ_SYSTEM = _DEEP_READ_MAIN + _EXAMPLE_BLOCK
+
+# The scene-plan half of the paper prompt, shared with the lesson prompt.
+_PLAN_RULES = _DEEP_READ_MAIN[_DEEP_READ_MAIN.index("Write in plain language") :]
+
+# Lesson videos for the built track
+# (docs/superpowers/specs/2026-10-05-built-lane-design.md, section 4).
+_LESSON_READ_INTRO = """You are the deep-read writer for AgentLab's lesson videos. \
+Daniel built the project described inside the <source_text> tag with AI help. The \
+video must teach him one idea from it, so that his understanding catches up with what \
+he built. The source text holds one topic from his study map (the topic, what to \
+study, and where it appears), files from his project, and the whole study map. In a \
+single reply you produce TWO things, in order: first a complete digest in markdown, \
+then a fenced ```json block containing the scene plan. In the rules below, "paper" \
+means this topic and this project.
+
+Choose one anchor idea: the single idea from this topic that the project depends on \
+most. The video teaches that idea. The digest also covers the rest of the topic in \
+brief. In the scene plan, application_or_implication says where the idea lives in \
+Daniel's project, and street_test_question is a question he can answer about his own \
+project.
+
+Grounding rules, non-negotiable: every number you write, in the digest or the scene \
+plan, must appear in the source text you were given. General knowledge about the \
+concept is allowed, but never state a fact about Daniel's project that the source \
+text does not show. Name a file or a function only when the source text shows it. The \
+digest must include a section titled "Limits".
+
+Digest sections, in this order: headline (the anchor idea in one sentence), the idea \
+in plain words, why the project needed it, mechanism, where it lives in the project \
+(files and functions from the source text), a worked example with the project's real \
+numbers, the rest of the topic in brief, common confusion, limits, exercise (from the \
+study map, when it has one). The mechanism section must open with a line starting \
+"Components:" listing the mechanism's real parts, the actual nouns that make it work. \
+Those exact components are what you turn into diagram nodes below, so name them here \
+first and reuse the same names.
+
+"""
+
+LESSON_READ_SYSTEM = _LESSON_READ_INTRO + _PLAN_RULES + _EXAMPLE_BLOCK
 
 
 def build_deep_read_prompt(url: str, source_text: str) -> str:
@@ -574,8 +683,10 @@ def deep_read(
     fetch_text: Callable[[str], str],
     complete: Callable[[str, list[dict]], str],
     model: str = DEFAULT_DEEP_READ_MODEL,
+    system: str = DEEP_READ_SYSTEM,
 ) -> tuple[str, ScenePlan]:
     """Fetch a source and turn it into (digest markdown, validated ScenePlan).
+    `system` is DEEP_READ_SYSTEM for a paper, LESSON_READ_SYSTEM for a topic.
 
     One completion is asked to produce both artifacts at once (the digest is
     the depth layer, the plan drives the video); if the trailing JSON fails
@@ -588,7 +699,7 @@ def deep_read(
     # model can only cite what it was shown, so a smaller prompt can only
     # make the guard easier to satisfy, never harder.
     messages = [
-        {"role": "system", "content": DEEP_READ_SYSTEM},
+        {"role": "system", "content": system},
         {
             "role": "user",
             "content": build_deep_read_prompt(url, prepare_source(source_text)),

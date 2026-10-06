@@ -316,3 +316,10 @@ def test_parse_storyboard_clips_a_definition_too_long_for_the_title_beat(golden,
     assert error == ""
     assert len(board.beats[0].narration) <= sb.MAX_NARRATION
     assert board.beats[0].narration.startswith(f"{plan.title}. word word")
+
+
+def test_lesson_note_appears_only_for_lessons(plan):
+    paper = sb.build_storyboard_prompt(DIGEST, plan)
+    lesson = sb.build_storyboard_prompt(DIGEST, plan, subject="lesson")
+    assert sb.LESSON_NOTE not in paper
+    assert lesson.endswith(sb.LESSON_NOTE)

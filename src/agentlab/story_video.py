@@ -243,6 +243,7 @@ def compose_story_video(
     recent_visual_directions: list[str] | None = None,
     checkpoints=None,
     plan_fingerprint: str = "",
+    subject: str = "paper",
 ) -> StoryResult:
     """checkpoints is a StageCheckpoints for the paper, or None for no reuse.
     plan_fingerprint names the deep read that produced digest and plan, so a
@@ -263,6 +264,7 @@ def compose_story_video(
             recent_visual_directions,
             checkpoints or NoCheckpoints(),
             plan_fingerprint,
+            subject,
         )
     except StoryFailed:
         raise
@@ -285,6 +287,7 @@ def _compose(
     recent_visual_directions,
     checkpoints,
     plan_fingerprint,
+    subject="paper",
 ) -> StoryResult:
     started = time.monotonic()
     bounded_complete = _deadline_bound_completion(complete, started, deadline_seconds)
@@ -305,6 +308,7 @@ def _compose(
                 bounded_complete,
                 model=story_model,
                 recent_visual_directions=recent_visual_directions,
+                subject=subject,
             )
         except StoryboardInvalid as exc:
             raise StoryFailed(f"storyboard: {exc}") from exc
