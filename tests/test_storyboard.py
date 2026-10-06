@@ -197,7 +197,7 @@ def test_prompt_carries_digest_plan_and_the_hard_rules(plan):
     prompt = sb.build_storyboard_prompt(DIGEST, plan)
     assert DIGEST in prompt
     assert plan.street_test_question in prompt
-    for rule in ("real mechanism", "visual metaphor", "title", "street-test"):
+    for rule in ("real mechanism", "3Blue1Brown", "title", "street-test"):
         assert rule in sb.STORYBOARD_SYSTEM + prompt
 
 
@@ -210,20 +210,25 @@ def test_prompt_names_recent_visual_directions_to_avoid(plan):
 
     assert "Recent visual directions" in prompt
     assert "left-to-right row" in prompt
-    assert "substantially different" in prompt
+    assert "Do not reuse these visual ideas" in prompt
 
 
-def test_prompt_asks_for_one_bold_visual_metaphor():
+def test_prompt_directs_a_3b1b_explainer_without_a_forced_metaphor():
     system = sb.STORYBOARD_SYSTEM
-    assert "one bold visual metaphor" in system
-    assert "visually striking" in system
-    assert "camera moves" in system and "3D" in system
-    assert "Do not use an unrelated metaphor" not in system
-    assert "simple definition" in system
-    assert "6 to 12 beats" in system
-    assert "application" in system
-    assert "at most 22 words" in system
-
+    assert "3Blue1Brown" in system
+    for gone in ("one bold visual metaphor", "Prefer creative over safe", "visually striking"):
+        assert gone not in system
+    for rule in (
+        "concrete to abstract",
+        "one colour",
+        "decoration",
+        "Use 3D only for spatial ideas",
+        "simple definition",
+        "6 to 12 beats",
+        "application",
+        "at most 22 words",
+    ):
+        assert rule in system
 
 def test_parse_storyboard_removes_analogy_opening(golden, plan):
     golden["beats"][0]["narration"] = "Imagine a gate. " + golden["simple_definition"]

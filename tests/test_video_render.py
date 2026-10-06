@@ -422,6 +422,24 @@ def test_concat_audio_without_targets_is_a_plain_concat(monkeypatch, tmp_path):
     assert filter_arg == "[0:a]concat=n=1:v=0:a=1[out]"
 
 
+def test_mux_final_reencodes_with_saturation_only_when_asked(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        video_render,
+        "run_subprocess",
+        lambda cmd, **kwargs: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", ""),
+    )
+
+    video_render.mux_final(tmp_path / "v.mp4", tmp_path / "a.mp3", tmp_path / "o.mp4")
+    video_render.mux_final(
+        tmp_path / "v.mp4", tmp_path / "a.mp3", tmp_path / "o.mp4", saturation=1.5
+    )
+
+    assert calls[0][calls[0].index("-c:v") + 1] == "copy" and "-vf" not in calls[0]
+    assert "eq=saturation=1.5" in calls[1]
+    assert calls[1][calls[1].index("-c:v") + 1] == "libx264"
+
+
 def test_mux_final_passes_timeout_to_ffmpeg(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(
@@ -726,3 +744,16 @@ def test_manim_command_prefers_in_env_manim(monkeypatch):
         lambda name: None if name == "manim" else real_find_spec(name),
     )
     assert _manim_command() == ["uvx", "--python", "3.12", "manim"]
+
+
+def test_render_env_keeps_the_real_uv_cache(tmp_path, monkeypatch):
+    """With HOME moved to the scene folder, uvx lost its cache and rebuilt
+    manim from source for every render (2026-10-05)."""
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+    env = video_render.render_env(tmp_path, tmp_path / "spec.json")
+    assert env["UV_CACHE_DIR"] == str(Path.home() / ".cache" / "uv")
+    assert env["HOME"] == str(tmp_path)
+
+    monkeypatch.setenv("UV_CACHE_DIR", "/elsewhere/uv")
+    env = video_render.render_env(tmp_path, tmp_path / "spec.json")
+    assert env["UV_CACHE_DIR"] == "/elsewhere/uv"

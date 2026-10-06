@@ -43,6 +43,11 @@
 #     docstring, so this package gives the deployed render its one real
 #     shot at the glyph; `_make_icon`'s plain-dot fallback still covers
 #     every environment where it doesn't take).
+#   - TeX Live and the CMU fonts come from the `tex` stage below: LaTeX
+#     for MathTex, axis numbers, and matrices, and CMU Serif for
+#     3Blue1Brown's text font (docs/superpowers/specs/
+#     2026-10-05-3b1b-style-videos-design.md). `fontconfig` registers the
+#     fonts so Pango finds "CMU Serif".
 #   - `final` also carries the `uv`/`uvx` binary forward (Dockerfile's
 #     `final` does not, since the main image's commands never shell out to
 #     `uvx`) so the render path's subprocess call resolves at runtime.
@@ -50,6 +55,35 @@
 # Stage layout mirrors Dockerfile exactly (base/deps/builder/test/final);
 # `final` still forces the `test` stage (and its `uv run pytest -q`) to run
 # as part of `docker build`, same gate as the main image.
+
+# TeX Live, installed the way Manim's own image does it (ManimCommunity/manim
+# docker/Dockerfile, read 2026-10-05): the minimal scheme plus the package
+# list from Manim's installation docs (v0.21.0) without ctex, plus
+# cm-unicode for 3Blue1Brown's CMU Serif text font.
+FROM python:3.12-slim AS tex
+# libfontconfig1: tlmgr builds the XeTeX formats, and the xetex binary needs
+# it (Manim's builder stage gets it through Pango). gnupg: tlmgr verifies
+# package signatures with it.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        gnupg \
+        libfontconfig1 \
+        perl \
+        wget \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker/texlive-profile.txt /tmp/texlive-profile.txt
+ENV PATH="/usr/local/texlive/bin/aarch64-linux:/usr/local/texlive/bin/x86_64-linux:$PATH"
+RUN wget -q -O /tmp/install-tl-unx.tar.gz https://mirror.ctan.org/systems/texlive/tlnet/install-tl-unx.tar.gz \
+    && mkdir /tmp/install-tl \
+    && tar -xzf /tmp/install-tl-unx.tar.gz -C /tmp/install-tl --strip-components=1 \
+    && /tmp/install-tl/install-tl --profile=/tmp/texlive-profile.txt \
+    && tlmgr install \
+        amsmath babel-english cbfonts-fd cm-super count1to doublestroke dvisvgm \
+        everysel fontspec frcursive fundus-calligra gnu-freefont jknapltx latex-bin \
+        mathastext microtype multitoc physics prelim2e preview ragged2e relsize rsfs \
+        setspace standalone tipa wasy wasysym xcolor xetex xkeyval \
+        cm-unicode \
+    && rm -rf /tmp/install-tl /tmp/install-tl-unx.tar.gz
 
 FROM python:3.12-slim AS base
 COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /uvx /bin/
@@ -63,8 +97,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
         fonts-dejavu \
         fonts-noto-color-emoji \
+        fontconfig \
         build-essential \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=tex /usr/local/texlive /usr/local/texlive
+ENV PATH="/usr/local/texlive/bin/aarch64-linux:/usr/local/texlive/bin/x86_64-linux:$PATH"
+RUN ln -s /usr/local/texlive/texmf-dist/fonts/opentype/public/cm-unicode /usr/share/fonts/cm-unicode \
+    && fc-cache -f
 WORKDIR /app
 
 FROM base AS deps
@@ -78,6 +117,9 @@ RUN uv sync --frozen --no-dev --group video
 FROM builder AS test
 RUN uv sync --frozen --group video
 RUN uv run pytest -q
+# The render tests prove TeX, the CMU font, and the example scene work in
+# this image. The default run above excludes them (pyproject addopts).
+RUN uv run pytest -q -m render tests/test_story_scene.py
 
 FROM python:3.12-slim AS final
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -87,7 +129,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
         fonts-dejavu \
         fonts-noto-color-emoji \
+        fontconfig \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=tex /usr/local/texlive /usr/local/texlive
+ENV PATH="/usr/local/texlive/bin/aarch64-linux:/usr/local/texlive/bin/x86_64-linux:$PATH"
+RUN ln -s /usr/local/texlive/texmf-dist/fonts/opentype/public/cm-unicode /usr/share/fonts/cm-unicode \
+    && fc-cache -f
 COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /uvx /bin/
 RUN groupadd --system --gid 999 agentlab \
     && useradd --system --gid 999 --uid 999 --create-home agentlab

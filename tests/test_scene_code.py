@@ -8,11 +8,11 @@ from agentlab import scene_code, story_scene
 from agentlab.bedrock import build_converse_request
 from agentlab.storyboard import Storyboard
 
-GOLDEN_SCENE = (Path(__file__).parent / "fixtures" / "paper_story_golden.py").read_text(
+GOLDEN_SCENE = Path(scene_code.__file__).with_name("scene_coder_example.py").read_text(
     encoding="utf-8"
 )
 GOLDEN_BOARD = json.loads(
-    (Path(__file__).parent / "fixtures" / "storyboard_golden.json").read_text(
+    (Path(__file__).parent / "fixtures" / "storyboard_example.json").read_text(
         encoding="utf-8"
     )
 )
@@ -24,14 +24,11 @@ def test_golden_scene_passes_the_guard():
 
 
 def test_visual_direction_reads_generated_scene_concept():
-    assert scene_code.visual_direction(GOLDEN_SCENE).startswith("A crowded house")
+    assert scene_code.visual_direction(GOLDEN_SCENE).startswith("The frozen weight matrix W0")
 
 
 def test_guard_requires_visual_direction_comment():
-    source = GOLDEN_SCENE.replace(
-        "# Visual direction: A crowded house compresses into one case while the needed item stays visible.\n",
-        "",
-    )
+    source = GOLDEN_SCENE.split("\n", 1)[1]
 
     assert (
         "visual direction"
@@ -48,9 +45,6 @@ def test_guard_requires_visual_direction_comment():
         ("x = open('/etc/passwd')\n", "open"),
         ("y = __import__('os')\n", "__import__"),
         ("z = ().__class__.__mro__\n", "__class__"),
-        ("from manim import MathTex\n", "MathTex"),
-        ("from manim import DecimalNumber\n", "DecimalNumber"),
-        ("from manim import BarChart\n", "BarChart"),
         ("w = self.camera.frame\n", "camera"),
     ],
 )
@@ -58,6 +52,46 @@ def test_guard_flags_forbidden_things(snippet, needle):
     source = snippet + GOLDEN_SCENE
     findings = scene_code.check_scene_code(source, BEATS)
     assert any(needle in f for f in findings), findings
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "from manim import MathTex, DecimalNumber, Matrix, BarChart, TransformMatchingTex, Title\n",
+        "from manim import Axes\nAXES = Axes(x_range=[0, 1], axis_config={'include_numbers': True})\n",
+        "from manim import Axes\nAXES = Axes(x_range=[0, 1]).add_coordinates()\n",
+        "from manim import Code\nSNIPPET = Code(code_string='x = 1', language='python')\n",
+        "import numpy as np\nNOISE = np.random.uniform(0, 1, 5) + np.tanh(np.eye(5)).sum()\n",
+        "import numpy as np\nRNG = np.random.RandomState(42)\n",
+        "from manim import VGroup\n\n\nclass Row(VGroup):\n    def __init__(self):\n        super().__init__()\n",
+    ],
+    ids=["latex", "include-numbers", "coordinates", "code-string", "numpy-random", "random-state", "helper-class"],
+)
+def test_guard_allows_latex_code_strings_numpy_random_and_helper_classes(snippet):
+    assert scene_code.check_scene_code(snippet + GOLDEN_SCENE, BEATS) == []
+
+
+@pytest.mark.parametrize(
+    "snippet, needle",
+    [
+        ("w = getattr(1, 'real')\n", "getattr"),
+        ("from manim import ImageMobject\n", "ImageMobject"),
+        ("from manim import SVGMobject\n", "SVGMobject"),
+        ("from manim import Code\nC = Code('secrets.txt')\n", "Code takes code_string"),
+        ("from manim import Code\nC = Code(code_file='secrets.txt')\n", "Code takes code_string"),
+        ("import numpy as np\nD = np.load('x.npy')\n", "np.load"),
+        ("import numpy as np\nB = np.random.bit_generator\n", "np.random.bit_generator"),
+    ],
+)
+def test_guard_still_blocks_files_secrets_and_media(snippet, needle):
+    findings = scene_code.check_scene_code(snippet + GOLDEN_SCENE, BEATS)
+    assert any(needle in f for f in findings), findings
+
+
+def test_guard_flags_a_second_scene_class():
+    source = GOLDEN_SCENE + "\n\nclass Other(StoryScene):\n    pass\n"
+    findings = scene_code.check_scene_code(source, BEATS)
+    assert any("helper class Other must not be a scene" in f for f in findings), findings
 
 
 def test_guard_allows_the_camera_and_3d_api():
@@ -136,21 +170,11 @@ from numpy import array, cos
     assert scene_code.check_scene_code(source, BEATS) == []
 
 
-def test_guard_flags_include_numbers_true():
-    source = GOLDEN_SCENE.replace(
-        "self.hold(0.6)",
-        "self.axes = Axes(x_range=[0, 1], axis_config={'include_numbers': True}); self.hold(0.6)",
-    )
-    source = source.replace("from manim import (", "from manim import (\n    Axes,")
-    findings = scene_code.check_scene_code(source, BEATS)
-    assert any("include_numbers" in f for f in findings)
-
-
 def test_guard_requires_every_beat_method_and_no_extras():
-    missing = GOLDEN_SCENE.replace("def beat_5(self):", "def beat_9(self):")
+    missing = GOLDEN_SCENE.replace("def beat_5(self):", "def beat_12(self):")
     findings = scene_code.check_scene_code(missing, BEATS)
     assert any("beat_5" in f for f in findings)
-    assert any("beat_9" in f for f in findings)
+    assert any("beat_12" in f for f in findings)
 
 
 def test_guard_rejects_construct_override_and_wrong_class():
@@ -195,7 +219,7 @@ def test_cheat_sheet_names_every_public_story_scene_method():
         and not n.name.startswith("_")
         and n.name != "construct"
     }
-    assert public == {"fit", "label", "counter", "freeze", "clear_stage", "hold"}
+    assert public == {"fit", "label", "clear_stage", "hold"}
     for name in public:
         assert f"self.{name}(" in scene_code.STORY_SCENE_API
 
@@ -221,8 +245,8 @@ def test_prompt_requires_scene_to_fit_below_completion_limit():
 
 def test_prompt_opens_with_daniels_brief_verbatim():
     assert scene_code.SCENE_CODE_SYSTEM.startswith(
-        "Make the most visually striking explanation you can. Invent the visuals. "
-        "Colour, motion, camera moves and 3D are all allowed.\n"
+        "Animate it the way 3Blue1Brown does: clean, smooth, and every motion "
+        "explains something.\n"
     )
 
 
@@ -238,15 +262,18 @@ def test_prompt_keeps_only_hard_technical_facts():
         "self.set_camera_orientation(",
         "self.begin_ambient_camera_rotation(",
         "self.add_fixed_in_frame_mobjects(",
-        "ThreeDAxes without labels",
+        "ThreeDAxes",
     ):
         assert call in api
-    assert "The palette is free" in api
+    assert "the 3Blue1Brown palette" in api
     for old_rule in (
         "No camera moves",
         "the one accent colour",
         "the render fails if",
         "small intentional colour palette",
+        "Invent the visuals",
+        "No LaTeX",
+        "one bold visual metaphor",
     ):
         assert old_rule not in system + api
 
@@ -426,8 +453,8 @@ def test_prompt_rejects_duration_count_mismatch():
     [
         ("class Helper:\n    pass\n", "exactly one top-level class named PaperStory"),
         (
-            "class PaperStory(StoryScene):\n    pass\n\nclass Helper:\n    pass\n",
-            "exactly one top-level class named PaperStory",
+            "class PaperStory(StoryScene):\n    pass\n\nclass Helper(StoryScene):\n    pass\n",
+            "helper class Helper must not be a scene",
         ),
         (
             "class PaperStory(other.StoryScene):\n    pass\n",
@@ -463,3 +490,39 @@ def test_write_scene_code_fix_round_includes_previous_source_and_feedback():
     assert source == GOLDEN_SCENE.strip()
     user = seen[0][-1]["content"]
     assert "OLD SOURCE" in user and "beat 2 ran 1.2 s over" in user
+
+
+def test_prompt_embeds_the_example_scene_as_style_only():
+    system = scene_code.SCENE_CODE_SYSTEM
+    assert scene_code.SCENE_CODER_EXAMPLE in system
+    assert "Copy its style, never its content." in system
+
+
+def test_prompt_translates_3b1b_manim_idioms():
+    system = scene_code.SCENE_CODE_SYSTEM
+    for theirs, ours in (
+        ("ShowCreation", "Create"),
+        ("TexText", "Tex"),
+        ("t2c=", "tex_to_color_map="),
+        (
+            "frame.reorient(0, 0, 0, center, height)",
+            "self.move_camera(frame_center=center, zoom=8 / height)",
+        ),
+        ("set_backstroke(BLACK, 5)", "set_stroke(BLACK, 5, background=True)"),
+    ):
+        assert theirs in system and ours in system
+
+
+def test_example_scene_shows_the_3b1b_idioms():
+    example = scene_code.SCENE_CODER_EXAMPLE
+    for idiom in (
+        "MathTex",
+        "TransformMatchingTex",
+        "TransformFromCopy",
+        "lag_ratio",
+        "ValueTracker",
+        "Brace(",
+        "Circumscribe(",
+        "from story_scene import",
+    ):
+        assert idiom in example

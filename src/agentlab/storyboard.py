@@ -1,8 +1,10 @@
-"""Turn a grounded paper plan into a visual explanation.
+"""Turn a grounded paper plan into a 3Blue1Brown-style explanation.
 
-The storyboard carries the paper's real mechanism through one bold visual
-metaphor. The narration explains in plain words: it starts with the paper
-title and a plain definition, and every number comes from the source.
+The storyboard shows the paper's real mechanism with the visuals that explain
+it best, in 3Blue1Brown's style (docs/superpowers/specs/
+2026-10-05-3b1b-style-videos-design.md). The narration explains in plain
+words: it starts with the paper title and a plain definition, and every
+number comes from the source.
 """
 
 import json
@@ -223,17 +225,24 @@ def parse_storyboard(
     return board, ""
 
 
-STORYBOARD_SYSTEM = """You are the visual director for a short research-paper video.
-Make it visually striking and memorable. Prefer creative over safe.
+# Every rule below has a source in
+# docs/superpowers/specs/2026-10-05-3b1b-style-videos-design.md (section 1).
+STORYBOARD_SYSTEM = """You are the director of a short explainer video in the style of 3Blue1Brown.
+The viewer is Daniel. He must understand the paper's mechanism on the first watch.
+Clear beats clever.
 
-Build the whole video around one bold visual metaphor that you invent for this paper.
-The metaphor carries the paper's real mechanism: each of its moving parts stands for a real part of the paper.
-Let the metaphor change across the beats. It can grow, split, transform, collide, break, or rebuild.
-Colour, motion, camera moves, depth, and 3D are all available.
-Treat the scene plan as a factual brief, not as a layout.
+How 3Blue1Brown explains:
+- Start from the visuals. Let the explanation form around what the viewer sees.
+- Go from concrete to abstract. Show one concrete example before the general rule.
+- Keep one or two examples front and centre for the whole video.
+- Show the real thing: the actual objects, a graph, an equation, a geometric picture, or a diagram of the real parts. Use a metaphor only when it explains better than the real object.
+- Give each key concept one colour, and keep that colour in every formula and picture for the whole video. Use two to four concept colours in a scene.
+- Build a few objects early and keep them on screen. Change them from beat to beat: an equation rearranges, a curve shifts, a new symbol grows out of a copy of an old one. Do not restart the picture in every beat.
+- Nothing is on screen for decoration. Every motion explains something.
+- Use 3D only for spatial ideas: vector or embedding spaces, surfaces, layers stacked in depth.
+- Formulas are welcome when they carry the mechanism. Show the picture first, then the formula that names it.
 
-The narration explains the paper in plain words and may point at the metaphor.
-The metaphor lives in the visuals.
+The narration explains the paper in plain words and may refer to what is on screen.
 Start with the exact paper title and one simple definition of the main idea.
 Then show a concrete problem from the paper, the real mechanism through cause and effect,
 one grounded result, one practical application or implication, one limit, and the street-test question.
@@ -249,7 +258,7 @@ Write 6 to 12 beats with this exact role order:
 7. question
 
 Each beat has role, narration, visual, and on_screen_text.
-The visual says what the viewer sees and how it moves.
+The visual says what the viewer sees and how it changes from the previous beat.
 Narration has one or two short sentences. Each sentence has at most 22 words.
 Use common words. Define a necessary technical term before using it.
 Never use an em dash.
@@ -258,13 +267,14 @@ The first beat's on_screen_text must contain the exact storyboard title.
 The first beat's narration must contain simple_definition exactly.
 Use at most two short on-screen labels per beat.
 Every number must occur in the digest or scene plan.
-Everything must be drawable in Manim: text, shapes, paths, particles, 3D solids, colour, and camera moves.
+Everything must be drawable in Manim: text, LaTeX formulas, shapes, graphs, axes, number lines, matrices, 3D surfaces, and camera moves.
 Nothing comes from image files.
 
 Output exactly one fenced json block with keys title, simple_definition, visual_focus,
-mapping, and beats. visual_focus names the metaphor in one sentence. mapping is a list
-of two to eight objects with paper_term (the paper's own name for a part) and visual
-(what stands for it in the metaphor).
+mapping, and beats. visual_focus names the visual approach in one sentence. mapping is the
+colour key: a list of two to eight objects with paper_term (the paper's own name for a
+concept) and visual (its colour and how it appears on screen, for example "yellow, an
+arrow from the origin").
 Nothing can follow the json block."""
 
 
@@ -278,7 +288,7 @@ def build_storyboard_prompt(
         recent = (
             "\n\nRecent visual directions to avoid repeating:\n- "
             + "\n- ".join(recent_visual_directions)
-            + "\nChoose a substantially different visual concept, composition, and motion system."
+            + "\nDo not reuse these visual ideas, and keep the same 3Blue1Brown style."
         )
     return (
         "<digest>\n"
@@ -287,7 +297,7 @@ def build_storyboard_prompt(
         "<scene_plan>\n"
         f"{plan.model_dump_json(indent=1)}\n"
         "</scene_plan>\n\n"
-        "Explain this paper through one bold visual metaphor built on its real "
+        "Explain this paper the way 3Blue1Brown would, starting from its real "
         "mechanism. Start with the title and a simple definition. End with the result, "
         "application, limit, and street-test question. Return the fenced json "
         "storyboard." + recent

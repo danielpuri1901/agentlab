@@ -16,12 +16,14 @@ from agentlab.video_render import NarrationClip
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BOARD = Storyboard(
-    **json.loads((FIXTURES / "storyboard_golden.json").read_text(encoding="utf-8"))
+    **json.loads((FIXTURES / "storyboard_example.json").read_text(encoding="utf-8"))
 )
 PLAN = ScenePlan(
     **json.loads((FIXTURES / "sample_plan.json").read_text(encoding="utf-8"))
 )
-GOLDEN_SCENE = (FIXTURES / "paper_story_golden.py").read_text(encoding="utf-8")
+GOLDEN_SCENE = Path(story_video.__file__).with_name("scene_coder_example.py").read_text(
+    encoding="utf-8"
+)
 EDITED_SCENE = GOLDEN_SCENE + "\n# edited\n"
 DIGEST = "# Digest\n0% and 44% on 50 items.\n## Limits\nNone."
 N = len(BOARD.beats)
@@ -134,8 +136,9 @@ def seams(monkeypatch):
         ),
     )
 
-    def fake_mux(video, audio, out, timeout_seconds=None):
+    def fake_mux(video, audio, out, timeout_seconds=None, saturation=None):
         state["muxed_video"] = Path(video)
+        state["saturation"] = saturation
         output = Path(out)
         output.write_bytes(b"final")
         return output
@@ -179,7 +182,7 @@ def test_first_successful_render_ships_without_a_judge(seams, tmp_path):
     assert seams["targets"] == [5.0] * N
     assert result.srt_path.exists()
     assert "class PaperStory" in result.scene_source
-    assert result.visual_direction.startswith("A crowded house")
+    assert result.visual_direction.startswith("The frozen weight matrix W0")
     assert result.timing == _timing()
     assert seams["edits"] == []
     assert _modes_and_statuses(result) == [("generate", "shipped")]
@@ -308,13 +311,16 @@ def test_overrun_ships_and_pads_the_audio_to_the_beat(seams, tmp_path):
 
 
 def test_layout_warnings_ship_with_the_timing(seams, tmp_path):
+    """Layout never blocks a video: after its one round, the first render
+    ships with its warnings recorded."""
     timing = _timing()
     timing["layout_warnings"] = ["beat 2 layout: 'Agent' runs off the left edge"]
-    seams["timings"] = [timing]
+    seams["timings"] = [timing, copy.deepcopy(timing)]
 
     result = _compose(tmp_path)
 
-    assert result.attempts == 1
+    assert result.attempts == 2
+    assert result.selected_attempt == 1
     assert result.timing["layout_warnings"] == timing["layout_warnings"]
 
 
@@ -567,7 +573,7 @@ def test_a_new_storyboard_is_saved_for_the_next_run(seams, paper_checkpoints, tm
     _compose_with(tmp_path, paper_checkpoints)
 
     saved = paper_checkpoints.load(
-        "storyboard", fingerprint("storyboard", "s", "plan-1")
+        "storyboard", fingerprint("storyboard", "s", "plan-1", story_video.STORYBOARD_SYSTEM)
     )
     assert Storyboard.model_validate(saved) == BOARD
 
@@ -579,7 +585,7 @@ def test_a_saved_storyboard_is_reused_without_a_model_call(
 
     paper_checkpoints.save(
         "storyboard",
-        fingerprint("storyboard", "s", "plan-1"),
+        fingerprint("storyboard", "s", "plan-1", story_video.STORYBOARD_SYSTEM),
         BOARD.model_dump(mode="json"),
     )
 
@@ -601,7 +607,7 @@ def test_a_storyboard_from_another_deep_read_is_not_reused(
     other = BOARD.model_copy(update={"title": "From an older deep read"})
     paper_checkpoints.save(
         "storyboard",
-        fingerprint("storyboard", "s", "plan-0"),
+        fingerprint("storyboard", "s", "plan-0", story_video.STORYBOARD_SYSTEM),
         other.model_dump(mode="json"),
     )
 
@@ -634,7 +640,11 @@ def test_a_saved_render_error_resumes_as_an_edit_of_that_file(
     first = GOLDEN_SCENE + "\n# first attempt\n"
     error = "Manim failed with this traceback:\nNameError: z"
     scene_fingerprint = fingerprint(
-        "scene", "c", fingerprint("storyboard", "s", "plan-1")
+        "scene",
+        "c",
+        fingerprint("storyboard", "s", "plan-1", story_video.STORYBOARD_SYSTEM),
+        story_video.SCENE_CODE_SYSTEM,
+        story_video.STORY_SCENE_API,
     )
     paper_checkpoints.save(
         "scene", scene_fingerprint, {"source": first, "feedback": error}
@@ -650,3 +660,97 @@ def test_a_saved_render_error_resumes_as_an_edit_of_that_file(
         "source": EDITED_SCENE,
         "feedback": None,
     }
+
+
+def _timing_with_warning(text="beat 2 layout: 'Query' overlaps 'Key'"):
+    timing = _timing()
+    timing["layout_warnings"] = [text]
+    return timing
+
+
+def test_layout_warning_gets_one_edit_round_and_the_clean_render_ships(seams, tmp_path):
+    seams["timings"] = [_timing_with_warning(), _timing()]
+
+    result = _compose(tmp_path)
+
+    assert result.selected_attempt == 2
+    assert len(seams["edits"]) == 1
+    assert "'Query' overlaps 'Key'" in seams["edits"][0][1]
+    assert result.attempt_records[0]["status"] == "layout_round"
+
+
+def test_layout_round_that_still_warns_ships_the_first_render(seams, tmp_path):
+    seams["timings"] = [_timing_with_warning(), _timing_with_warning("beat 3 layout: x")]
+
+    result = _compose(tmp_path)
+
+    assert result.selected_attempt == 1
+    assert len(seams["edits"]) == 1
+    assert "attempt_1" in str(seams["muxed_video"])
+
+
+def test_layout_round_that_fails_to_render_ships_the_first_render(seams, tmp_path):
+    seams["timings"] = [_timing_with_warning()]
+    seams["render_errors"] = [None, _render_error()]
+
+    result = _compose(tmp_path)
+
+    assert result.selected_attempt == 1
+    assert result.attempts == 2
+
+
+def test_no_layout_round_without_time_for_one_more_render(seams, tmp_path):
+    seams["timings"] = [_timing_with_warning()]
+
+    result = story_video.compose_story_video(
+        DIGEST,
+        PLAN,
+        polly_client=None,
+        voice_id="Ivy",
+        complete=lambda model, messages: "",
+        work_dir=tmp_path / "work",
+        out_path=tmp_path / "out" / "video.mp4",
+        story_model="s",
+        scene_model="c",
+        deadline_seconds=story_video.LAYOUT_ROUND_MIN_SECONDS - 1,
+    )
+
+    assert result.selected_attempt == 1
+    assert seams["edits"] == []
+
+
+def test_final_video_gets_3b1b_saturation(seams, tmp_path):
+    _compose(tmp_path)
+
+    assert seams["saturation"] == story_video.OUTPUT_SATURATION == 1.5
+
+
+def test_checkpoint_fingerprints_cover_the_prompts(seams, tmp_path, monkeypatch):
+    seen = []
+    real = story_video.fingerprint
+    monkeypatch.setattr(
+        story_video, "fingerprint", lambda *parts: seen.append(parts) or real(*parts)
+    )
+
+    _compose(tmp_path)
+
+    assert any(story_video.STORYBOARD_SYSTEM in parts for parts in seen)
+    assert any(
+        story_video.SCENE_CODE_SYSTEM in parts and story_video.STORY_SCENE_API in parts
+        for parts in seen
+    )
+
+
+def test_the_scene_gets_the_narration_as_subtitles(seams, tmp_path, monkeypatch):
+    specs = []
+    real_render = story_video.render_scene_video
+
+    def spying_render(scene_file, scene_class, spec, *args, **kwargs):
+        specs.append(spec)
+        return real_render(scene_file, scene_class, spec, *args, **kwargs)
+
+    monkeypatch.setattr(story_video, "render_scene_video", spying_render)
+
+    _compose(tmp_path)
+
+    assert specs[0]["subtitles"] == [beat.narration for beat in BOARD.beats]

@@ -265,6 +265,13 @@ def render_env(scene_dir: Path, spec_path: Path, extra_env: dict | None = None) 
     env = {key: os.environ[key] for key in RENDER_ENV_KEYS if key in os.environ}
     env["HOME"] = str(scene_dir)
     env["TMPDIR"] = str(scene_dir)
+    # HOME points at the scene folder, which would move uv's cache there too.
+    # On the laptop, uvx then rebuilt manim (pycairo from source) for every
+    # render, and a failed compile sank every fix round of a run on
+    # 2026-10-05. The cache path is not a secret, so the real one goes in.
+    env["UV_CACHE_DIR"] = os.environ.get("UV_CACHE_DIR") or str(
+        Path.home() / ".cache" / "uv"
+    )
     env["PYTHONPATH"] = str(scene_dir)
     env["SCENE_SPEC_JSON"] = str(spec_path)
     if extra_env:
@@ -400,13 +407,28 @@ def mux_final(
     audio_path: Path,
     out_path: Path,
     timeout_seconds: int = DEFAULT_RENDER_TIMEOUT_SECONDS,
+    saturation: float | None = None,
 ) -> Path:
-    """Plain video+audio mux, no filter graph: the silent video already has
-    captions burned in by Manim, so nothing here needs to touch the video
-    stream, and `-c:v copy` just repackages it (no re-encode, no libass
-    dependency)."""
+    """Video+audio mux. With no saturation, `-c:v copy` repackages the
+    video stream untouched (no re-encode, no libass dependency). With a
+    saturation, ffmpeg's eq filter re-encodes it: 3Blue1Brown renders at
+    saturation 1.5 (3b1b/videos custom_config.yml, file_writer)."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    video_args = ["-c:v", "copy"]
+    if saturation is not None:
+        video_args = [
+            "-vf",
+            f"eq=saturation={saturation}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+        ]
     cmd = [
         "ffmpeg",
         "-y",
@@ -418,8 +440,7 @@ def mux_final(
         "0:v:0",
         "-map",
         "1:a:0",
-        "-c:v",
-        "copy",
+        *video_args,
         "-c:a",
         "aac",
         "-shortest",
