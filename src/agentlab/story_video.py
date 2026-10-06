@@ -103,7 +103,18 @@ def _stderr_tail(exc: subprocess.CalledProcessError) -> str:
     text = exc.stderr or exc.stdout or ""
     if isinstance(text, bytes):
         text = text.decode(errors="replace")
-    return "\n".join(text.strip().splitlines()[-STDERR_TAIL_LINES:])
+    lines = text.strip().splitlines()
+    tail = lines[-STDERR_TAIL_LINES:]
+    # Rich prints the scene's own frame far above the tail. Without it the fix
+    # rounds saw only Manim internals and repeated one bug six times
+    # (2026-10-06), so the scene's frames and their marked lines lead.
+    frames = []
+    for i, line in enumerate(lines):
+        if "paper_story.py:" in line:
+            frames.append(line)
+            frames += [m for m in lines[i + 1 : i + 8] if "\u2771" in m][:1]
+    frames = [f.strip(" \u2502") for f in frames if f not in tail]
+    return "\n".join(frames + tail)
 
 
 def _failure_detail(exc: Exception) -> str:
