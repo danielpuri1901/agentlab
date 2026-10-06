@@ -312,6 +312,7 @@ try:
         DOWN,
         DecimalNumber,
         FadeOut,
+        LaggedStartMap,
         Line,
         MarkupText,
         Paragraph,
@@ -329,6 +330,20 @@ except ImportError:  # pragma: no cover - only hit without manim installed
 
 
 if _MANIM_AVAILABLE:
+    _ce_lagged_start_map_init = LaggedStartMap.__init__
+
+    def _lagged_start_map_init(self, animation_class, mobject, arg_creator=None, **kwargs):
+        # 3Blue1Brown's manimgl hands each submobject to the animation as one
+        # argument. Manim CE unpacks it, so LaggedStartMap(GrowArrow, arrows)
+        # gave GrowArrow an arrow's tip as point_color and crashed every render
+        # of an approved paper on 2026-10-06. The scene coder writes 3b1b's
+        # idiom, so the base scene gives it 3b1b's meaning.
+        _ce_lagged_start_map_init(
+            self, animation_class, mobject, arg_creator or (lambda m: (m,)), **kwargs
+        )
+
+    LaggedStartMap.__init__ = _lagged_start_map_init
+
     TEXT_TYPES = (Text, MarkupText, Paragraph, SingleStringMathTex, DecimalNumber)
     """Tex and MathTex subclass SingleStringMathTex; Integer subclasses
     DecimalNumber."""

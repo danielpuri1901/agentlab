@@ -501,19 +501,26 @@ def _complete(
     response = _run_completion(
         model,
         messages,
-        max_tokens=3000,
+        # A lesson deep read writes ten digest sections plus the plan, and at
+        # 3000 tokens its JSON was cut off mid-string (2026-10-06).
+        max_tokens=8000,
         timeout=MODEL_CALL_TIMEOUT_SECONDS,
         stage="paper",
         usage_sink=usage_sink,
         pricing_model=pricing_model,
         extra_fields=extra_fields,
     )
-    return response.choices[0].message.content
+    choice = response.choices[0]
+    if getattr(choice, "finish_reason", None) in {"length", "max_tokens"}:
+        raise ValueError(
+            "model output hit the token limit; return a shorter complete response"
+        )
+    return choice.message.content
 
 
 def _deep_read_extra_fields() -> dict | None:
     """Sonnet 5.5 thinks by default, its thinking counts against the deep
-    read's 3000 tokens, and it rejects thinking type "disabled". Terraform
+    read's 8000 tokens, and it rejects thinking type "disabled". Terraform
     sets DEEP_READ_THINKING to "between_tools" to switch it off. Only the
     Bedrock Converse path sends it."""
     thinking = os.environ.get("DEEP_READ_THINKING")

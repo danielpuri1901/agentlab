@@ -326,3 +326,42 @@ def test_a_line_through_a_title_is_reported_but_an_arrow_to_its_edge_is_not():
     assert story_scene.layout_problems([], [title], [], [divider, to_edge, underline]) == [
         "the line crosses 'Which would you choose?'"
     ]
+
+
+LAGGED_ARROWS_SCENE = '''# Visual direction: Three arrows grow one after another.
+from manim import DOWN, LEFT, RIGHT, Arrow, GrowArrow, LaggedStartMap, VGroup
+from story_scene import StoryScene
+
+
+class PaperStory(StoryScene):
+    def beat_1(self):
+        arrows = VGroup(
+            *(Arrow(LEFT, RIGHT, buff=0, tip_length=0.1).shift(i * DOWN) for i in range(3))
+        )
+        self.play(LaggedStartMap(GrowArrow, arrows, lag_ratio=0.2), run_time=0.8)
+'''
+
+
+@pytest.mark.render
+def test_lagged_start_map_hands_each_arrow_whole_to_grow_arrow(tmp_path):
+    """3b1b's LaggedStartMap(GrowArrow, arrows) crashed every attempt of an
+    approved paper on 2026-10-06: Manim CE unpacked each arrow, so its tip
+    became GrowArrow's point_color."""
+    import shutil
+
+    from agentlab import video_render
+
+    scene_dir = tmp_path / "scene"
+    scene_dir.mkdir()
+    (scene_dir / "paper_story.py").write_text(LAGGED_ARROWS_SCENE, encoding="utf-8")
+    shutil.copy(Path(story_scene.__file__), scene_dir / "story_scene.py")
+
+    video = video_render.render_scene_video(
+        scene_dir / "paper_story.py",
+        "PaperStory",
+        {"storyboard": {"beats": [{}]}, "durations": [1.0]},
+        tmp_path / "media",
+        quality="l",
+    )
+
+    assert video.exists()

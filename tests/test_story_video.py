@@ -779,3 +779,22 @@ def test_lesson_subject_reaches_the_storyboard(seams, tmp_path, monkeypatch):
     )
 
     assert subjects == ["lesson"]
+
+
+def test_render_feedback_leads_with_the_scene_frame():
+    """Rich prints the scene's frame far above the tail; the fix rounds need it."""
+    trace = (
+        ["│ /tmp/a/paper_story.py:364 in beat_7 │", "│ │"]
+        + ["│ ❱ 364 self.play(LaggedStartMap(GrowArrow, arrows_in)) │"]
+        + [f"│ manim internals {i} │" for i in range(60)]
+        + ["AttributeError: ArrowTriangleFilledTip object has no attribute 'hex'"]
+    )
+    exc = subprocess.CalledProcessError(1, ["manim"], stderr="\n".join(trace))
+
+    detail = story_video._stderr_tail(exc)
+
+    lines = detail.splitlines()
+    assert lines[0] == "/tmp/a/paper_story.py:364 in beat_7"
+    assert lines[1] == "❱ 364 self.play(LaggedStartMap(GrowArrow, arrows_in))"
+    assert lines[-1].startswith("AttributeError: ArrowTriangleFilledTip")
+    assert len(lines) == 2 + story_video.STDERR_TAIL_LINES
