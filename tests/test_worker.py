@@ -696,7 +696,7 @@ def _make_scene_plan(url: str, title: str) -> ScenePlan:
 
 
 def _make_fake_deep_read(fail_urls=frozenset()):
-    def fake_deep_read(url, fetch_text, complete, model=None):
+    def fake_deep_read(url, fetch_text, complete, model=None, system=None):
         if url in fail_urls:
             raise ValueError(f"scene plan invalid after retry for {url}: boom")
         digest = f"# Digest\n\nContent for {url}.\n\n## Limits\n\nNone stated."
@@ -915,7 +915,7 @@ def test_only_the_deep_read_gets_the_thinking_fields(
 
     deep_read = _make_fake_deep_read()
 
-    def fake_deep_read(url, fetch_text, complete, model=None):
+    def fake_deep_read(url, fetch_text, complete, model=None, system=None):
         complete(arn, [{"role": "system", "content": "deep read"}])
         return deep_read(url, fetch_text, complete, model)
 
@@ -1190,7 +1190,7 @@ def test_explain_passes_story_model_defaults_and_overrides(
     assert result.exit_code == 0, result.output
     assert captured.pop("checkpoints").folder == "checkpoints/arxiv-9911.00001"
     assert len(captured.pop("plan_fingerprint")) == 12
-    assert captured == {**expected, "recent_visual_directions": []}
+    assert captured == {**expected, "recent_visual_directions": [], "subject": "paper"}
 
 
 def test_explain_all_three_tracks_send_three_videos_and_mark_seen(
@@ -1565,7 +1565,7 @@ def test_explain_retry_loads_the_saved_deep_read_instead_of_reading_again(
     reads = []
     fake_read = _make_fake_deep_read()
 
-    def counting_deep_read(url, fetch_text, complete, model=None):
+    def counting_deep_read(url, fetch_text, complete, model=None, system=None):
         reads.append((url, model))
         return fake_read(url, fetch_text, complete, model=model)
 
@@ -1592,3 +1592,111 @@ def test_explain_retry_loads_the_saved_deep_read_instead_of_reading_again(
     assert "explain: core=sent" in third.output
     assert len(reads) == 2
     assert reads[-1][1] == "another-model"
+
+
+def _put_topics(s3, count=3):
+    entries = []
+    for number in range(1, count + 1):
+        slug = f"{number:02d}-topic-{number}"
+        key = f"topics/demo/{slug}.md"
+        s3.put_object(
+            Bucket=BUCKET,
+            Key=key,
+            Body=f"# Topic {number}\n\nif x < y and y > z: keep(x)\n".encode(),
+        )
+        entries.append(
+            {
+                "project": "demo",
+                "project_title": "Demo",
+                "number": number,
+                "topic": f"Topic {number}",
+                "slug": slug,
+                "title": f"Topic {number} (Demo)",
+                "pack_key": key,
+            }
+        )
+    s3.put_object(
+        Bucket=BUCKET, Key=worker_mod.TOPIC_BACKLOG_KEY, Body=json.dumps(entries).encode()
+    )
+    return entries
+
+
+def _patch_lesson_stages(monkeypatch):
+    seen = {"reads": [], "subjects": []}
+    fake_read = _make_fake_deep_read()
+
+    def lesson_read(url, fetch_text, complete, model=None, system=None):
+        seen["reads"].append((url, system, fetch_text(url)))
+        return fake_read(url, fetch_text, complete, model=model)
+
+    def story(*args, **kwargs):
+        seen["subjects"].append(kwargs.get("subject"))
+        return _fake_story_success(*args, **kwargs)
+
+    _patch_explain_render_stages(monkeypatch, story=story)
+    monkeypatch.setattr("agentlab.worker.deep_read", lesson_read)
+    return seen
+
+
+def test_explain_built_track_sends_two_topics_a_day_in_backlog_order(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    _put_topics(s3)
+    _set_explain_env(monkeypatch, track="built")
+    _set_daytime(monkeypatch)
+    seen = _patch_lesson_stages(monkeypatch)
+
+    result = runner.invoke(app, ["worker", "explain"])
+
+    assert result.exit_code == 0, result.output
+    assert "explain: built=sent,sent" in result.output
+    videos = sorted(
+        (i for i in table.scan()["Items"] if i.get("sk") == "video"),
+        key=lambda i: i["sent_ts"],
+    )
+    assert [v["url"] for v in videos] == ["topic://demo/01-topic-1", "topic://demo/02-topic-2"]
+    assert all(v["track"] == "built" for v in videos)
+    url, system, page = seen["reads"][0]
+    assert url == "topic://demo/01-topic-1"
+    assert system == worker_mod.LESSON_READ_SYSTEM
+    assert "if x &lt; y and y &gt; z" in page
+    assert seen["subjects"] == ["lesson", "lesson"]
+    captions = [c[1]["data"]["caption"] for c in telegram_calls if c[0].endswith("/sendVideo")]
+    assert captions[0].startswith("[BUILT] Topic 1 (Demo)")
+
+
+def test_explain_built_track_is_quiet_before_the_first_export(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    _set_explain_env(monkeypatch, track="built")
+    _set_daytime(monkeypatch)
+    _patch_lesson_stages(monkeypatch)
+
+    result = runner.invoke(app, ["worker", "explain"])
+
+    assert result.exit_code == 0, result.output
+    assert "explain: built=empty,empty" in result.output
+    assert telegram_calls == []
+
+
+def test_explain_built_track_pings_once_when_the_backlog_runs_out(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    s3, _dynamodb, _table, _ssm = moto_fabric_with_ssm
+    _put_topics(s3, count=1)
+    _set_explain_env(monkeypatch, track="built")
+    _set_daytime(monkeypatch)
+    _patch_lesson_stages(monkeypatch)
+
+    first = runner.invoke(app, ["worker", "explain"])
+    second = runner.invoke(app, ["worker", "explain"])
+
+    assert "explain: built=sent,empty" in first.output
+    assert "explain: built=empty,empty" in second.output
+    warnings = [
+        c
+        for c in telegram_calls
+        if c[0].endswith("/sendMessage") and "out of topics" in str(c[1])
+    ]
+    assert len(warnings) == 1

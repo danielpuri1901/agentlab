@@ -506,6 +506,9 @@ resource "aws_iam_role_policy" "explain_task" {
           "${aws_s3_bucket.results.arn}/stories/*",
           "${aws_s3_bucket.results.arn}/profile/*",
           "${aws_s3_bucket.results.arn}/checkpoints/*",
+          # Built-lane lesson packs and their backlog, written from the laptop
+          # by scripts/export_study_topics.py.
+          "${aws_s3_bucket.results.arn}/topics/*",
         ]
       },
       {

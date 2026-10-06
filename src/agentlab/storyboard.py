@@ -278,10 +278,22 @@ arrow from the origin").
 Nothing can follow the json block."""
 
 
+LESSON_NOTE = (
+    "\n\nThis video is a lesson about one idea from a project Daniel built, not a "
+    "paper. Where the rules say paper, read the project and this topic. The title beat "
+    "names the idea. The problem beat shows what goes wrong in his project without it. "
+    "The application beat shows where it lives in his code. The question beat is the "
+    "exercise."
+)
+"""Added to the user prompt for the built lane
+(docs/superpowers/specs/2026-10-05-built-lane-design.md, section 5)."""
+
+
 def build_storyboard_prompt(
     digest: str,
     plan: ScenePlan,
     recent_visual_directions: list[str] | None = None,
+    subject: str = "paper",
 ) -> str:
     recent = ""
     if recent_visual_directions:
@@ -300,7 +312,7 @@ def build_storyboard_prompt(
         "Explain this paper the way 3Blue1Brown would, starting from its real "
         "mechanism. Start with the title and a simple definition. End with the result, "
         "application, limit, and street-test question. Return the fenced json "
-        "storyboard." + recent
+        "storyboard." + recent + (LESSON_NOTE if subject == "lesson" else "")
     )
 
 
@@ -310,13 +322,17 @@ def design_storyboard(
     complete: Callable[[str, list[dict]], str],
     model: str,
     recent_visual_directions: list[str] | None = None,
+    subject: str = "paper",
 ) -> Storyboard:
     messages = [
         {"role": "system", "content": STORYBOARD_SYSTEM},
         {
             "role": "user",
             "content": build_storyboard_prompt(
-                digest, plan, recent_visual_directions=recent_visual_directions
+                digest,
+                plan,
+                recent_visual_directions=recent_visual_directions,
+                subject=subject,
             ),
         },
     ]
