@@ -138,6 +138,10 @@ resource "aws_ecs_task_definition" "proposer" {
         { name = "STATE_TABLE", value = aws_dynamodb_table.state.name },
         { name = "RESULTS_BUCKET", value = aws_s3_bucket.results.id },
         { name = "PROPOSER_MODEL", value = var.proposer_model },
+        { name = "CONSOLIDATE_MODEL", value = var.proposer_model },
+      ]
+      secrets = [
+        { name = "ANTHROPIC_API_KEY", valueFrom = data.aws_secretsmanager_secret.anthropic_api_key.arn },
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -256,7 +260,7 @@ resource "aws_ecs_task_definition" "explain" {
         { name = "PICK_MODEL", value = var.pick_model },
         { name = "DEEP_READ_PRICE_MODEL", value = var.deep_read_price_model },
         { name = "DEEP_READ_THINKING", value = var.deep_read_thinking },
-        { name = "PICK_PRICE_MODEL", value = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0" },
+        { name = "PICK_PRICE_MODEL", value = var.pick_price_model },
         { name = "STORY_MODEL", value = var.story_model },
         { name = "SCENE_MODEL", value = var.scene_model },
         { name = "STORY_PRICE_MODEL", value = var.story_price_model },
@@ -266,6 +270,9 @@ resource "aws_ecs_task_definition" "explain" {
         { name = "TMPDIR", value = "/tmp" },
         { name = "MPLCONFIGDIR", value = "/tmp/matplotlib" },
         { name = "XDG_CACHE_HOME", value = "/tmp/cache" },
+      ]
+      secrets = [
+        { name = "ANTHROPIC_API_KEY", valueFrom = data.aws_secretsmanager_secret.anthropic_api_key.arn },
       ]
       logConfiguration = {
         logDriver = "awslogs"

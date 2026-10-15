@@ -35,6 +35,8 @@ import typer
 from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 
+from agentlab.anthropic_api import messages_create as anthropic_messages
+from agentlab.anthropic_api import normalize_api_key_env
 from agentlab.aws_costs import month_to_date_tagged_cost
 from agentlab.bedrock import converse as bedrock_converse
 from agentlab.charts import verdict_chart_png
@@ -75,6 +77,11 @@ from agentlab.story_video import StoryFailed, compose_story_video
 from agentlab.video_render import verify_voice
 
 worker_app = typer.Typer()
+
+
+@worker_app.callback()
+def _worker_setup() -> None:
+    normalize_api_key_env()
 
 _ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5})")
 EXPLAIN_TRACKS = ("core", "classic", "novel", "built")
@@ -465,6 +472,14 @@ def _run_completion(
             timeout=timeout,
             extra_fields=extra_fields,
         )
+    elif model.startswith("anthropic/"):
+        response = anthropic_messages(
+            model,
+            messages,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            extra_fields=extra_fields,
+        )
     else:
         request_messages = messages
         if price_id and "anthropic.claude" in price_id:
@@ -522,8 +537,8 @@ def _complete(
 def _deep_read_extra_fields() -> dict | None:
     """Sonnet 5.5 thinks by default, its thinking counts against the deep
     read's 8000 tokens, and it rejects thinking type "disabled". Terraform
-    sets DEEP_READ_THINKING to "between_tools" to switch it off. Only the
-    Bedrock Converse path sends it."""
+    sets DEEP_READ_THINKING to "between_tools" to switch it off. The Anthropic
+    API path and the Bedrock Converse path send it."""
     thinking = os.environ.get("DEEP_READ_THINKING")
     return {"thinking": {"type": thinking}} if thinking else None
 
@@ -542,8 +557,8 @@ def _complete_long(
     Opus 5.5 always thinks, and thinking counts against the output budget, so
     this completion allows 32000 output tokens unless the caller asks for less
     (a scene edit asks for 8000). STORY_EFFORT (default "high")
-    sets the output effort; only the Bedrock Converse path, which application
-    inference profile ARNs take, sends it. The story path passes the timeout
+    sets the output effort; the Anthropic API path and the Bedrock Converse
+    path send it, plain litellm models do not. The story path passes the timeout
     from the video's remaining budget. The lazy litellm import avoids the
     same circular import as `_complete`.
     """

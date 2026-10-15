@@ -1722,3 +1722,29 @@ def test_explain_built_track_reads_study_topics_with_the_study_prompt(
     assert "explain: built=sent,sent,sent,sent" in result.output
     assert {system for _url, system, _page in seen["reads"]} == {worker_mod.STUDY_READ_SYSTEM}
     assert seen["subjects"] == ["study"] * 4
+
+
+def test_anthropic_models_go_through_the_api_adapter_with_their_extra_fields(monkeypatch):
+    """Inference moved to Anthropic API credits on 2026-10-15."""
+    calls = []
+
+    def fake_messages(model, messages, *, max_tokens, timeout, extra_fields=None):
+        calls.append((model, max_tokens, extra_fields))
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"), finish_reason="stop")],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, prompt_tokens_details=None),
+        )
+
+    monkeypatch.setattr(worker_mod, "anthropic_messages", fake_messages)
+
+    response = worker_mod._run_completion(
+        "anthropic/claude-opus-5-5",
+        [{"role": "user", "content": "x"}],
+        max_tokens=32000,
+        timeout=60,
+        stage="video",
+        extra_fields={"output_config": {"effort": "high"}},
+    )
+
+    assert response.choices[0].message.content == "ok"
+    assert calls == [("anthropic/claude-opus-5-5", 32000, {"output_config": {"effort": "high"}})]

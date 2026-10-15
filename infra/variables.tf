@@ -51,17 +51,17 @@ variable "telegram_chat_id" {
 }
 
 variable "proposer_model" {
-  description = "Bedrock model id used by the proposal task."
+  description = "Model id used by the proposal and weekly consolidate tasks, in litellm form (anthropic/... for the Anthropic API)."
   type        = string
 }
 
 variable "deep_read_model" {
-  description = "Bedrock model id used to read papers and generate videos."
+  description = "Model id that reads papers and topics: anthropic/<id> for the Anthropic API, bedrock/<id> for Bedrock."
   type        = string
 }
 
 variable "pick_model" {
-  description = "Bedrock model id used to rank paper candidates."
+  description = "Model id that ranks paper candidates: anthropic/<id> for the Anthropic API, bedrock/<id> for Bedrock."
   type        = string
 }
 
@@ -72,18 +72,18 @@ variable "deep_read_price_model" {
 }
 
 variable "deep_read_thinking" {
-  description = "Thinking type the deep read call asks for (Bedrock thinking.type). Sonnet 5.5 thinks by default and rejects \"disabled\"; \"between_tools\" switches thinking off for the deep read, which makes no tool calls."
+  description = "Thinking type the deep read call asks for (thinking.type). Sonnet 5.5 thinks by default and rejects \"disabled\"; \"between_tools\" switches thinking off for the deep read, which makes no tool calls."
   type        = string
   default     = "between_tools"
 }
 
 variable "story_model" {
-  description = "Bedrock model id that writes the video storyboards. An application inference profile ARN takes the Bedrock Converse path, which sends story_effort."
+  description = "Model id that writes the video storyboards. anthropic/<id> and Bedrock application inference profile ARNs send story_effort."
   type        = string
 }
 
 variable "scene_model" {
-  description = "Bedrock model id that writes the Manim scene code for the videos. An application inference profile ARN takes the Bedrock Converse path, which sends story_effort."
+  description = "Model id that writes the Manim scene code. anthropic/<id> and Bedrock application inference profile ARNs send story_effort."
   type        = string
 }
 
@@ -100,7 +100,7 @@ variable "scene_price_model" {
 }
 
 variable "story_effort" {
-  description = "Output effort the storyboard and scene code calls ask for (Bedrock output_config.effort)."
+  description = "Output effort the storyboard and scene code calls ask for (output_config.effort)."
   type        = string
   default     = "high"
 }
@@ -109,4 +109,10 @@ variable "video_image_tag" {
   description = "Tag of the `agentlab` ECR image the explain task definition runs (same repo as image_tag, different image - it carries the render toolchain from Dockerfile.video). The build-images GitHub Actions workflow pushes video-<git-sha>; override with -var video_image_tag=<tag> at apply time to roll out a new build."
   type        = string
   default     = "latest-video"
+}
+
+variable "pick_price_model" {
+  description = "Price entry for the paper pick model (a litellm model_cost key or an agentlab.costs rate-card key)."
+  type        = string
+  default     = "claude-haiku-4-5"
 }
