@@ -1594,7 +1594,7 @@ def test_explain_retry_loads_the_saved_deep_read_instead_of_reading_again(
     assert reads[-1][1] == "another-model"
 
 
-def _put_topics(s3, count=3):
+def _put_topics(s3, count=3, kind=None):
     entries = []
     for number in range(1, count + 1):
         slug = f"{number:02d}-topic-{number}"
@@ -1615,6 +1615,8 @@ def _put_topics(s3, count=3):
                 "pack_key": key,
             }
         )
+        if kind:
+            entries[-1]["kind"] = kind
     s3.put_object(
         Bucket=BUCKET, Key=worker_mod.TOPIC_BACKLOG_KEY, Body=json.dumps(entries).encode()
     )
@@ -1700,3 +1702,23 @@ def test_explain_built_track_pings_once_when_the_backlog_runs_out(
         if c[0].endswith("/sendMessage") and "out of topics" in str(c[1])
     ]
     assert len(warnings) == 1
+
+
+def test_explain_built_track_reads_study_topics_with_the_study_prompt(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch
+):
+    """Interview prep week, 2026-10-15: four study videos a day, framed as
+    material Daniel is learning, not code he built."""
+    s3, _dynamodb, _table, _ssm = moto_fabric_with_ssm
+    _put_topics(s3, count=5, kind="study")
+    _set_explain_env(monkeypatch, track="built")
+    monkeypatch.setenv("BUILT_VIDEOS_PER_DAY", "4")
+    _set_daytime(monkeypatch)
+    seen = _patch_lesson_stages(monkeypatch)
+
+    result = runner.invoke(app, ["worker", "explain"])
+
+    assert result.exit_code == 0, result.output
+    assert "explain: built=sent,sent,sent,sent" in result.output
+    assert {system for _url, system, _page in seen["reads"]} == {worker_mod.STUDY_READ_SYSTEM}
+    assert seen["subjects"] == ["study"] * 4

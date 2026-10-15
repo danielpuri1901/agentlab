@@ -288,6 +288,16 @@ LESSON_NOTE = (
 """Added to the user prompt for the built lane
 (docs/superpowers/specs/2026-10-05-built-lane-design.md, section 5)."""
 
+STUDY_NOTE = (
+    "\n\nThis video is a study lesson for Daniel's system design interview, not a "
+    "paper. Where the rules say paper, read this topic. The title beat names the idea. "
+    "The problem beat shows the failure the idea prevents, on a concrete system. The "
+    "application beat shows where the idea lands in a design interview. The question "
+    "beat is an interviewer's question. An earlier topic from the study plan may come "
+    "back as a one-line callback."
+)
+"""Added to the user prompt for study topics on the built lane."""
+
 
 def build_storyboard_prompt(
     digest: str,
@@ -312,7 +322,9 @@ def build_storyboard_prompt(
         "Explain this paper the way 3Blue1Brown would, starting from its real "
         "mechanism. Start with the title and a simple definition. End with the result, "
         "application, limit, and street-test question. Return the fenced json "
-        "storyboard." + recent + (LESSON_NOTE if subject == "lesson" else "")
+        "storyboard."
+        + recent
+        + {"lesson": LESSON_NOTE, "study": STUDY_NOTE}.get(subject, "")
     )
 
 

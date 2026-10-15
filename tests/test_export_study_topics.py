@@ -87,6 +87,7 @@ def test_pack_holds_the_topic_its_files_and_the_guide(tmp_path):
         "slug": "01-lean-4-claims-as-types",
         "title": "Lean 4: claims as types (Lean Proofs)",
         "pack_key": "topics/lean-proofs/01-lean-4-claims-as-types.md",
+        "kind": "project",
     }
 
 
@@ -168,3 +169,16 @@ def test_upload_merges_into_the_backlog_in_s3(tmp_path, monkeypatch):
     assert total == 3
     assert [e["project"] for e in backlog] == ["other", "lean-proofs", "lean-proofs"]
     assert pack.startswith("# Topic 1:")
+
+
+def test_a_study_project_goes_to_the_front_and_carries_its_kind(tmp_path):
+    """Interview prep cannot wait behind 20 queued lessons."""
+    hole = [{"project": "hole", "slug": "01"}]
+    study = [{"project": "sd", "slug": "01"}, {"project": "sd", "slug": "02"}]
+
+    backlog = export.merge_backlog(hole, "sd", study, at_front=True)
+    assert [e["project"] for e in backlog] == ["sd", "sd", "hole"]
+
+    project, checker = _project(tmp_path, LEAN_GUIDE)
+    entries, _packs = export.build_export(project, "sd", "System Design", [checker], "study")
+    assert {e["kind"] for e in entries} == {"study"}

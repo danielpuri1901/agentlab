@@ -63,6 +63,7 @@ from agentlab.scene_plan import (
     DEFAULT_DEEP_READ_MODEL,
     DEFAULT_PICK_MODEL,
     LESSON_READ_SYSTEM,
+    STUDY_READ_SYSTEM,
     ScenePlan,
     deep_read,
     rank_papers,
@@ -648,6 +649,7 @@ def _next_unseen_topic(table, s3_client, bucket: str) -> dict | None:
                 "source": "study-map",
                 "pool": "built",
                 "pack_key": entry["pack_key"],
+                "kind": entry.get("kind", "project"),
                 "identity": identity,
             }
     return None
@@ -917,7 +919,10 @@ def _run_explain_track(
     # loads each finished stage from S3 instead of paying for it again.
     checkpoints = StageCheckpoints(s3_client, bucket, identity)
     lesson = track == "built"
-    read_system = LESSON_READ_SYSTEM if lesson else DEEP_READ_SYSTEM
+    study = lesson and candidate.get("kind") == "study"
+    read_system = (
+        STUDY_READ_SYSTEM if study else LESSON_READ_SYSTEM if lesson else DEEP_READ_SYSTEM
+    )
     read_fingerprint = fingerprint("deep_read", deep_read_model, url, read_system)
     saved_read = checkpoints.load_parsed(
         "deep_read", read_fingerprint, _saved_deep_read
@@ -973,7 +978,7 @@ def _run_explain_track(
                 recent_visual_directions=_recent_visual_directions(table),
                 checkpoints=checkpoints,
                 plan_fingerprint=read_fingerprint,
-                subject="lesson" if lesson else "paper",
+                subject="study" if study else "lesson" if lesson else "paper",
             )
         except StoryFailed as exc:
             transition(
@@ -1155,7 +1160,11 @@ def explain_command() -> None:
     runs = [
         track
         for track in tracks
-        for _ in range(BUILT_VIDEOS_PER_DAY if track == "built" else 1)
+        for _ in range(
+            int(os.environ.get("BUILT_VIDEOS_PER_DAY", BUILT_VIDEOS_PER_DAY))
+            if track == "built"
+            else 1
+        )
     ]
     for track in runs:
         partial: dict = {}

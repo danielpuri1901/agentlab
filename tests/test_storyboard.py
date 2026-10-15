@@ -323,3 +323,10 @@ def test_lesson_note_appears_only_for_lessons(plan):
     lesson = sb.build_storyboard_prompt(DIGEST, plan, subject="lesson")
     assert sb.LESSON_NOTE not in paper
     assert lesson.endswith(sb.LESSON_NOTE)
+
+
+def test_study_note_appears_only_for_study_topics(plan):
+    study = sb.build_storyboard_prompt(DIGEST, plan, subject="study")
+    assert study.endswith(sb.STUDY_NOTE)
+    assert sb.LESSON_NOTE not in study
+    assert sb.STUDY_NOTE not in sb.build_storyboard_prompt(DIGEST, plan, subject="lesson")
