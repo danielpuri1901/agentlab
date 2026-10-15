@@ -112,18 +112,21 @@ def build_pack(
     return "\n\n".join(parts)[:PACK_CHARS]
 
 
-def merge_backlog(backlog: list[dict], slug: str, entries: list[dict]) -> list[dict]:
-    """Replace a project's entries in place, or append a new project."""
+def merge_backlog(
+    backlog: list[dict], slug: str, entries: list[dict], at_front: bool = False
+) -> list[dict]:
+    """Replace a project's entries in place, or add a new project at the end
+    (or at the front, for something that cannot wait, like interview prep)."""
     kept = [entry for entry in backlog if entry["project"] != slug]
     first = next((i for i, entry in enumerate(backlog) if entry["project"] == slug), None)
     if first is None:
-        return kept + entries
+        return entries + kept if at_front else kept + entries
     index = sum(1 for entry in backlog[:first] if entry["project"] != slug)
     return kept[:index] + entries + kept[index:]
 
 
 def build_export(
-    project_dir: Path, slug: str, title: str, extra_dirs: Sequence[Path]
+    project_dir: Path, slug: str, title: str, extra_dirs: Sequence[Path], kind: str = "project"
 ) -> tuple[list[dict], dict[str, str]]:
     roots = [project_dir, *extra_dirs]
     guide_text = (project_dir / GUIDE).read_text(encoding="utf-8")
@@ -145,12 +148,15 @@ def build_export(
                 "slug": topic_slug,
                 "title": f"{topic['topic']} ({title})",
                 "pack_key": key,
+                "kind": kind,
             }
         )
     return entries, packs
 
 
-def write_local(out_dir: Path, slug: str, entries: list[dict], packs: dict[str, str]) -> Path:
+def write_local(
+    out_dir: Path, slug: str, entries: list[dict], packs: dict[str, str], at_front: bool = False
+) -> Path:
     backlog_path = out_dir / BACKLOG_KEY
     backlog = json.loads(backlog_path.read_text(encoding="utf-8")) if backlog_path.exists() else []
     for key, text in packs.items():
@@ -158,12 +164,19 @@ def write_local(out_dir: Path, slug: str, entries: list[dict], packs: dict[str, 
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
     backlog_path.parent.mkdir(parents=True, exist_ok=True)
-    merged = merge_backlog(backlog, slug, entries)
+    merged = merge_backlog(backlog, slug, entries, at_front)
     backlog_path.write_text(json.dumps(merged, indent=1, ensure_ascii=False), encoding="utf-8")
     return backlog_path
 
 
-def upload(s3_client, bucket: str, slug: str, entries: list[dict], packs: dict[str, str]) -> int:
+def upload(
+    s3_client,
+    bucket: str,
+    slug: str,
+    entries: list[dict],
+    packs: dict[str, str],
+    at_front: bool = False,
+) -> int:
     try:
         body = s3_client.get_object(Bucket=bucket, Key=BACKLOG_KEY)["Body"].read()
         backlog = json.loads(body)
@@ -176,7 +189,7 @@ def upload(s3_client, bucket: str, slug: str, entries: list[dict], packs: dict[s
             Body=text.encode("utf-8"),
             ContentType="text/markdown; charset=utf-8",
         )
-    merged = merge_backlog(backlog, slug, entries)
+    merged = merge_backlog(backlog, slug, entries, at_front)
     s3_client.put_object(
         Bucket=bucket,
         Key=BACKLOG_KEY,
@@ -198,15 +211,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         help="another folder the guide's paths may point into (repeatable)",
     )
+    parser.add_argument(
+        "--kind",
+        choices=("project", "study"),
+        default="project",
+        help="project: Daniel built it; study: material he is learning, like interview prep",
+    )
+    parser.add_argument(
+        "--first", action="store_true", help="put a new project at the front of the backlog"
+    )
     parser.add_argument("--bucket", default=os.environ.get("RESULTS_BUCKET"))
     parser.add_argument("--dry-run", type=Path, help="write packs here instead of S3")
     args = parser.parse_args(argv)
 
     project_dir = args.project_dir.expanduser().resolve()
     extra = [d.expanduser().resolve() for d in args.extra_dir]
-    entries, packs = build_export(project_dir, args.slug, args.title, extra)
+    entries, packs = build_export(project_dir, args.slug, args.title, extra, args.kind)
     if args.dry_run:
-        path = write_local(args.dry_run, args.slug, entries, packs)
+        path = write_local(args.dry_run, args.slug, entries, packs, args.first)
         print(f"{len(packs)} packs and the backlog written under {path.parent.parent}")
         return 0
     if not args.bucket:
@@ -214,7 +236,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     import boto3
 
-    total = upload(boto3.client("s3"), args.bucket, args.slug, entries, packs)
+    total = upload(boto3.client("s3"), args.bucket, args.slug, entries, packs, args.first)
     print(f"{len(packs)} packs uploaded; the backlog now holds {total} topics")
     return 0
 

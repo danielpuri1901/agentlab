@@ -973,3 +973,12 @@ def test_the_worked_example_is_a_real_paper_that_follows_its_own_rules():
     for system in (scene_plan.DEEP_READ_SYSTEM, scene_plan.LESSON_READ_SYSTEM):
         assert scene_plan._EXAMPLE_SOURCE in system
         assert "SortNet" not in system
+
+
+def test_study_prompt_frames_interview_prep_not_a_project_daniel_built():
+    study = scene_plan.STUDY_READ_SYSTEM
+    assert study.startswith("You are the deep-read writer for AgentLab's study videos.")
+    assert scene_plan._PLAN_RULES in study
+    assert "Analogy:" in study and "Components:" in study
+    assert "Kavak" not in study
+    assert "Daniel built" not in study

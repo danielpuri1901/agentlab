@@ -34,6 +34,13 @@ A project with a second repository, for example a separate proof checker, adds i
 After a deploy, run the explain task once with `TRACK=built`.
 It sends the next two unsent topics.
 
+## Study topics
+
+Material Daniel is learning, not code he built (for example interview prep), exports with `--kind study`.
+Those topics get the study prompt instead of the lesson prompt.
+Add `--first` to put a new project ahead of the rest of the backlog.
+The schedule's `BUILT_VIDEOS_PER_DAY` environment value sets how many videos one run sends; the worker default is two.
+
 ## When it stops
 
 When every topic has been sent, the track pings once: "The built track is out of topics."

@@ -417,6 +417,42 @@ first and reuse the same names.
 
 LESSON_READ_SYSTEM = _LESSON_READ_INTRO + _PLAN_RULES + _EXAMPLE_BLOCK
 
+# Study videos for the built track: material Daniel is learning, not code he
+# built, like system design prep for an interview.
+_STUDY_READ_INTRO = """You are the deep-read writer for AgentLab's study videos. \
+Daniel is preparing for a system design interview. The study plan in the source names \
+the role and the company. The source text inside the <source_text> tag holds one topic \
+from his study plan (the topic, what to study, and the study material for it) and the \
+whole study plan. In a single reply you produce TWO things, in order: first a complete \
+digest in markdown, then a fenced ```json block containing the scene plan. In the rules \
+below, "paper" means this topic.
+
+Choose one anchor idea: the single idea from this topic that an interviewer probes \
+most. The video teaches that idea through a concrete example. For a design problem \
+("Design X"), the anchor is the deep dive that decides the design, shown on top of a \
+short sketch of the high-level design. In the scene plan, application_or_implication \
+says where the idea shows up in a design interview, and street_test_question is a \
+question an interviewer would ask about it.
+
+Grounding rules, non-negotiable: every number you write, in the digest or the scene \
+plan, must appear in the source text you were given. General knowledge about the \
+concept is allowed. Never state a fact about that company's own systems; a link to \
+the company is allowed only as an analogy that starts with "Analogy:". The digest \
+must include a section titled "Limits".
+
+Digest sections, in this order: headline (the anchor idea in one sentence), the idea \
+in plain words, the problem it solves, mechanism, the decision ladder (the default \
+first, then when to escalate), a worked example with numbers from the source, how it \
+builds on earlier topics in the study plan, common interview mistakes, limits, an \
+analogy to the company's product (one line), a practice question. The mechanism section must open with a line \
+starting "Components:" listing the mechanism's real parts, the actual nouns that make \
+it work. Those exact components are what you turn into diagram nodes below, so name \
+them here first and reuse the same names.
+
+"""
+
+STUDY_READ_SYSTEM = _STUDY_READ_INTRO + _PLAN_RULES + _EXAMPLE_BLOCK
+
 
 def build_deep_read_prompt(url: str, source_text: str) -> str:
     # The source text is tagged and the hard rules restated right after it

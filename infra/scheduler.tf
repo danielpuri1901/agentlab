@@ -175,9 +175,14 @@ resource "aws_scheduler_schedule" "built_lessons" {
     input = jsonencode({
       containerOverrides = [
         {
-          name        = "explain"
-          command     = ["worker", "explain"]
-          environment = [{ name = "TRACK", value = "built" }]
+          name    = "explain"
+          command = ["worker", "explain"]
+          # Four a day during interview prep, through 2026-10-21; the worker
+          # default is two.
+          environment = [
+            { name = "TRACK", value = "built" },
+            { name = "BUILT_VIDEOS_PER_DAY", value = "4" },
+          ]
         }
       ]
     })
