@@ -39,6 +39,13 @@ resource "aws_iam_role" "ecs_execution" {
   })
 }
 
+# The Anthropic API key. Daniel stored it in the console on 2026-10-15: from
+# then on Anthropic API credits pay for inference and AWS credits for
+# infrastructure. ECS reads it at task start; no one else needs to see it.
+data "aws_secretsmanager_secret" "anthropic_api_key" {
+  name = "aws-inference"
+}
+
 resource "aws_iam_role_policy" "ecs_execution" {
   name = "ecr-pull-and-logs"
   role = aws_iam_role.ecs_execution.id
@@ -66,6 +73,12 @@ resource "aws_iam_role_policy" "ecs_execution" {
           "ecr:BatchGetImage",
         ]
         Resource = aws_ecr_repository.agentlab.arn
+      },
+      {
+        Sid      = "AnthropicApiKey"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = data.aws_secretsmanager_secret.anthropic_api_key.arn
       },
       {
         Sid    = "Logs"
