@@ -205,9 +205,10 @@ abbreviations, labels, or prefixes.
 - key_numbers: 0 to 3 objects with value and meaning. Each value is a number from the \
 source, written as the source writes it.
 - application_or_implication: one spoken sentence on where the finding could be used \
-or what it changes. When this is your inference and not the source's claim, say so \
-inside the sentence, for example "One possible use is ..." or "This suggests ...". The \
-video reads this sentence aloud, so it carries no label or prefix.
+or what it changes. When this is your inference and not the source's claim, phrase it \
+as a possibility, for example "One possible use is ..." or "This suggests ..."; that \
+wording is the whole signal, so add no aside about whose claim it is. The video reads \
+this sentence aloud, so it carries no label or prefix.
 - limits_or_caveats: one sentence on what the paper does not claim.
 - street_test_question: one question Daniel should be able to answer in his own words \
 after the video.
