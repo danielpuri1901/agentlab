@@ -266,7 +266,7 @@ The title beat says the title, then a simple definition of the main idea in one 
 The problem beat shows a concrete problem from the source.
 The mechanism beats show the real mechanism through cause and effect.
 The result beat gives one grounded result.
-The application beat gives one practical application or implication. If it is your inference rather than the source's claim, say so inside the sentence.
+The application beat gives one practical application or implication. If it is your inference rather than the source's claim, phrase it as a possibility ("One possible use is ..."), with no aside about whose claim it is.
 The limit beat gives one limit.
 The question beat asks the street-test question: a question Daniel should be able to answer in his own words after watching.
 
