@@ -156,78 +156,62 @@ class ScenePlan(BaseModel):
         return self
 
 
-_DEEP_READ_MAIN = """You are the deep-read writer for AgentLab's daily \
-paper videos. You are given the full text of one source inside a \
-<source_text> tag. In a single reply you produce TWO things, in order: \
-first a complete digest in markdown, then a fenced ```json block \
-containing the scene plan.
+# Rule sources: the grounding check (_ungrounded_source_numbers), the storyboard
+# code that reads the plan (storyboard.py), the subtitle and Polly path that
+# speak narration exactly as written (video_render.narrate), and Daniel's
+# rulings of 2026-08-25 (the paper's own parts as diagram nodes) and
+# 2026-10-19 (no labels, symbols, or shorthand in the spoken script).
+_DEEP_READ_MAIN = """You are the deep-read writer for AgentLab's daily paper videos. \
+Daniel has no time to read papers, so AgentLab turns one paper a day into a short \
+video he watches on his phone. The full text of the source is inside the \
+<source_text> tag. Your reply has two parts, in this order: a complete digest in \
+markdown, which Daniel reads after the video, then one fenced ```json block with the \
+scene plan, which the storyboard writer and the render code use.
 
-Grounding rules, non-negotiable: every number you write, in the digest or \
-the scene plan, must appear in the source text you were given. Never \
-attribute to the source anything it does not itself state; if an idea goes \
-beyond what the source says, say so explicitly instead of implying the \
-source said it. The digest must include a section titled "Limits".
+Grounding: every number you write, in the digest or the plan, appears in the source \
+text. A check rejects the plan when a number is missing from the source, and one \
+misread claim once cost a day's video. Credit the source only with what it states \
+itself; when an idea goes beyond the source, say so in the sentence.
 
-Digest sections, in this order: headline, what the paper shows (with its \
-numbers), mechanism, how it connects to AgentLab, limits. The mechanism \
-section must open with a line starting "Components:" listing the \
-mechanism's real parts, the actual nouns that make it work (not stage \
-names like "step one"). Those exact components are what you turn into \
-diagram nodes below, so name them here first and reuse the same names.
+Digest sections, in this order: headline, what the paper shows (with its numbers), \
+mechanism, how it connects to AgentLab, limits. The mechanism section opens with a \
+line that starts with "Components:" and lists the real parts that make the mechanism \
+work, as nouns such as "frozen weights W0", never stage names such as "step one". \
+The diagram in the plan uses these same names, so name the parts here first.
 
-Write in plain language, short sentences, one idea per sentence \
-(Simplified Technical English style). Never use an em dash anywhere in \
-your output; use a plain dash or a period instead.
+Write in plain language: short sentences, one idea per sentence, active voice, common \
+words, and a technical term defined the first time it appears. Use a plain dash, \
+never an em dash; Daniel reads the digest on his phone and the same text style goes \
+into the subtitles.
 
-After the digest, output a fenced ```json block containing ONLY the scene \
-plan object, nothing before or after it, with these keys: title, \
-one_line_claim, diagram (see below), mechanism_steps (3 to 6 (three to \
-six) objects with label, detail, narration, kind, activates), key_numbers \
-(0 to 3 (zero to three) objects with value, meaning), application_or_implication, \
-limits_or_caveats, \
-street_test_question, citation_url. The narration field of each mechanism \
-step is read aloud as the video's voiceover: write it as short, \
-spoken-style sentences a person would actually say out loud, plain \
-language, one idea per sentence, never an em dash. Every key_numbers value \
-must be a number that appears in the source text. application_or_implication \
-is one plain sentence that states where the finding could be used or what it \
-changes. When this is your inference, start it with "Possible use:" or \
-"Implication:". limits_or_caveats is one \
-sentence about what the paper does NOT claim.
-
-Each mechanism step also has a kind field, the visual motif the video \
-animates for that step. Pick the one that fits what actually happens: \
-transform (input becomes output), gate (something is accepted or rejected), \
-loop (a cycle repeats), split (one path becomes several), store (something \
-is saved for later), compare (two things are measured against each other). \
-The motif plays out ON the diagram elements you name in that step's \
-activates field, so keep kind and activates pointing at the same part of \
-the mechanism.
-
-Diagram design rules, the most important part of this prompt: draw THIS \
-paper's own mechanism, never a generic pipeline. Every video before this \
-rule looked the same because the template only ever drew abstract stage \
-boxes; you fix that by giving it real content. Use the paper's own \
-components as nodes, the exact nouns from the Components: line above, not \
-abstract stage labels. A harness paper needs nodes like user, llm, tools, \
-memory. A paper about a lunar mission needs nodes like moon, lander, \
-sensor. A chain-of-thought paper needs nodes like prompt, \
-reasoning-step-1, reasoning-step-2, answer. Node ids are lowercase slugs: \
-letters, digits, and single hyphens only, no spaces (e.g. "reasoning-step-1"). \
-Give each node a natural emoji icon where one obviously fits the concept \
-(a moon node gets a moon emoji, a tool node gets a wrench); leave icon \
-empty when nothing natural fits rather than forcing one. Diagram needs 2 \
-to 8 (two to eight) nodes and 1 to 10 (one to ten) edges; each edge is an \
-arrow from one node id to another, with an optional short label naming \
-what moves along it (e.g. "reads", "writes", "checks").
-
-Each mechanism step's activates field is a list of the diagram's own node \
-ids and edge ids (edge ids are written source->target, exactly matching \
-one of your edges) that this exact step is about. Use only ids that exist \
-in your diagram; every id you invent here must already be a node or edge \
-above. A step usually activates one to three ids: the node or nodes doing \
-the work, plus the edge between them if something moves from one node to \
-another."""
+After the digest, write one fenced ```json block that holds only the scene plan \
+object. Its keys:
+- title: the exact title of the paper. For a topic, the topic's name in two to six \
+words, as a heading, not a claim. The video opens by saying this title.
+- one_line_claim: the main finding in one sentence.
+- diagram: the mechanism as data. nodes is a list of 2 to 8 parts, each with id (a \
+lowercase slug: letters, digits, and single hyphens) and label (the name from the \
+Components line). edges is a list of 1 to 10 arrows between node ids, each with \
+source, target, and an optional short label for what moves along it, such as "reads" \
+or "adds". Use the paper's own parts as nodes: a harness paper has nodes like user, \
+llm, tools, and memory; a lunar mission has moon, lander, and sensor. A generic \
+pipeline of abstract stages is wrong.
+- mechanism_steps: 3 to 6 objects with label, detail, and narration, in cause and \
+effect order. The narration is the spoken voiceover for that step. A text-to-speech \
+voice reads it exactly as written, so write one or two short sentences the way a \
+teacher says them out loud: numbers and units as words ("two billion swipes a day", \
+"about ten thousand times fewer"), names in full, and no symbols, code identifiers, \
+abbreviations, labels, or prefixes.
+- key_numbers: 0 to 3 objects with value and meaning. Each value is a number from the \
+source, written as the source writes it.
+- application_or_implication: one spoken sentence on where the finding could be used \
+or what it changes. When this is your inference and not the source's claim, say so \
+inside the sentence, for example "One possible use is ..." or "This suggests ...". The \
+video reads this sentence aloud, so it carries no label or prefix.
+- limits_or_caveats: one sentence on what the paper does not claim.
+- street_test_question: one question Daniel should be able to answer in his own words \
+after the video.
+- citation_url: the source URL."""
 
 # The worked example is the real LoRA paper (arXiv 2106.09685), the same paper
 # as the scene coder's example. Daniel ruled on 2026-10-06 that examples must
@@ -262,14 +246,14 @@ _EXAMPLE_DIGEST = (
     "and B learn. After training, B A is added into W0, so the model runs as "
     "fast as before.\n\n"
     "## How it connects to AgentLab\n"
-    "Possible use: keep one base model and train one small A and B pair per "
-    "task.\n\n"
+    "One possible use is to keep one base model and train one small A and B "
+    "pair per task.\n\n"
     "## Limits\n"
     "The paper reports quality only for RoBERTa, DeBERTa, GPT-2, and GPT-3."
 )
 
 _EXAMPLE_PLAN = {
-    "title": "LoRA trains two small matrices, not the whole model",
+    "title": "LoRA: Low-Rank Adaptation of Large Language Models",
     "one_line_claim": (
         "LoRA freezes the pretrained weights and trains a small low-rank "
         "update beside them, with no added inference latency."
@@ -277,7 +261,7 @@ _EXAMPLE_PLAN = {
     "diagram": {
         "nodes": [
             {"id": "input-x", "label": "Input x"},
-            {"id": "frozen-weights", "label": "Frozen weights W0", "icon": "❄️"},
+            {"id": "frozen-weights", "label": "Frozen weights W0"},
             {"id": "matrix-a", "label": "Small matrix A"},
             {"id": "matrix-b", "label": "Small matrix B"},
             {"id": "output-h", "label": "Output h"},
@@ -298,8 +282,6 @@ _EXAMPLE_PLAN = {
                 "Start with a huge pretrained model. Freeze its weights. "
                 "They will not change."
             ),
-            "kind": "gate",
-            "activates": ["frozen-weights"],
         },
         {
             "label": "Two paths",
@@ -308,8 +290,6 @@ _EXAMPLE_PLAN = {
                 "Each input now takes two paths. One goes through the frozen "
                 "weights. One goes through two small new matrices."
             ),
-            "kind": "split",
-            "activates": ["input-x", "input-x->frozen-weights", "input-x->matrix-a"],
         },
         {
             "label": "Low-rank update",
@@ -318,19 +298,11 @@ _EXAMPLE_PLAN = {
                 "The first small matrix squeezes the input down to a few "
                 "numbers. The second expands them back. Only these two learn."
             ),
-            "kind": "transform",
-            "activates": ["matrix-a", "matrix-a->matrix-b", "matrix-b"],
         },
         {
             "label": "Add",
             "detail": "The two results add up: h = W0 x + B A x.",
             "narration": "The two paths meet again. Their results simply add up.",
-            "kind": "transform",
-            "activates": [
-                "frozen-weights->output-h",
-                "matrix-b->output-h",
-                "output-h",
-            ],
         },
         {
             "label": "Merge",
@@ -339,8 +311,6 @@ _EXAMPLE_PLAN = {
                 "After training, fold the small product into the frozen "
                 "matrix. The model runs exactly as fast as before."
             ),
-            "kind": "store",
-            "activates": ["matrix-b", "frozen-weights"],
         },
     ],
     "key_numbers": [
@@ -354,8 +324,8 @@ _EXAMPLE_PLAN = {
         },
     ],
     "application_or_implication": (
-        "Possible use: keep one base model and swap in a small A and B pair "
-        "per task."
+        "One possible use is to keep one base model and swap in a small A and "
+        "B pair per task."
     ),
     "limits_or_caveats": (
         "The paper does not claim the same quality for models beyond RoBERTa, "
@@ -368,50 +338,49 @@ _EXAMPLE_PLAN = {
 }
 
 _EXAMPLE_BLOCK = (
-    "\n\nWorked example (the real LoRA paper, arXiv 2106.09685, with its "
-    "source abridged; it shows the exact shape of a correct reply. Copy the "
-    "shape, never the content):\n\n"
+    "\n\n<example>\nA worked example on the real LoRA paper (arXiv 2106.09685) with "
+    "its source abridged. It shows the shape of a correct reply. Copy the shape, "
+    "never the content.\n\n"
     f'Source (abridged): "{_EXAMPLE_SOURCE}"\n\n'
     f"{_EXAMPLE_DIGEST}\n\n"
-    "```json\n" + json.dumps(_EXAMPLE_PLAN) + "\n```"
+    "```json\n" + json.dumps(_EXAMPLE_PLAN) + "\n```\n</example>"
 )
 
 DEEP_READ_SYSTEM = _DEEP_READ_MAIN + _EXAMPLE_BLOCK
 
-# The scene-plan half of the paper prompt, shared with the lesson prompt.
+# The scene-plan half of the paper prompt, shared with the lesson and study prompts.
 _PLAN_RULES = _DEEP_READ_MAIN[_DEEP_READ_MAIN.index("Write in plain language") :]
 
 # Lesson videos for the built track
 # (docs/superpowers/specs/2026-10-05-built-lane-design.md, section 4).
 _LESSON_READ_INTRO = """You are the deep-read writer for AgentLab's lesson videos. \
-Daniel built the project described inside the <source_text> tag with AI help. The \
-video must teach him one idea from it, so that his understanding catches up with what \
-he built. The source text holds one topic from his study map (the topic, what to \
-study, and where it appears), files from his project, and the whole study map. In a \
-single reply you produce TWO things, in order: first a complete digest in markdown, \
-then a fenced ```json block containing the scene plan. In the rules below, "paper" \
-means this topic and this project.
+Daniel built the project described inside the <source_text> tag with AI help, and his \
+understanding lags behind what he built. Each video teaches him one idea from the \
+project, so his understanding catches up. The source text holds one topic from his \
+study map (the topic, what to study, and where it appears), files from his project, \
+and the whole study map. Your reply has two parts, in this order: a complete digest in \
+markdown, which Daniel reads after the video, then one fenced ```json block with the \
+scene plan, which the storyboard writer and the render code use. In the rules below, \
+"paper" means this topic and this project.
 
 Choose one anchor idea: the single idea from this topic that the project depends on \
-most. The video teaches that idea. The digest also covers the rest of the topic in \
+most. The video teaches that idea; the digest also covers the rest of the topic in \
 brief. In the scene plan, application_or_implication says where the idea lives in \
 Daniel's project, and street_test_question is a question he can answer about his own \
 project.
 
-Grounding rules, non-negotiable: every number you write, in the digest or the scene \
-plan, must appear in the source text you were given. General knowledge about the \
-concept is allowed, but never state a fact about Daniel's project that the source \
-text does not show. Name a file or a function only when the source text shows it. The \
-digest must include a section titled "Limits".
+Grounding: every number you write, in the digest or the plan, appears in the source \
+text; a check rejects the plan otherwise. General knowledge about the concept is \
+welcome, but a fact about Daniel's project comes only from the source text, and you \
+name a file or a function only when the source text shows it.
 
 Digest sections, in this order: headline (the anchor idea in one sentence), the idea \
 in plain words, why the project needed it, mechanism, where it lives in the project \
 (files and functions from the source text), a worked example with the project's real \
 numbers, the rest of the topic in brief, common confusion, limits, exercise (from the \
-study map, when it has one). The mechanism section must open with a line starting \
-"Components:" listing the mechanism's real parts, the actual nouns that make it work. \
-Those exact components are what you turn into diagram nodes below, so name them here \
-first and reuse the same names.
+study map, when it has one). The mechanism section opens with a line that starts with \
+"Components:" and lists the real parts that make the mechanism work. The diagram in \
+the plan uses these same names, so name the parts here first.
 
 """
 
@@ -420,34 +389,34 @@ LESSON_READ_SYSTEM = _LESSON_READ_INTRO + _PLAN_RULES + _EXAMPLE_BLOCK
 # Study videos for the built track: material Daniel is learning, not code he
 # built, like system design prep for an interview.
 _STUDY_READ_INTRO = """You are the deep-read writer for AgentLab's study videos. \
-Daniel is preparing for a system design interview. The study plan in the source names \
-the role and the company. The source text inside the <source_text> tag holds one topic \
-from his study plan (the topic, what to study, and the study material for it) and the \
-whole study plan. In a single reply you produce TWO things, in order: first a complete \
-digest in markdown, then a fenced ```json block containing the scene plan. In the rules \
-below, "paper" means this topic.
+Daniel is preparing for a system design interview, and the study plan in the source \
+names the role and the company. The source text inside the <source_text> tag holds one \
+topic from his study plan (the topic, what to study, and the study material for it) and \
+the whole study plan. Your reply has two parts, in this order: a complete digest in \
+markdown, which Daniel reads after the video, then one fenced ```json block with the \
+scene plan, which the storyboard writer and the render code use. In the rules below, \
+"paper" means this topic.
 
 Choose one anchor idea: the single idea from this topic that an interviewer probes \
-most. The video teaches that idea through a concrete example. For a design problem \
+most. The video teaches that idea through one concrete example. For a design problem \
 ("Design X"), the anchor is the deep dive that decides the design, shown on top of a \
 short sketch of the high-level design. In the scene plan, application_or_implication \
 says where the idea shows up in a design interview, and street_test_question is a \
 question an interviewer would ask about it.
 
-Grounding rules, non-negotiable: every number you write, in the digest or the scene \
-plan, must appear in the source text you were given. General knowledge about the \
-concept is allowed. Never state a fact about that company's own systems; a link to \
-the company is allowed only as an analogy that starts with "Analogy:". The digest \
-must include a section titled "Limits".
+Grounding: every number you write, in the digest or the plan, appears in the source \
+text; a check rejects the plan otherwise. General knowledge about the concept is \
+welcome. Say nothing about the company's own systems; the only link to the company is \
+the analogy section below, and that line starts with "Analogy:".
 
 Digest sections, in this order: headline (the anchor idea in one sentence), the idea \
-in plain words, the problem it solves, mechanism, the decision ladder (the default \
-first, then when to escalate), a worked example with numbers from the source, how it \
-builds on earlier topics in the study plan, common interview mistakes, limits, an \
-analogy to the company's product (one line), a practice question. The mechanism section must open with a line \
-starting "Components:" listing the mechanism's real parts, the actual nouns that make \
-it work. Those exact components are what you turn into diagram nodes below, so name \
-them here first and reuse the same names.
+in plain words, the problem it solves, mechanism, the decision ladder (the simplest \
+choice first, then the signal that calls for each stronger one), a worked example with \
+numbers from the source, how it builds on earlier topics in the study plan, common \
+interview mistakes, limits, an analogy to the company's product (one line), a practice \
+question. The mechanism section opens with a line that starts with "Components:" and \
+lists the real parts that make the mechanism work. The diagram in the plan uses these \
+same names, so name the parts here first.
 
 """
 
@@ -455,20 +424,16 @@ STUDY_READ_SYSTEM = _STUDY_READ_INTRO + _PLAN_RULES + _EXAMPLE_BLOCK
 
 
 def build_deep_read_prompt(url: str, source_text: str) -> str:
-    # The source text is tagged and the hard rules restated right after it
-    # closes (production long-context practice: instructions closest to
-    # the generation point win) rather than only living at the top of the
-    # system prompt.
+    # The source comes first and the task last: with long inputs, the query
+    # at the end measurably improves the answer (Anthropic prompting best
+    # practices, long context section), and one short recap of the two rules
+    # the checks enforce is cheaper than a failed plan.
     return (
         f"Source URL: {url}\n\n"
         f"<source_text>\n{source_text}\n</source_text>\n\n"
-        "Reminder of the three hard rules, now that you have read the "
-        "source above: every number you write comes only from the source "
-        "text, never attribute to the source anything it does not itself "
-        "state, and your reply is the full digest followed by exactly one "
-        "fenced json scene plan.\n\n"
-        "Write the full digest, then the fenced json scene plan, following "
-        "every rule above exactly."
+        "That is the whole source. Write the digest, then the fenced json scene "
+        "plan. Every number comes from the source text above, and the source is "
+        "credited only with what it states."
     )
 
 
@@ -785,26 +750,28 @@ def deep_read(
     return digest, plan
 
 
-PICK_SYSTEM = """You are picking ONE candidate from a numbered list for \
-Daniel to watch a video about today. Answer with ONLY the number of your \
-pick, nothing else: no words, no punctuation, just the number."""
+PICK_SYSTEM = """You pick one candidate from a numbered list for Daniel's daily paper \
+video. Code reads your reply as a number, so reply with the number of your pick and \
+nothing else."""
 
-RANK_SYSTEM = """Rank the best candidates from a numbered list for Daniel to watch.
-Answer with only a JSON array of candidate numbers in best-to-worst order."""
+RANK_SYSTEM = """You rank candidates from a numbered list for Daniel's daily paper video. \
+Code reads your reply as a JSON array of candidate numbers, best first, so reply with \
+that array and nothing else."""
+
+_ANSWER_LINE = "Reply with the number only."
 
 _NOVEL_INSTRUCTION = (
-    "Pick the candidate Daniel is LEAST likely to already know about, the "
-    "one that sounds the coolest and most frontier-opening. Ignore "
-    "Daniel's interests below except to avoid picking something that just "
-    "overlaps what he already tracks; the goal here is surprise, not "
-    "relevance."
+    "Pick the candidate Daniel is least likely to already know about, the one "
+    "that sounds the coolest and most frontier-opening. Ignore Daniel's interests "
+    "below except to avoid picking something that overlaps what he already "
+    "tracks; the goal here is surprise, not relevance."
 )
 _PAPER_PREFERENCE = (
     " Prefer candidates from arxiv or hf over hn ones; pick an hn candidate"
     " only if its title clearly refers to an actual paper."
 )
 _CORE_INSTRUCTION = (
-    "Pick the single candidate MOST relevant to Daniel's interests below."
+    "Pick the single candidate most relevant to Daniel's interests below."
     + _PAPER_PREFERENCE
 )
 
@@ -835,8 +802,7 @@ def build_pick_prompt(candidates: list[dict], interests_text: str, mode: str) ->
     return (
         f"Candidates:\n{lines}\n\n"
         f"Daniel's interests:\n{interests_text}\n\n"
-        f"{instruction}\n\n"
-        "Answer with ONLY the number, nothing else."
+        f"{instruction}\n\n{_ANSWER_LINE}"
     )
 
 
@@ -896,7 +862,7 @@ def rank_papers(
     if not candidates:
         return []
     prompt = build_pick_prompt(candidates, interests_text, mode).rsplit(
-        "Answer with ONLY the number, nothing else.", 1
+        _ANSWER_LINE, 1
     )[0]
     prompt += (
         f"Rank the best {count} candidates. Return exactly {count} unique numbers "
