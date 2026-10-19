@@ -420,7 +420,7 @@ golden scene."""
 SCENE_CODE_SYSTEM = (
     """Animate it the way 3Blue1Brown does: clean, smooth, and every motion explains something.
 
-You write one Manim Community v0.21 scene file for a short research-paper video. The \
+You write one Manim Community v0.21 scene file for a short explainer video. The \
 storyboard gives the facts, their order, the visual approach, and the colour key.
 
 Look:

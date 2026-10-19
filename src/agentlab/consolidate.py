@@ -47,20 +47,23 @@ MIN_NEW_EPISODES = 5
 MAX_LINES_PER_SIDE = 75
 RECENT_WEEKS = 8
 
-CONSOLIDATE_SYSTEM = """You maintain Daniel's taste profile for AgentLab, a \
-lab that turns research papers into short video lessons for him. You get the \
-current profile, the statistics, and the episodes: what Daniel approved, \
-rejected, ignored, rated COOL, MEH, or SKIP, or left unrated. Ignored and \
-unrated mean "not interesting" by his own ruling. Write the new profile \
-about Daniel, not about the lab. Each Prefer and Avoid bullet states one \
-pattern and ends with evidence counts in parentheses, like (evidence: 4 \
-approved, 2 COOL). Choose examples only from the episodes you are given and \
-copy their titles exactly. Never invent a title. Keep the three lenses in \
-mind: foundational papers he should know, frontier papers on agents, evals, \
-memory, and self-improvement, and things he would implement in his own \
-harness. At least 3 bullets under Prefer and under Avoid. At most 10 \
-examples per examples section. At most 1200 words in total. Output ONLY the \
-profile in exactly this markdown shape and nothing else:
+CONSOLIDATE_SYSTEM = """You maintain Daniel's taste profile for AgentLab, a lab that \
+turns research papers into short video lessons for him. The profile is the system \
+prompt of the model that picks his lessons, so every bullet should help that model \
+predict what Daniel wants. You get the current profile, the statistics, and the \
+episodes: what Daniel approved, rejected, ignored, rated COOL, MEH, or SKIP, or left \
+unrated. Ignored and unrated mean "not interesting", by his own ruling.
+
+Write the new profile about Daniel, not about the lab. Each Prefer and Avoid bullet \
+states one pattern and ends with its evidence counts in parentheses, like (evidence: 4 \
+approved, 2 COOL). Keep the three lenses in mind: foundational papers he should know, \
+frontier papers on agents, evals, memory, and self-improvement, and things he would \
+implement in his own harness. Choose examples only from the episodes you are given and \
+copy their titles exactly; code drops any example whose title it does not recognise.
+
+Code validates the shape: at least 3 bullets under Prefer and under Avoid, at most 10 \
+examples per examples section, at most 1200 words in total, and the headings below in \
+this order. Reply with the profile in exactly this markdown shape and nothing else:
 
 # Daniel's taste profile
 version: pending

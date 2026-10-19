@@ -90,6 +90,21 @@ Old: "Choose a substantially different visual concept, composition, and motion s
 New: do not reuse these visual ideas, and keep the same style.
 `build_storyboard_prompt` drops the words "through one bold visual metaphor".
 
+#### Additions on 2026-10-19
+
+Daniel reviewed the study videos of 2026-10-19 and ruled that the spoken script had words that were weird, out of place, and unclear.
+The storyboards from that morning showed four causes, so four rules joined the storyboard prompt and the deep-read prompt.
+
+| Rule | Source |
+|---|---|
+| Narration is written the way a teacher says it out loud: numbers and units as words, names in full, no symbols, code identifiers, abbreviations, labels, or prefixes. | Pipeline: `video_render.narrate` sends the text to Polly exactly as written, and the same text becomes the subtitles. Evidence: "Implication:" and "Possible use:" were read aloud in the application beat, and "DB1-vn1", "hash % N", "2B", and "APNS or FCM" were read letter by letter. |
+| The narrator is the teacher and speaks to Daniel as "you", never as a user of the system. | Daniel, 2026-10-19. Evidence: the Design Tinder storyboard said "saving my swipe" and "sets my field". |
+| An on-screen label is a name, a number, or a formula the viewer understands on its own, never shorthand, a prefix, or a section name from the digest. | Daniel, 2026-10-19. Evidence: the consistent hashing storyboard showed the labels "default: name it" and "Topic 18: better hash placement". |
+| The plan's title is the paper's exact title, or a topic's name in two to six words. | Pipeline: `parse_storyboard` opens the video with the plan title followed by the definition, so a claim-shaped title made the first beat say the same sentence twice. |
+
+The deep-read prompt also dropped the `kind`, `activates`, and `icon` instructions: nothing renders them since the free-mode videos replaced the diagram template (`story_video.py`, 2026-10-04).
+The schema keeps the fields with their defaults, so stored plans still parse.
+
 ### 2. Scene prompt (`src/agentlab/scene_code.py`)
 
 The first paragraph of `SCENE_CODE_SYSTEM` becomes: "Animate it the way 3Blue1Brown does: clean, smooth, and every motion explains something."

@@ -612,7 +612,7 @@ CANDIDATES = [
 
 def test_pick_paper_core_returns_valid_dict():
     def fake_complete(model, messages):
-        assert "MOST relevant" in messages[1]["content"]
+        assert "most relevant" in messages[1]["content"]
         return "2"
 
     chosen = pick_paper(
@@ -636,15 +636,15 @@ def test_pick_paper_novel_mode_changes_the_prompt():
     novel_prompt = build_pick_prompt(CANDIDATES, "agents, evals", "novel")
 
     assert core_prompt != novel_prompt
-    assert "MOST relevant" in core_prompt
-    assert "MOST relevant" not in novel_prompt
-    assert "LEAST likely" in novel_prompt
+    assert "most relevant" in core_prompt
+    assert "most relevant" not in novel_prompt
+    assert "least likely" in novel_prompt
     assert "Ignore Daniel's interests" in novel_prompt
 
 
 def test_pick_paper_novel_mode_calls_complete_with_novel_prompt():
     def fake_complete(model, messages):
-        assert "LEAST likely" in messages[1]["content"]
+        assert "least likely" in messages[1]["content"]
         return "3"
 
     chosen = pick_paper(CANDIDATES, "agents, evals", fake_complete, mode="novel")
