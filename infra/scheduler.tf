@@ -181,7 +181,7 @@ resource "aws_scheduler_schedule" "built_lessons" {
           # default is two.
           environment = [
             { name = "TRACK", value = "built" },
-            { name = "BUILT_VIDEOS_PER_DAY", value = "4" },
+            { name = "BUILT_VIDEOS_PER_DAY", value = "2" },
           ]
         }
       ]
