@@ -80,6 +80,7 @@ LAYOUT_FLOOR = 0.5
 RENDER_FAILED = 0.25
 REJECTED = 0.0
 SOURCE_EXCERPT_CHARS = 4000
+INPUT_EXCERPT_CHARS = 6000
 FEEDBACK_CHARS = 2500
 # A call that would start past this multiple of the cap raises, so a long
 # validation pass cannot run far past the budget the stopper checks.
@@ -225,6 +226,20 @@ def load_examples(
     return pool[:count]
 
 
+def scene_input(example: Example) -> tuple[Storyboard, str]:
+    """The storyboard (or chapter board) and the exact user prompt production
+    sends the scene model for this example."""
+    storyboard = Storyboard.model_validate(example.storyboard)
+    note = None
+    if example.beats:
+        storyboard = chapter_board(storyboard, list(example.beats))
+        note = ChapterNote(**example.note)
+    prompt = build_scene_code_prompt(
+        storyboard, example.durations, None, None, chapter=note
+    )
+    return storyboard, prompt
+
+
 def first_attempt(
     example: Example,
     system_prompt: str,
@@ -234,19 +249,10 @@ def first_attempt(
     render: Callable = _render,
 ) -> Rollout:
     """One first attempt scored like production would treat it."""
-    storyboard = Storyboard.model_validate(example.storyboard)
-    note = None
-    if example.beats:
-        storyboard = chapter_board(storyboard, list(example.beats))
-        note = ChapterNote(**example.note)
+    storyboard, user_prompt = scene_input(example)
     messages = [
         {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": build_scene_code_prompt(
-                storyboard, example.durations, None, None, chapter=note
-            ),
-        },
+        {"role": "user", "content": user_prompt},
     ]
     try:
         source = extract_python_block(complete(model, messages))
@@ -361,6 +367,7 @@ class SceneCodeAdapter:
                     ),
                     "beats": len(example.beats)
                     or len(example.storyboard.get("beats", [])),
+                    "inputs": scene_input(example)[1],
                     "score": rollout.score,
                     "feedback": rollout.feedback,
                     "source": rollout.source,
@@ -376,7 +383,10 @@ class SceneCodeAdapter:
     def make_reflective_dataset(self, candidate, eval_batch, components_to_update):
         rows = [
             {
-                "Inputs": f"Storyboard '{t['title']}' with {t['beats']} beats",
+                # The real user prompt: given only a title and a beat count, the
+                # first chapter run's reflection wrote rules for "planning from
+                # a title" that production never needs.
+                "Inputs": t["inputs"][:INPUT_EXCERPT_CHARS],
                 "Generated Outputs": t["source"][:SOURCE_EXCERPT_CHARS],
                 "Feedback": f"Score {t['score']}. {t['feedback'][:FEEDBACK_CHARS]}",
             }

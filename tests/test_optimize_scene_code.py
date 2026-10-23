@@ -270,7 +270,10 @@ def test_reflective_dataset_carries_the_file_and_the_feedback(tmp_path):
     rows = adapter.make_reflective_dataset({opt.COMPONENT: "P"}, batch, [opt.COMPONENT])
     row = rows[opt.COMPONENT][0]
     assert len(row["Generated Outputs"]) == opt.SOURCE_EXCERPT_CHARS
-    assert "off the bottom edge" in row["Feedback"] and "6 beats" in row["Inputs"]
+    assert (
+        "off the bottom edge" in row["Feedback"]
+        and "<storyboard_json>" in row["Inputs"]
+    )
     assert list(tmp_path.iterdir()) == []  # every rollout folder is removed
 
 
