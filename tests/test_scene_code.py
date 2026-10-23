@@ -212,12 +212,14 @@ def test_cheat_sheet_names_every_public_story_scene_method():
         for n in ast.walk(tree)
         if isinstance(n, ast.ClassDef) and n.name == "StoryScene"
     )
+    # card is the fallback text card for a chapter lane: our code calls it,
+    # a model scene never does, so the cheat sheet leaves it out.
     public = {
         n.name
         for n in cls.body
         if isinstance(n, ast.FunctionDef)
         and not n.name.startswith("_")
-        and n.name != "construct"
+        and n.name not in ("construct", "card")
     }
     assert public == {"fit", "label", "clear_stage", "hold"}
     for name in public:
@@ -526,3 +528,75 @@ def test_example_scene_shows_the_3b1b_idioms():
         "from story_scene import",
     ):
         assert idiom in example
+
+
+BOARD = Storyboard(**GOLDEN_BOARD)
+
+
+def _three_beat_board():
+    # A chapter copy of the fixture board; the first three beats are enough.
+    return BOARD.model_copy(update={"beats": BOARD.beats[:3]})
+
+
+def test_chapter_note_names_position_and_previous_visual():
+    note = scene_code.ChapterNote(
+        index=2, count=4, first_beat=3, last_beat=5, previous_visual="a grid of cells"
+    )
+    text = note.text()
+    assert "chapter 2 of 4" in text
+    assert "beat_1 to beat_3" in text and "beats 3 to 5" in text
+    assert "a grid of cells" in text
+    assert "empty stage" in text
+
+
+def test_first_chapter_note_has_no_previous_visual():
+    text = scene_code.ChapterNote(
+        index=1, count=3, first_beat=1, last_beat=2, previous_visual=None
+    ).text()
+    assert "first chapter" in text and "previous chapter" not in text
+
+
+def test_chapter_note_keeps_one_full_stop_after_the_previous_visual():
+    # Storyboard visuals end with a full stop; the note must not double it.
+    visual = BOARD.beats[1].visual
+    text = scene_code.ChapterNote(
+        index=2, count=4, first_beat=3, last_beat=5, previous_visual=visual
+    ).text()
+    assert visual in text and ".." not in text
+
+
+def test_prompts_carry_the_chapter_note_before_the_storyboard():
+    board = _three_beat_board()
+    note = scene_code.ChapterNote(
+        index=1, count=3, first_beat=1, last_beat=3, previous_visual=None
+    )
+    prompt = scene_code.build_scene_code_prompt(
+        board, [5.0, 5.0, 5.0], None, None, chapter=note
+    )
+    assert prompt.index("<chapter>") < prompt.index("<storyboard_json>")
+    edit = scene_code.build_edit_prompt(
+        board, [5.0, 5.0, 5.0], "source", "boom", chapter=note
+    )
+    assert "<chapter>" in edit
+    assert "<chapter>" not in scene_code.build_scene_code_prompt(
+        board, [5.0, 5.0, 5.0], None, None
+    )
+
+
+def test_write_and_edit_pass_the_note_through():
+    board = _three_beat_board()
+    seen = []
+
+    def complete(model, messages, **kwargs):
+        seen.append(messages[1]["content"])
+        return "```python\nx = 1\n```"
+
+    note = scene_code.ChapterNote(
+        index=3, count=3, first_beat=7, last_beat=9, previous_visual="a brace"
+    )
+    scene_code.write_scene_code(board, [5.0, 5.0, 5.0], complete, "m", chapter=note)
+    scene_code.edit_scene_code(
+        board, [5.0, 5.0, 5.0], "x = 1\n", "boom", complete, "m", chapter=note
+    )
+    assert len(seen) == 2
+    assert all("chapter 3 of 3" in content for content in seen)
