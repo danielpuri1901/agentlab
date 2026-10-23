@@ -84,6 +84,9 @@ LANE_ATTEMPTS = stage("scene").attempts
 LANE_WORKERS = 3
 """Lanes that run at once on the 4 vCPU explain task. Model calls wait on
 the network and renders are subprocesses, so threads are enough."""
+JOIN_TIMEOUT = 300
+"""The join always gets at least this long: by then every chapter has a
+render, and a clock overrun must not throw that work away."""
 CARD_RENDER_TIMEOUT = 180
 """The cap on a card render. It applies even when the deadline has passed."""
 CARD_RESERVE_SECONDS = 240
@@ -816,11 +819,13 @@ def _ship(
     """Join the lanes' renders and the narration into the final video."""
     # Per-beat lengths in chapter order drive the audio padding and the srt.
     lengths = [length for lane in lanes for length in beat_lengths(lane.rendered.timing)]
+    remaining = int(deadline_seconds - (time.monotonic() - started))
+    join_timeout = max(JOIN_TIMEOUT, min(RENDER_TIMEOUT, remaining))
     audio = concat_audio(
         clips,
         work_dir / "narration.mp3",
         target_seconds=lengths,
-        timeout_seconds=_remaining_timeout(started, deadline_seconds, RENDER_TIMEOUT),
+        timeout_seconds=join_timeout,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     srt_path = out_path.with_suffix(".srt")
@@ -830,7 +835,7 @@ def _ship(
         videos if chapter_lanes else videos[0],
         audio,
         out_path,
-        timeout_seconds=_remaining_timeout(started, deadline_seconds, RENDER_TIMEOUT),
+        timeout_seconds=join_timeout,
         saturation=OUTPUT_SATURATION,
     )
     first = lanes[0].rendered
