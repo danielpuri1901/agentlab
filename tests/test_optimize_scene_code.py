@@ -49,29 +49,37 @@ def test_story_example_needs_one_positive_narration_length_per_beat():
     )
 
 
-def test_load_examples_reads_only_top_level_story_records():
+def test_load_examples_takes_story_keys_from_the_ledger_not_a_bucket_listing():
     record = json.dumps({"storyboard": BOARD, "timing": TIMING}).encode()
     keys = [
         "stories/built-20261023T100000Z-a.json",
         "stories/built-20261022T100000Z-b.json",
-        "stories/built-20261023T100000Z-a.py",
+        "stories/built-20261023T100000Z-a.json",
         "stories/gepa/20261023T100000Z/summary.json",
+        "stories/built-20261021T100000Z-c.py",
     ]
+    pages = [
+        {"Items": [{"story_key": k} for k in keys[:2]], "LastEvaluatedKey": {"k": 1}},
+        {"Items": [{"story_key": k} for k in keys[2:]]},
+    ]
+    scans = []
+
+    class FakeTable:
+        def scan(self, **kwargs):
+            scans.append(kwargs)
+            return pages[len(scans) - 1]
+
     fetched = []
 
     class FakeS3:
-        def get_paginator(self, name):
-            return SimpleNamespace(
-                paginate=lambda **kw: [{"Contents": [{"Key": k} for k in keys]}]
-            )
-
         def get_object(self, Bucket, Key):
             fetched.append(Key)
             return {"Body": SimpleNamespace(read=lambda: record)}
 
-    examples = opt.load_examples(FakeS3(), "bucket", 2, seed=0)
+    examples = opt.load_examples(FakeTable(), FakeS3(), "bucket", 2, seed=0)
     assert sorted(e.key for e in examples) == sorted(keys[:2])
-    assert fetched[0] == keys[0]  # newest first
+    assert fetched[0] == keys[0]  # newest first, each key once
+    assert scans[1]["ExclusiveStartKey"] == {"k": 1}
 
 
 def test_guard_rejection_scores_zero_with_the_guard_text(tmp_path):

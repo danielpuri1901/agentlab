@@ -46,6 +46,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from botocore.exceptions import ClientError
+
 from agentlab.scene_code import (
     SCENE_CODE_SYSTEM,
     build_scene_code_prompt,
@@ -120,26 +122,51 @@ def _key_stamp(key: str) -> str:
     return match.group(1) if match else ""
 
 
-def load_examples(s3_client, bucket: str, count: int, seed: int) -> list[Example]:
+def story_keys(table) -> list[str]:
+    """The story record key of every ledger video item. The explain role has
+    no s3:ListBucket, by design, so the keys come from the ledger it scans."""
+    keys, start = [], None
+    while True:
+        kwargs = {
+            "FilterExpression": "begins_with(experiment_id, :video) AND attribute_exists(story_key)",
+            "ExpressionAttributeValues": {":video": "video#"},
+            "ProjectionExpression": "story_key",
+        }
+        if start:
+            kwargs["ExclusiveStartKey"] = start
+        page = table.scan(**kwargs)
+        keys += [item["story_key"] for item in page.get("Items", [])]
+        start = page.get("LastEvaluatedKey")
+        if not start:
+            return keys
+
+
+def load_examples(
+    table, s3_client, bucket: str, count: int, seed: int
+) -> list[Example]:
     """`count` stored stories drawn from the newest 2 * count valid ones and
     shuffled with `seed`. Only top-level stories/<key>.json records count, so
     nothing this module writes can become an example."""
-    keys = []
-    paginator = s3_client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=STORIES_PREFIX):
-        for obj in page.get("Contents", []):
-            key = obj["Key"]
-            if key.endswith(".json") and "/" not in key[len(STORIES_PREFIX) :]:
-                keys.append(key)
-    keys.sort(key=_key_stamp, reverse=True)
+    keys = sorted(
+        {
+            key
+            for key in story_keys(table)
+            if key.startswith(STORIES_PREFIX)
+            and key.endswith(".json")
+            and "/" not in key[len(STORIES_PREFIX) :]
+        },
+        key=_key_stamp,
+        reverse=True,
+    )
     pool: list[Example] = []
     for key in keys:
         if len(pool) >= 2 * count:
             break
-        body = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read()
         try:
+            body = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read()
             record = json.loads(body)
-        except json.JSONDecodeError:
+        # Without s3:ListBucket a missing object is a 403, not a NoSuchKey.
+        except (ClientError, json.JSONDecodeError):
             continue
         example = story_example(key, record)
         if example is not None:
@@ -317,6 +344,7 @@ def _instance_scores(subscores, index: int) -> list[float]:
 
 
 def run(
+    table,
     s3_client,
     bucket: str,
     complete: Callable[..., str],
@@ -339,7 +367,7 @@ def run(
     they can run at a different effort than the scene calls."""
     import gepa
 
-    examples = load_examples(s3_client, bucket, train_count + val_count, seed)
+    examples = load_examples(table, s3_client, bucket, train_count + val_count, seed)
     if len(examples) < train_count + val_count:
         raise ValueError(
             f"only {len(examples)} usable stories, {train_count + val_count} needed"
