@@ -64,6 +64,65 @@ class Storyboard(BaseModel):
     beats: list[Beat] = Field(min_length=MIN_BEATS, max_length=MAX_BEATS)
 
 
+CHAPTER_ROLES = (
+    ("title", "problem"),
+    ("mechanism",),
+    ("result", "application"),
+    ("limit", "question"),
+)
+"""Chapter boundaries follow the lesson's sections (docs/superpowers/specs/
+2026-10-23-chapter-lanes-design.md, section 1)."""
+MAX_MECHANISM_PER_CHAPTER = 4
+FALLBACK_CHAPTER_SIZE = 3
+
+
+def chapters(storyboard: Storyboard) -> list[list[int]]:
+    """Contiguous groups of beat indexes, one group per chapter.
+
+    Roles in the canonical order give role chapters; a mechanism run longer
+    than MAX_MECHANISM_PER_CHAPTER splits in two. Any other order falls back
+    to fixed groups of FALLBACK_CHAPTER_SIZE beats, so every beat lands in
+    exactly one non-empty chapter either way."""
+    roles = [beat.role for beat in storyboard.beats]
+    groups: list[list[int]] = []
+    cursor = 0
+    for wanted in CHAPTER_ROLES:
+        group = []
+        while cursor < len(roles) and roles[cursor] in wanted:
+            group.append(cursor)
+            cursor += 1
+        if group:
+            groups.append(group)
+    if cursor != len(roles) or not groups:
+        return [
+            list(range(start, min(start + FALLBACK_CHAPTER_SIZE, len(roles))))
+            for start in range(0, len(roles), FALLBACK_CHAPTER_SIZE)
+        ]
+    split: list[list[int]] = []
+    for group in groups:
+        if roles[group[0]] == "mechanism" and len(group) > MAX_MECHANISM_PER_CHAPTER:
+            # Balanced parts of at most MAX_MECHANISM_PER_CHAPTER beats: 5 gives 3+2, 11 gives 4+4+3.
+            parts = -(-len(group) // MAX_MECHANISM_PER_CHAPTER)
+            size, extra = divmod(len(group), parts)
+            start = 0
+            for part in range(parts):
+                end = start + size + (1 if part < extra else 0)
+                split.append(group[start:end])
+                start = end
+        else:
+            split.append(group)
+    return split
+
+
+def chapter_board(storyboard: Storyboard, indexes: list[int]) -> Storyboard:
+    """The storyboard with only these beats: same title, definition, focus
+    and colour key. A copy for prompting and rendering, never re-validated,
+    because the full model requires at least MIN_BEATS beats."""
+    return storyboard.model_copy(
+        update={"beats": [storyboard.beats[i] for i in indexes]}
+    )
+
+
 class StoryboardInvalid(ValueError):
     """No valid storyboard was produced within the bounded attempt limit."""
 

@@ -8,6 +8,7 @@ from agentlab.scene_plan import ScenePlan
 
 FIXTURE = Path(__file__).parent / "fixtures" / "storyboard_golden.json"
 PLAN_FIXTURE = Path(__file__).parent / "fixtures" / "sample_plan.json"
+EXAMPLE_FIXTURE = Path(__file__).parent / "fixtures" / "storyboard_example.json"
 
 DIGEST = (
     "# Headline\nCompaction keeps codes only if the prompt asks for them.\n\n"
@@ -330,3 +331,74 @@ def test_study_note_appears_only_for_study_topics(plan):
     assert study.endswith(sb.STUDY_NOTE)
     assert sb.LESSON_NOTE not in study
     assert sb.STUDY_NOTE not in sb.build_storyboard_prompt(DIGEST, plan, subject="lesson")
+
+
+EXAMPLE_BOARD = sb.Storyboard(**json.loads(EXAMPLE_FIXTURE.read_text(encoding="utf-8")))
+
+
+def _board_with_roles(roles):
+    beats = [
+        {
+            "role": role,
+            "narration": f"Beat {i} narration.",
+            "visual": f"Visual {i}.",
+            "on_screen_text": [],
+        }
+        for i, role in enumerate(roles, start=1)
+    ]
+    data = EXAMPLE_BOARD.model_dump()
+    data["beats"] = beats
+    return sb.Storyboard.model_validate(data)
+
+
+def test_chapters_group_by_role_and_split_long_mechanism():
+    # The example: title, problem, 5 mechanism, result, application, limit, question.
+    assert sb.chapters(EXAMPLE_BOARD) == [[0, 1], [2, 3, 4], [5, 6], [7, 8], [9, 10]]
+
+
+def test_chapters_keep_four_mechanism_beats_together():
+    board = _board_with_roles(
+        ["title", "problem"] + ["mechanism"] * 4 + ["limit", "question"]
+    )
+    assert sb.chapters(board) == [[0, 1], [2, 3, 4, 5], [6, 7]]
+
+
+def test_chapters_split_a_long_mechanism_run_into_balanced_parts():
+    board = _board_with_roles(["title"] + ["mechanism"] * 11)  # 12 beats, the maximum
+    groups = sb.chapters(board)
+    assert [len(g) for g in groups] == [1, 4, 4, 3]
+    assert [i for g in groups for i in g] == list(range(12))
+
+
+def test_chapters_skip_missing_roles():
+    board = _board_with_roles(
+        ["title", "mechanism", "mechanism", "mechanism", "limit", "question"]
+    )
+    assert sb.chapters(board) == [[0], [1, 2, 3], [4, 5]]
+
+
+def test_chapters_fall_back_to_groups_of_three():
+    board = _board_with_roles(
+        ["title", "mechanism", "problem", "mechanism", "result", "limit", "question"]
+    )
+    assert sb.chapters(board) == [[0, 1, 2], [3, 4, 5], [6]]
+
+
+def test_chapters_cover_every_beat_once():
+    out_of_order = _board_with_roles(
+        ["title", "mechanism", "problem", "limit", "question", "result"]
+    )
+    for board in (EXAMPLE_BOARD, out_of_order):
+        flat = [i for group in sb.chapters(board) for i in group]
+        assert flat == list(range(len(board.beats)))
+        assert all(group for group in sb.chapters(board))
+
+
+def test_chapter_board_keeps_title_and_colour_key():
+    sub = sb.chapter_board(EXAMPLE_BOARD, [2, 3, 4])
+    assert sub.title == EXAMPLE_BOARD.title
+    assert sub.mapping == EXAMPLE_BOARD.mapping
+    assert [b.narration for b in sub.beats] == [
+        EXAMPLE_BOARD.beats[i].narration for i in (2, 3, 4)
+    ]
+    assert len(EXAMPLE_BOARD.beats) == 11  # the original is untouched

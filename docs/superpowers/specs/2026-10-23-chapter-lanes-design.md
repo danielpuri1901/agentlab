@@ -60,8 +60,9 @@ Grouping follows the beat roles the storyboard already carries:
 | 4 | limit, question |
 
 A chapter with no beats is skipped.
-A storyboard whose roles do not follow this order (they always do after `parse_storyboard`, which enforces the role order) falls back to groups of three beats.
-So a 6 to 12 beat storyboard gives 3 to 5 chapters.
+A storyboard whose roles do not follow this order falls back to groups of three beats; `parse_storyboard` does not enforce the order, so this path is live.
+A mechanism run longer than four beats splits into balanced parts of at most four.
+So a 6 to 12 beat storyboard gives 1 to 5 chapters, and a lane holds at most four beats on the role path.
 
 A chapter storyboard is `storyboard.model_copy(update={"beats": subset})`: same title, definition, visual focus and colour key, fewer beats.
 It is a copy for prompting and rendering, never re-validated, because `Storyboard.beats` has a minimum of six.
@@ -127,7 +128,7 @@ Input: the chapter sheets as base64 image blocks (the Messages adapter already a
 Never the code.
 Model: the reviewer stage (Design 8), Haiku 4.5 at first.
 Output: structured, through the Messages API response format (`output_config.format`, passed as `extra_fields`), validated with a Pydantic model: `verdict` (`ship` or `fix`), `chapter` (index or null), `problem` (one sentence a viewer would say: unreadable text, overlap, empty stage, wrong object).
-Budget: one call, 300 output tokens, 60 seconds.
+Budget: one call, 300 output tokens, 60 seconds per request; the SDK retries a timeout twice, so the worst case is about 180 seconds.
 Any failure of the reviewer (timeout, error, invalid output, more than one chapter named) counts as `ship`.
 
 Phase 1, this spec: the verdict is logged in the story JSON and the ledger row, nothing else changes.
