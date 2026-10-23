@@ -177,11 +177,15 @@ resource "aws_scheduler_schedule" "built_lessons" {
         {
           name    = "explain"
           command = ["worker", "explain"]
-          # Four a day during interview prep, through 2026-10-21; the worker
-          # default is two.
+          # Two videos a day, the worker default. Chapter lanes and the
+          # logging reviewer run on the built lane only in rollout week one;
+          # the explain task default stays off
+          # (docs/superpowers/specs/2026-10-23-chapter-lanes-design.md).
           environment = [
             { name = "TRACK", value = "built" },
             { name = "BUILT_VIDEOS_PER_DAY", value = "2" },
+            { name = "CHAPTER_LANES", value = "1" },
+            { name = "REVIEWER", value = "log" },
           ]
         }
       ]

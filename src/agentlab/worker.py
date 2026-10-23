@@ -62,7 +62,6 @@ from agentlab.report import render_report
 from agentlab.results import extract_results, mean_score, total_cost, total_tokens
 from agentlab.scene_plan import (
     DEEP_READ_SYSTEM,
-    DEFAULT_DEEP_READ_MODEL,
     DEFAULT_PICK_MODEL,
     LESSON_READ_SYSTEM,
     STUDY_READ_SYSTEM,
@@ -70,11 +69,14 @@ from agentlab.scene_plan import (
     deep_read,
     rank_papers,
 )
+from agentlab.scene_review import review
 from agentlab.sources import gather_exploit, gather_explore
 from agentlab.stage_checkpoints import StageCheckpoints, fingerprint
+from agentlab.stages import setting, stage
 from agentlab.stats import paired_analysis, verdict
 from agentlab.story_video import StoryFailed, compose_story_video
-from agentlab.video_render import verify_voice
+from agentlab.storyboard import chapter_board
+from agentlab.video_render import contact_sheet, stack_images, verify_voice
 
 worker_app = typer.Typer()
 
@@ -93,7 +95,6 @@ TOPICS_EXHAUSTED_ID = "explain-topics-exhausted"
 DIGEST_URL_EXPIRY_SECONDS = 7 * 24 * 3600
 MODEL_CALL_TIMEOUT_SECONDS = 180
 LONG_COMPLETION_MAX_TOKENS = 32000
-DEFAULT_STORY_EFFORT = "high"
 DEFAULT_DEEP_READ_PRICE_MODEL = "bedrock/global.anthropic.claude-sonnet-4-6"
 DEFAULT_PICK_PRICE_MODEL = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -200,8 +201,9 @@ def flush_pings_command() -> None:
     """Deliver pings queued during quiet hours (the 08:00 schedule's job).
 
     RESULTS_BUCKET is optional here: it is only needed to flush a queued
-    video ping (worker explain's quiet-hours path), so omitting it keeps
-    working exactly as before for text/photo-only queues.
+    video ping and its contact sheet (worker explain's quiet-hours path),
+    so omitting it keeps working exactly as before for text/photo-only
+    queues.
     """
     state_table = _require_env("STATE_TABLE")
     results_bucket = os.environ.get("RESULTS_BUCKET")
@@ -536,10 +538,11 @@ def _complete(
 
 def _deep_read_extra_fields() -> dict | None:
     """Sonnet 5.5 thinks by default, its thinking counts against the deep
-    read's 8000 tokens, and it rejects thinking type "disabled". Terraform
-    sets DEEP_READ_THINKING to "between_tools" to switch it off. The Anthropic
-    API path and the Bedrock Converse path send it."""
-    thinking = os.environ.get("DEEP_READ_THINKING")
+    read's 8000 tokens, and it rejects thinking type "disabled". The deep read
+    stage file sets thinking to "between_tools" to switch it off, and
+    DEEP_READ_THINKING overrides the file. The Anthropic API path and the
+    Bedrock Converse path send it."""
+    thinking = setting("deep_read", "thinking", "DEEP_READ_THINKING")
     return {"thinking": {"type": thinking}} if thinking else None
 
 
@@ -556,12 +559,13 @@ def _complete_long(
 
     Opus 5.5 always thinks, and thinking counts against the output budget, so
     this completion allows 32000 output tokens unless the caller asks for less
-    (a scene edit asks for 8000). STORY_EFFORT (default "high")
-    sets the output effort; the Anthropic API path and the Bedrock Converse
-    path send it, plain litellm models do not. The story path passes the timeout
-    from the video's remaining budget. The lazy litellm import avoids the
-    same circular import as `_complete`.
+    (a scene edit asks for 8000). The storyboard stage file sets the output
+    effort and STORY_EFFORT overrides it; the Anthropic API path and the
+    Bedrock Converse path send it, plain litellm models do not. The story path
+    passes the timeout from the video's remaining budget. The lazy litellm
+    import avoids the same circular import as `_complete`.
     """
+    effort = setting("storyboard", "effort", "STORY_EFFORT")
     response = _run_completion(
         model,
         messages,
@@ -570,11 +574,7 @@ def _complete_long(
         stage="video",
         usage_sink=usage_sink,
         pricing_model=pricing_model,
-        extra_fields={
-            "output_config": {
-                "effort": os.environ.get("STORY_EFFORT", DEFAULT_STORY_EFFORT)
-            }
-        },
+        extra_fields={"output_config": {"effort": effort}} if effort else None,
     )
     choice = response.choices[0]
     if getattr(choice, "finish_reason", None) in {"length", "max_tokens"}:
@@ -582,6 +582,62 @@ def _complete_long(
             "model output hit the token limit; return a shorter complete response"
         )
     return choice.message.content
+
+
+def _complete_review(
+    model: str,
+    messages: list[dict],
+    *,
+    max_tokens: int,
+    timeout: int,
+    extra_fields: dict | None = None,
+    usage_sink: list[ModelCallUsage] | None = None,
+    pricing_model: str | None = None,
+) -> str:
+    """The stills reviewer's one call. scene_review.review validates the
+    reply and turns any failure into "ship", so nothing is checked here."""
+    response = _run_completion(
+        model,
+        messages,
+        max_tokens=max_tokens,
+        timeout=timeout,
+        stage="review",
+        usage_sink=usage_sink,
+        # The reviewer has no price variable, and litellm prices an Anthropic
+        # model by its bare id; without this the call is missing from the
+        # cost ledger.
+        pricing_model=pricing_model or model.removeprefix("anthropic/"),
+        extra_fields=extra_fields,
+    )
+    return response.choices[0].message.content
+
+
+def _chapter_lanes_on() -> bool:
+    return os.environ.get("CHAPTER_LANES", "").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _reviewer_mode() -> str:
+    """off, or log. "fix" is accepted and runs as log until the calibration
+    gate in the spec (20 videos, precision 0.7) is passed and the fix round
+    is implemented."""
+    mode = os.environ.get("REVIEWER", "off").strip().lower()
+    return "log" if mode in {"log", "fix"} else "off"
+
+
+def _story_models() -> tuple[str, str]:
+    """The storyboard and scene models: the environment, else the stage files."""
+    return setting("storyboard", "model", "STORY_MODEL"), setting(
+        "scene", "model", "SCENE_MODEL"
+    )
+
+
+def _chapter_caption_lines(chapters: list[dict]) -> list[str]:
+    total = len(chapters)
+    return [
+        f"Chapter {c['index']} of {total} is a text card."
+        for c in chapters
+        if c.get("status") == "card"
+    ]
 
 
 def _load_classics() -> list[dict]:
@@ -994,6 +1050,7 @@ def _run_explain_track(
                 checkpoints=checkpoints,
                 plan_fingerprint=read_fingerprint,
                 subject="study" if study else "lesson" if lesson else "paper",
+                chapter_lanes=_chapter_lanes_on(),
             )
         except StoryFailed as exc:
             transition(
@@ -1010,6 +1067,52 @@ def _run_explain_track(
         video_key = f"videos/{key}.mp4"
         s3_client.upload_file(str(video_path), bucket, video_key)
 
+        # A chaptered video gets one contact sheet per chapter, the sheets
+        # stacked for Telegram, and the stills reviewer in logging mode (spec
+        # sections 6 and 7). None of it may cost the video: a failure here is
+        # logged and the video sends without the sheet or the verdict.
+        sheet_png = sheet_key = reviewer = None
+        if story.chapters:
+            try:
+                stills_dir = tmp_path / "stills"
+                sheets = []
+                for chapter in story.chapters:
+                    name = f"chapter_{chapter['index']}.png"
+                    sheet = contact_sheet(
+                        chapter["video_path"], chapter["timing"], stills_dir / name
+                    )
+                    s3_client.upload_file(
+                        str(sheet), bucket, f"stories/{key}/stills/{name}"
+                    )
+                    sheets.append(sheet)
+                stacked = stack_images(sheets, stills_dir / "all.png")
+                s3_client.upload_file(
+                    str(stacked), bucket, f"stories/{key}/stills/all.png"
+                )
+                sheet_png = stacked.read_bytes()
+                sheet_key = f"stories/{key}/stills/all.png"
+                if _reviewer_mode() == "log":
+                    reviewer_stage = stage("reviewer")
+                    reviewer = review(
+                        [sheet.read_bytes() for sheet in sheets],
+                        [
+                            chapter_board(story.storyboard, chapter["beats"])
+                            for chapter in story.chapters
+                        ],
+                        bind(_complete_review, usage_sink=model_usage),
+                        reviewer_stage.model,
+                        max_tokens=reviewer_stage.max_tokens,
+                        timeout=reviewer_stage.timeout_seconds,
+                    ).model_dump()
+            except Exception as exc:  # noqa: BLE001 - stills never cost the video
+                # A failed ffmpeg call carries its reason on stderr.
+                detail = getattr(exc, "stderr", None) or exc
+                typer.echo(
+                    "chapter stills failed, sending the video without them: "
+                    f"{type(exc).__name__}: {str(detail)[-400:]}",
+                    err=True,
+                )
+
         story_key = f"stories/{key}.json"
         attempt_records = _upload_attempt_artifacts(
             s3_client, bucket, key, story.attempt_records
@@ -1021,6 +1124,12 @@ def _run_explain_track(
             "timing": story.timing,
             "selected_attempt": story.selected_attempt,
             "attempt_records": attempt_records,
+            # The chapter videos live in this run's temporary folder only.
+            "chapters": [
+                {name: value for name, value in chapter.items() if name != "video_path"}
+                for chapter in story.chapters
+            ],
+            "reviewer": reviewer,
         }
         s3_client.put_object(
             Bucket=bucket,
@@ -1037,11 +1146,17 @@ def _run_explain_track(
         cost_lines = [f"Estimated model cost: ${model_cost:.4f}"]
         if aws_mtd_cost is not None:
             cost_lines.append(f"Tagged AgentLab AWS MTD: ${aws_mtd_cost:.2f}")
-        caption = (
-            f"[{track.upper()}] {title}\n\n"
-            f"{plan.one_line_claim}\n\n"
-            f"{plan.street_test_question}\n\n" + "\n".join(cost_lines) + "\n\n"
-            f"{digest_url}"
+        caption = "\n\n".join(
+            block
+            for block in (
+                f"[{track.upper()}] {title}",
+                plan.one_line_claim,
+                "\n".join(_chapter_caption_lines(story.chapters)),
+                plan.street_test_question,
+                "\n".join(cost_lines),
+                digest_url,
+            )
+            if block
         )
         # Ratings measure Daniel's immediate reaction (Daniel's ruling
         # 2026-08-25): COOL = more like this, MEH = fine but nothing
@@ -1093,6 +1208,18 @@ def _run_explain_track(
                 "visual_focus": story.visual_direction,
                 "storyboard_visual_focus": story.storyboard.visual_focus,
                 "selected_attempt": story.selected_attempt,
+                "chapter_lanes": bool(story.chapters),
+                "chapters": [
+                    {
+                        "index": chapter["index"],
+                        "status": chapter["status"],
+                        "attempts": chapter["attempts"],
+                    }
+                    for chapter in story.chapters
+                ],
+                "reviewer_verdict": reviewer["verdict"] if reviewer else None,
+                "reviewer_chapter": reviewer["chapter"] if reviewer else None,
+                "reviewer_problem": reviewer["problem"] if reviewer else None,
                 "estimated_model_cost_usd": model_cost,
                 "cost_estimated": True,
                 "model_calls": model_calls,
@@ -1104,8 +1231,10 @@ def _run_explain_track(
             ssm_client,
             caption,
             buttons=buttons,
+            photo_png=sheet_png,
             video_path=str(video_path),
             video_s3_key=video_key,
+            photo_s3_key=sheet_key,
         )
         if pid:
             set_video_key(table, pid, video_key)
@@ -1129,10 +1258,9 @@ def explain_command() -> None:
     state_table = _require_env("STATE_TABLE")
     results_bucket = _require_env("RESULTS_BUCKET")
     track_env = os.environ.get("TRACK", "all").strip().lower()
-    deep_read_model = os.environ.get("DEEP_READ_MODEL", DEFAULT_DEEP_READ_MODEL)
+    deep_read_model = setting("deep_read", "model", "DEEP_READ_MODEL")
     pick_model = os.environ.get("PICK_MODEL", DEFAULT_PICK_MODEL)
-    story_model = os.environ.get("STORY_MODEL", deep_read_model)
-    scene_model = os.environ.get("SCENE_MODEL", deep_read_model)
+    story_model, scene_model = _story_models()
 
     tracks = list(EXPLAIN_TRACKS) if track_env == "all" else [track_env]
     if any(t not in EXPLAIN_TRACKS for t in tracks):

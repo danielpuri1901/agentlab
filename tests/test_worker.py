@@ -5,6 +5,7 @@ live AWS or makes a network call.
 
 import asyncio
 import json
+import subprocess
 import sys
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -28,6 +29,7 @@ from agentlab.profile import set_pointer, write_profile
 from agentlab.proposals import file_proposal, get_proposal
 from agentlab.results import extract_results, mean_score
 from agentlab.scene_plan import ScenePlan
+from agentlab.stages import stage
 from agentlab.stats import paired_analysis
 from agentlab.stats import verdict as compute_verdict
 from agentlab.story_video import StoryFailed, StoryResult
@@ -303,7 +305,7 @@ def test_propose_command_flushes_then_proposes(monkeypatch):
     # then delegates proposing to agentlab.proposer.run_propose (tested in
     # depth in tests/test_proposer.py). Both collaborators are faked here so
     # this test only pins the CLI's own wiring and echo line, not AWS calls.
-    monkeypatch.setattr("agentlab.worker.flush_pending", lambda table, ssm_client: 0)
+    monkeypatch.setattr("agentlab.worker.flush_pending", lambda *args: 0)
     monkeypatch.setattr(
         "agentlab.proposer.run_propose",
         lambda table, ssm_client, s3_client, bucket, model: 2,
@@ -316,6 +318,7 @@ def test_propose_command_flushes_then_proposes(monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
+    assert "flush failed" not in result.output
     assert "filed 2 proposals" in result.output
 
 
@@ -888,10 +891,10 @@ def test_complete_long_sends_story_effort_through_bedrock_converse(
 @pytest.mark.parametrize(
     ("env", "fields"),
     [
-        ({}, None),
+        ({}, {"thinking": {"type": stage("deep_read").thinking}}),
         (
-            {"DEEP_READ_THINKING": "between_tools"},
-            {"thinking": {"type": "between_tools"}},
+            {"DEEP_READ_THINKING": "adaptive"},
+            {"thinking": {"type": "adaptive"}},
         ),
     ],
 )
@@ -1153,8 +1156,8 @@ def test_explain_story_failure_sends_digest_without_template_video(
         (
             {"DEEP_READ_MODEL": "bedrock/deep-model"},
             {
-                "story_model": "bedrock/deep-model",
-                "scene_model": "bedrock/deep-model",
+                "story_model": stage("storyboard").model,
+                "scene_model": stage("scene").model,
             },
         ),
         (
@@ -1190,7 +1193,12 @@ def test_explain_passes_story_model_defaults_and_overrides(
     assert result.exit_code == 0, result.output
     assert captured.pop("checkpoints").folder == "checkpoints/arxiv-9911.00001"
     assert len(captured.pop("plan_fingerprint")) == 12
-    assert captured == {**expected, "recent_visual_directions": [], "subject": "paper"}
+    assert captured == {
+        **expected,
+        "recent_visual_directions": [],
+        "subject": "paper",
+        "chapter_lanes": False,
+    }
 
 
 def test_explain_all_three_tracks_send_three_videos_and_mark_seen(
@@ -1748,3 +1756,251 @@ def test_anthropic_models_go_through_the_api_adapter_with_their_extra_fields(mon
 
     assert response.choices[0].message.content == "ok"
     assert calls == [("anthropic/claude-opus-5-5", 32000, {"output_config": {"effort": "high"}})]
+
+
+# ---------------------------------------------------------------------------
+# Chapter lanes: flags, stage files, stills, the logging reviewer
+# (docs/superpowers/plans/2026-10-23-chapter-lanes.md, Task 8).
+# ---------------------------------------------------------------------------
+
+
+def test_caption_names_card_chapters():
+    from agentlab.worker import _chapter_caption_lines
+
+    chapters = [
+        {"index": 1, "status": "shipped"},
+        {"index": 2, "status": "card"},
+        {"index": 3, "status": "layout_fallback"},
+    ]
+    assert _chapter_caption_lines(chapters) == ["Chapter 2 of 3 is a text card."]
+    assert _chapter_caption_lines([]) == []
+
+
+def test_flags_read_the_environment(monkeypatch):
+    from agentlab.worker import _chapter_lanes_on, _reviewer_mode
+
+    monkeypatch.delenv("CHAPTER_LANES", raising=False)
+    monkeypatch.delenv("REVIEWER", raising=False)
+    assert _chapter_lanes_on() is False and _reviewer_mode() == "off"
+    monkeypatch.setenv("CHAPTER_LANES", "0")  # the Terraform default
+    assert _chapter_lanes_on() is False
+    monkeypatch.setenv("CHAPTER_LANES", "1")
+    monkeypatch.setenv("REVIEWER", "fix")
+    assert _chapter_lanes_on() is True and _reviewer_mode() == "log"  # fix waits for calibration
+    monkeypatch.setenv("REVIEWER", "log")
+    assert _reviewer_mode() == "log"
+
+
+def test_story_models_fall_back_to_stage_files(monkeypatch):
+    from agentlab import stages, worker
+
+    for name in ("STORY_MODEL", "SCENE_MODEL", "DEEP_READ_MODEL", "STORY_EFFORT", "DEEP_READ_THINKING"):
+        monkeypatch.delenv(name, raising=False)
+    assert worker._story_models() == (stages.stage("storyboard").model, stages.stage("scene").model)
+    assert worker._deep_read_extra_fields() == {"thinking": {"type": stages.stage("deep_read").thinking}}
+    monkeypatch.setenv("SCENE_MODEL", "anthropic/claude-sonnet-4-6")
+    assert worker._story_models()[1] == "anthropic/claude-sonnet-4-6"
+
+
+def test_upload_attempt_artifacts_accepts_string_attempt_labels(tmp_path):
+    source = tmp_path / "paper_story.py"
+    source.write_text("x = 1\n", encoding="utf-8")
+    puts = []
+    s3 = SimpleNamespace(upload_file=lambda path, bucket, key: puts.append(key))
+    records = _upload_attempt_artifacts(
+        s3, "bucket", "vid", [{"attempt": "c2-1", "chapter": 2, "source_path": str(source)}]
+    )
+    assert puts == ["stories/vid/attempts/c2-1/scene.py"]
+    assert records == [{"attempt": "c2-1", "chapter": 2, "source_key": puts[0]}]
+
+
+def _fake_story_with_chapters(source: Path):
+    """A lane-path StoryResult: chapter 1 shipped, chapter 2 is a card."""
+    timing = {"beats": [], "total": 12.5, "layout_warnings": []}
+
+    def story(*args, **kwargs):
+        result = _fake_story_success(*args, **kwargs)
+        result.chapters = [
+            {"index": 1, "beats": [0, 1, 2, 3], "status": "shipped", "attempts": 1,
+             "source_path": str(source), "video_path": "/tmp/c1.mp4", "timing": timing},
+            {"index": 2, "beats": [4, 5, 6, 7], "status": "card", "attempts": 4,
+             "source_path": str(source), "video_path": "/tmp/c2.mp4", "timing": timing},
+        ]
+        result.attempt_records = [
+            {"attempt": "c1-1", "chapter": 1, "status": "shipped", "source_path": str(source)},
+            {"attempt": "c2-card", "chapter": 2, "mode": "card", "status": "shipped"},
+        ]
+        result.selected_attempt = "c1-1"
+        return result
+
+    return story
+
+
+def _patch_stills(monkeypatch):
+    def fake_sheet(video_path, timing, out_png):
+        out_png.parent.mkdir(parents=True, exist_ok=True)
+        out_png.write_bytes(f"sheet of {video_path}".encode())
+        return out_png
+
+    def fake_stack(paths, out_png):
+        out_png.write_bytes(b" + ".join(path.read_bytes() for path in paths))
+        return out_png
+
+    monkeypatch.setattr("agentlab.worker.contact_sheet", fake_sheet)
+    monkeypatch.setattr("agentlab.worker.stack_images", fake_stack)
+
+
+def test_explain_lane_path_sends_the_sheet_and_logs_the_review(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch, tmp_path
+):
+    s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    _set_daytime(monkeypatch)
+    _set_explain_env(monkeypatch, track="core")
+    monkeypatch.setenv("CHAPTER_LANES", "1")
+    monkeypatch.setenv("REVIEWER", "log")
+    _patch_explain_pools(monkeypatch)
+    source = tmp_path / "paper_story.py"
+    source.write_text("class PaperStory: pass", encoding="utf-8")
+    fake_story = _fake_story_with_chapters(source)
+    compose_kwargs = {}
+
+    def story(*args, **kwargs):
+        compose_kwargs.update(kwargs)
+        return fake_story(*args, **kwargs)
+
+    _patch_explain_render_stages(monkeypatch, story=story)
+    _patch_stills(monkeypatch)
+    review_calls = []
+
+    def fake_messages(model, messages, *, max_tokens, timeout, extra_fields=None):
+        review_calls.append((model, max_tokens, timeout, extra_fields, messages))
+        verdict = {"verdict": "fix", "chapter": 2, "problem": "The labels overlap."}
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(verdict)))],
+            usage=SimpleNamespace(prompt_tokens=3000, completion_tokens=40, prompt_tokens_details=None),
+        )
+
+    monkeypatch.setattr(worker_mod, "anthropic_messages", fake_messages)
+
+    result = runner.invoke(app, ["worker", "explain"])
+
+    assert result.exit_code == 0, result.output
+    assert compose_kwargs["chapter_lanes"] is True
+    reviewer = stage("reviewer")
+    [(model, max_tokens, timeout, extra_fields, messages)] = review_calls
+    assert (model, max_tokens, timeout) == (reviewer.model, reviewer.max_tokens, reviewer.timeout_seconds)
+    assert "output_config" in extra_fields
+    images = [b for b in messages[1]["content"] if b["type"] == "image_url"]
+    assert len(images) == 2
+
+    row = next(item for item in table.scan()["Items"] if item.get("sk") == "video")
+    key = row["experiment_id"].removeprefix("video#")
+    assert row["chapter_lanes"] is True
+    assert row["chapters"] == [
+        {"index": 1, "status": "shipped", "attempts": 1},
+        {"index": 2, "status": "card", "attempts": 4},
+    ]
+    assert (row["reviewer_verdict"], row["reviewer_chapter"], row["reviewer_problem"]) == (
+        "fix", 2, "The labels overlap.",
+    )
+    assert row["selected_attempt"] == "c1-1"
+    assert [call["stage"] for call in row["model_calls"]] == ["review"]
+    assert row["estimated_model_cost_usd"] > 0
+
+    keys = {o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET)["Contents"]}
+    assert {
+        f"stories/{key}/stills/chapter_1.png",
+        f"stories/{key}/stills/chapter_2.png",
+        f"stories/{key}/stills/all.png",
+        f"stories/{key}/attempts/c1-1/scene.py",
+    } <= keys
+    with s3.get_object(Bucket=BUCKET, Key=f"stories/{key}.json")["Body"] as body:
+        record = json.loads(body.read())
+    assert [chapter["index"] for chapter in record["chapters"]] == [1, 2]
+    assert not any("video_path" in chapter for chapter in record["chapters"])
+    assert record["reviewer"] == {"verdict": "fix", "chapter": 2, "problem": "The labels overlap."}
+
+    urls = [url.rsplit("/", 1)[1] for url, _ in telegram_calls]
+    assert urls == ["sendPhoto", "sendVideo"]
+    photo = telegram_calls[0][1]
+    assert photo["data"]["caption"] == "[CORE] Core Candidate Paper"
+    assert photo["files"]["photo"][1] == b"sheet of /tmp/c1.mp4 + sheet of /tmp/c2.mp4"
+    caption = telegram_calls[1][1]["data"]["caption"]
+    claim = f"Paper at {CORE_CANDIDATE['url']} shows something new."
+    assert f"{claim}\n\nChapter 2 of 2 is a text card.\n\nWould you implement" in caption
+
+
+def test_explain_lane_path_sends_the_video_when_the_stills_fail(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch, tmp_path
+):
+    _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    _set_daytime(monkeypatch)
+    _set_explain_env(monkeypatch, track="core")
+    monkeypatch.setenv("CHAPTER_LANES", "1")
+    monkeypatch.setenv("REVIEWER", "log")
+    _patch_explain_pools(monkeypatch)
+    source = tmp_path / "paper_story.py"
+    source.write_text("class PaperStory: pass", encoding="utf-8")
+    _patch_explain_render_stages(monkeypatch, story=_fake_story_with_chapters(source))
+
+    def broken_sheet(video_path, timing, out_png):
+        raise subprocess.CalledProcessError(1, ["ffmpeg"], stderr="tile: invalid layout")
+
+    monkeypatch.setattr("agentlab.worker.contact_sheet", broken_sheet)
+    monkeypatch.setattr(
+        worker_mod, "anthropic_messages", lambda *a, **k: pytest.fail("no stills, no review")
+    )
+
+    result = runner.invoke(app, ["worker", "explain"])
+
+    assert result.exit_code == 0, result.output
+    assert "explain: core=sent" in result.output
+    assert "chapter stills failed" in result.output and "tile: invalid layout" in result.output
+    assert [url.rsplit("/", 1)[1] for url, _ in telegram_calls] == ["sendVideo"]
+    row = next(item for item in table.scan()["Items"] if item.get("sk") == "video")
+    assert row["chapter_lanes"] is True and len(row["chapters"]) == 2
+    assert row["reviewer_verdict"] is None and row["reviewer_chapter"] is None
+
+
+def test_explain_lane_path_queues_the_sheet_by_key_and_flushes_it_first(
+    moto_fabric_with_ssm, telegram_calls, monkeypatch, tmp_path
+):
+    # A real stacked sheet is larger than the inline photo cap of the queue,
+    # so a quiet-hours ping must carry the sheet's S3 key, and the 08:00
+    # flush must send the sheet before the video.
+    _s3, _dynamodb, table, _ssm = moto_fabric_with_ssm
+    monkeypatch.setattr(
+        notify_mod, "now_amsterdam", lambda: datetime(2026, 8, 19, 2, 0, tzinfo=AMS)
+    )
+    _set_explain_env(monkeypatch, track="core")
+    monkeypatch.setenv("CHAPTER_LANES", "1")
+    monkeypatch.delenv("REVIEWER", raising=False)
+    _patch_explain_pools(monkeypatch)
+    source = tmp_path / "paper_story.py"
+    source.write_text("class PaperStory: pass", encoding="utf-8")
+    _patch_explain_render_stages(monkeypatch, story=_fake_story_with_chapters(source))
+    _patch_stills(monkeypatch)
+
+    result = runner.invoke(app, ["worker", "explain"])
+
+    assert result.exit_code == 0, result.output
+    assert telegram_calls == []
+    [ping] = [
+        item
+        for item in table.scan()["Items"]
+        if item["experiment_id"] == notify_mod.PENDING_PARTITION
+    ]
+    payload = json.loads(ping["payload"])
+    key = payload["video_s3_key"].removeprefix("videos/").removesuffix(".mp4")
+    assert payload["photo_s3_key"] == f"stories/{key}/stills/all.png"
+    assert "photo_b64" not in payload
+
+    _set_daytime(monkeypatch)
+    result = runner.invoke(app, ["worker", "flush-pings"])
+
+    assert result.exit_code == 0, result.output
+    assert "flushed 1 pending pings" in result.output
+    assert [url.rsplit("/", 1)[1] for url, _ in telegram_calls] == ["sendPhoto", "sendVideo"]
+    photo = telegram_calls[0][1]
+    assert photo["files"]["photo"][1] == b"sheet of /tmp/c1.mp4 + sheet of /tmp/c2.mp4"
+    assert photo["data"]["caption"] == "[CORE] Core Candidate Paper"
