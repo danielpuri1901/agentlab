@@ -66,6 +66,7 @@ from agentlab.story_video import (
     _timing_error,
     _TimingInvalid,
     _write_attempt,
+    render_spec,
 )
 from agentlab.storyboard import Storyboard, chapter_board, chapters
 
@@ -265,10 +266,7 @@ def first_attempt(
             REJECTED, "The guard rejected the file:\n- " + "\n- ".join(findings), source
         )
     scene_file = _write_attempt(work_dir, 1, source)
-    spec = {
-        "durations": example.durations,
-        "subtitles": [beat.narration for beat in storyboard.beats],
-    }
+    spec = render_spec(storyboard, example.durations)
     try:
         _, timing = render(scene_file, spec, RENDER_TIMEOUT)
     except subprocess.CalledProcessError as exc:
@@ -330,9 +328,20 @@ class SceneCodeAdapter:
     def _run(self, example: Example, prompt: str) -> Rollout:
         work_dir = Path(tempfile.mkdtemp(prefix="rollout-", dir=self.work_root))
         try:
-            return self.attempt(example, prompt, self.complete, self.model, work_dir)
+            rollout = self.attempt(example, prompt, self.complete, self.model, work_dir)
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
+        # One line per rollout, so a harness fault shows in the log at once
+        # rather than in GEPA's aggregate score.
+        first_line = (rollout.feedback.splitlines() or [""])[0]
+        logger.info(
+            "rollout %s %s score %.2f: %s",
+            self.model,
+            example.key,
+            rollout.score,
+            first_line[:200],
+        )
+        return rollout
 
     def evaluate(self, batch, candidate, capture_traces=False):
         from gepa import EvaluationBatch
