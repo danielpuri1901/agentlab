@@ -35,8 +35,8 @@ static wait, so a visual beat never ends before its narration.
 
 The pure helpers above the manim import (beat_record, layout_warning,
 to_screen, camera_is_flat, beat_midpoints, beat_lengths, wrap_text,
-load_spec) are importable from the main venv without manim, and
-story_video.py uses them.
+load_spec, card_scene_source) are importable from the main venv without
+manim, and story_video.py uses them.
 """
 
 import json
@@ -157,6 +157,39 @@ def subtitle_chunks(
         cues.append((seconds * done / total, chunk))
         done += len(chunk)
     return cues
+
+
+CARD_VISUAL_DIRECTION = "text card, the fallback for a chapter that did not render"
+CARD_LABEL_WORDS = 8
+
+_CARD_SCENE_TEMPLATE = '''# Visual direction: {direction}
+from story_scene import StoryScene
+
+
+class PaperStory(StoryScene):
+{methods}'''
+
+
+def card_scene_source(storyboard, durations: list[float]) -> str:
+    """The source of a PaperStory that shows each beat as a text card.
+
+    The fallback for a chapter lane that ran out of attempts (docs/superpowers/
+    specs/2026-10-23-chapter-lanes-design.md, section 4). It is our code, so
+    the guard does not run on it; it only calls StoryScene.card. Each beat
+    shows its on-screen text, or the first words of its narration when it
+    has none, with "..." when words were cut. repr() quotes the strings, so
+    any quote in them stays valid Python.
+    """
+    methods = []
+    for i, (beat, seconds) in enumerate(zip(storyboard.beats, durations, strict=True), start=1):
+        words = beat.narration.split()
+        cut = " ".join(words[:CARD_LABEL_WORDS]) + ("..." if len(words) > CARD_LABEL_WORDS else "")
+        lines = list(beat.on_screen_text) or [cut]
+        methods.append(
+            f"    def beat_{i}(self):\n"
+            f"        self.card({storyboard.title!r}, {lines!r}, {float(seconds):.3f})\n"
+        )
+    return _CARD_SCENE_TEMPLATE.format(direction=CARD_VISUAL_DIRECTION, methods="\n".join(methods))
 
 
 def camera_is_flat(phi: float, theta: float, gamma: float) -> bool:
@@ -310,7 +343,9 @@ try:
     from manim import (
         BOLD,
         DOWN,
+        UP,
         DecimalNumber,
+        FadeIn,
         FadeOut,
         LaggedStartMap,
         Line,
@@ -321,6 +356,7 @@ try:
         Text,
         ThreeDScene,
         ValueTracker,
+        VGroup,
         VMobject,
     )
 
@@ -473,6 +509,26 @@ if _MANIM_AVAILABLE:
         def hold(self, seconds: float):
             """Wait; use it to let a change sink in."""
             self.wait(max(float(seconds), 0.01))
+
+        def card(self, title: str, lines: list[str], seconds: float):
+            """A text card: the title at the top edge, up to two lines centred
+            on the stage, fade in, hold, fade out. The fallback for a chapter
+            that would not render; a model scene should never need it."""
+            heading = self.fit(
+                Text(wrap_text(title, 36), font_size=60, color=WHITE, line_spacing=1.1)
+            )
+            heading.to_edge(UP, buff=EDGE_MARGIN)
+            body = VGroup(*[self.label(line, size=36, width=40) for line in lines[:2]])
+            body.arrange(DOWN, buff=0.5)
+            # The lines fill the stage below the heading, so a title that
+            # wraps to three lines never runs into them.
+            top = heading.get_bottom()[1] - 0.5
+            self.fit(body, max_h=top - STAGE_BOTTOM)
+            body.move_to([0.0, (top + STAGE_BOTTOM) / 2, 0.0])
+            hold = max(float(seconds) - 2.0, 0.5)
+            self.play(FadeIn(heading, shift=DOWN * 0.2), FadeIn(body, shift=UP * 0.2), run_time=1.0)
+            self.wait(hold)
+            self.play(FadeOut(heading), FadeOut(body), run_time=1.0)
 
         # -- owned by the base class -------------------------------------------
 

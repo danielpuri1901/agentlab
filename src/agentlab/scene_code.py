@@ -13,6 +13,7 @@ import ast
 import math
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 
@@ -527,7 +528,39 @@ Each SEARCH text must match the current file exactly, indentation included, and 
 exactly once in it. Do not send the whole file."""
 
 
-def _storyboard_prompt(storyboard: Storyboard, durations: list[float]) -> str:
+@dataclass(frozen=True)
+class ChapterNote:
+    """Where this file sits in the video, for a chapter lane
+    (docs/superpowers/specs/2026-10-23-chapter-lanes-design.md, section 2).
+    Beat numbers count from 1 over the whole storyboard."""
+
+    index: int
+    count: int
+    first_beat: int
+    last_beat: int
+    previous_visual: str | None
+
+    def text(self) -> str:
+        local_last = self.last_beat - self.first_beat + 1
+        # Storyboard visuals end with a full stop; keep exactly one.
+        before = (
+            f"The previous chapter ended with: {self.previous_visual.rstrip('. ')}."
+            if self.previous_visual
+            else "This is the first chapter."
+        )
+        return (
+            "<chapter>\n"
+            f"This file is chapter {self.index} of {self.count}. Its beat_1 to "
+            f"beat_{local_last} are beats {self.first_beat} to {self.last_beat} of the "
+            f"whole storyboard. {before} Start on an empty stage and reference nothing "
+            "from other chapters. The colour key applies to the whole video.\n"
+            "</chapter>\n\n"
+        )
+
+
+def _storyboard_prompt(
+    storyboard: Storyboard, durations: list[float], chapter: ChapterNote | None = None
+) -> str:
     """The part of every scene prompt that stays the same across fix rounds."""
     _validate_durations(storyboard, durations)
     beat_lines = []
@@ -546,7 +579,7 @@ def _storyboard_prompt(storyboard: Storyboard, durations: list[float]) -> str:
         )
     storyboard_json = storyboard.model_dump_json(indent=2)
     return (
-        "<storyboard_json>\n"
+        (chapter.text() if chapter else "") + "<storyboard_json>\n"
         f"{storyboard_json}\n"
         "</storyboard_json>\n\n"
         f"Title: {storyboard.title}\nSimple definition: {storyboard.simple_definition}\n"
@@ -565,8 +598,9 @@ def build_scene_code_prompt(
     durations: list[float],
     feedback: str | None,
     previous_source: str | None,
+    chapter: ChapterNote | None = None,
 ) -> str:
-    prompt = _storyboard_prompt(storyboard, durations)
+    prompt = _storyboard_prompt(storyboard, durations, chapter)
     if feedback:
         prompt += f"{FIX_ROUND} The previous attempt failed.\n\n"
         if previous_source:
@@ -580,10 +614,14 @@ def build_scene_code_prompt(
 
 
 def build_edit_prompt(
-    storyboard: Storyboard, durations: list[float], source: str, feedback: str
+    storyboard: Storyboard,
+    durations: list[float],
+    source: str,
+    feedback: str,
+    chapter: ChapterNote | None = None,
 ) -> str:
     return (
-        _storyboard_prompt(storyboard, durations)
+        _storyboard_prompt(storyboard, durations, chapter)
         + f"{FIX_ROUND} The current file failed.\n\n"
         + f"<current_file>\n{source}\n</current_file>\n\n"
         + f"<what_went_wrong>\n{feedback}\n</what_went_wrong>\n\n"
@@ -655,13 +693,14 @@ def write_scene_code(
     model: str,
     feedback: str | None = None,
     previous_source: str | None = None,
+    chapter: ChapterNote | None = None,
 ) -> str:
     messages = [
         {"role": "system", "content": SCENE_CODE_SYSTEM},
         {
             "role": "user",
             "content": build_scene_code_prompt(
-                storyboard, durations, feedback, previous_source
+                storyboard, durations, feedback, previous_source, chapter=chapter
             ),
         },
     ]
@@ -675,6 +714,7 @@ def edit_scene_code(
     feedback: str,
     complete: Callable[..., str],
     model: str,
+    chapter: ChapterNote | None = None,
 ) -> str | None:
     """Ask for the smallest fix to a failed file. None when the edits do not
     apply exactly."""
@@ -682,7 +722,9 @@ def edit_scene_code(
         {"role": "system", "content": SCENE_CODE_SYSTEM},
         {
             "role": "user",
-            "content": build_edit_prompt(storyboard, durations, source, feedback),
+            "content": build_edit_prompt(
+                storyboard, durations, source, feedback, chapter=chapter
+            ),
         },
     ]
     return apply_edits(source, complete(model, messages, max_tokens=EDIT_MAX_TOKENS))

@@ -1,0 +1,6 @@
+# Storyboard: the 3Blue1Brown-style plan, 6 to 12 beats.
+model = "anthropic/claude-opus-5-5"
+max_tokens = 32000
+timeout_seconds = 600
+attempts = 3
+effort = "high"

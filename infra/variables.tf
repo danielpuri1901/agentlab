@@ -116,3 +116,15 @@ variable "pick_price_model" {
   type        = string
   default     = "claude-haiku-4-5"
 }
+
+variable "chapter_lanes" {
+  description = "Build each storyboard chapter in its own lane (1 on, 0 off). Not empty: ECS drops an empty environment value, and the explain task definition would then differ from its own state on every plan."
+  type        = string
+  default     = "0"
+}
+
+variable "reviewer_mode" {
+  description = "Stills reviewer: off, log (verdict stored, nothing changes), fix (reserved, runs as log until calibrated)."
+  type        = string
+  default     = "off"
+}

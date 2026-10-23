@@ -757,3 +757,70 @@ def test_render_env_keeps_the_real_uv_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("UV_CACHE_DIR", "/elsewhere/uv")
     env = video_render.render_env(tmp_path, tmp_path / "spec.json")
     assert env["UV_CACHE_DIR"] == "/elsewhere/uv"
+
+
+# ---------------------------------------------------------------------------
+# Chapter join (mux_final with a list) and contact sheets
+# ---------------------------------------------------------------------------
+
+
+def _recording_run(calls):
+    def fake_run(cmd, **kwargs):
+        calls.append([str(c) for c in cmd])
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    return fake_run
+
+
+def test_mux_final_joins_a_list_through_the_concat_demuxer(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(video_render, "run_subprocess", _recording_run(calls))
+    a, b = tmp_path / "c1.mp4", tmp_path / "c2.mp4"
+    a.write_bytes(b"v")
+    b.write_bytes(b"v")
+    out = video_render.mux_final([a, b], tmp_path / "n.mp3", tmp_path / "final.mp4")
+    cmd = calls[-1]
+    assert cmd[cmd.index("-f") + 1] == "concat" and "-safe" in cmd
+    assert "libx264" in cmd and "copy" not in cmd
+    listing = tmp_path / "final.concat.txt"
+    assert listing.read_text(encoding="utf-8") == f"file '{a}'\nfile '{b}'\n"
+    assert out == tmp_path / "final.mp4"
+
+
+def test_mux_final_single_video_without_saturation_still_copies(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(video_render, "run_subprocess", _recording_run(calls))
+    video_render.mux_final(
+        tmp_path / "one.mp4", tmp_path / "n.mp3", tmp_path / "final.mp4"
+    )
+    assert "copy" in calls[-1]
+
+
+def test_sheet_times_three_per_beat_inside_the_beat():
+    timing = {"beats": [{"start": 0.0, "end": 4.0}, {"start": 4.0, "end": 4.4}]}
+    times = video_render.sheet_times(timing)
+    assert times == [0.2, 2.0, 3.8, 4.1, 4.2, 4.3]
+
+
+def test_contact_sheet_grabs_each_time_then_tiles(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(video_render, "run_subprocess", _recording_run(calls))
+    timing = {"beats": [{"start": 0.0, "end": 4.0}, {"start": 4.0, "end": 8.0}]}
+    out = video_render.contact_sheet(
+        tmp_path / "chapter.mp4", timing, tmp_path / "sheet.png"
+    )
+    grabs, tile = calls[:-1], calls[-1]
+    assert len(grabs) == 6 and all("-ss" in c and "-frames:v" in c for c in grabs)
+    assert any("tile=3x2" in part for part in tile)
+    assert out == tmp_path / "sheet.png"
+
+
+def test_stack_images_vstacks_in_order(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(video_render, "run_subprocess", _recording_run(calls))
+    paths = [tmp_path / "a.png", tmp_path / "b.png", tmp_path / "c.png"]
+    video_render.stack_images(paths, tmp_path / "all.png")
+    cmd = calls[-1]
+    inputs = [cmd[i + 1] for i, c in enumerate(cmd) if c == "-i"]
+    assert inputs == [str(p) for p in paths]
+    assert any("vstack=inputs=3" in part for part in cmd)

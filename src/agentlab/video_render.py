@@ -39,6 +39,7 @@ render path depends on ffmpeg being able to render it.
 import ctypes
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -403,23 +404,37 @@ def concat_audio(
 
 
 def mux_final(
-    video_path: Path,
+    video_path: Path | list[Path],
     audio_path: Path,
     out_path: Path,
     timeout_seconds: int = DEFAULT_RENDER_TIMEOUT_SECONDS,
     saturation: float | None = None,
 ) -> Path:
-    """Video+audio mux. With no saturation, `-c:v copy` repackages the
-    video stream untouched (no re-encode, no libass dependency). With a
-    saturation, ffmpeg's eq filter re-encodes it: 3Blue1Brown renders at
-    saturation 1.5 (3b1b/videos custom_config.yml, file_writer)."""
+    """Video+audio mux. One video with no saturation: `-c:v copy` repackages
+    the video stream untouched (no re-encode, no libass dependency). A list
+    of chapter videos joins through the concat demuxer and is encoded once:
+    stream copy across a concat left unclean timestamps at the seams
+    (explainer-video worktree, 2026-10-22). With a saturation, ffmpeg's eq
+    filter re-encodes the video: 3Blue1Brown renders at saturation 1.5
+    (3b1b/videos custom_config.yml, file_writer)."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    videos = video_path if isinstance(video_path, (list, tuple)) else None
+    if videos is not None:
+        # The concat demuxer reads a relative path from the list file's
+        # folder, not from the working directory, so the list holds
+        # absolute paths.
+        listing = out_path.with_suffix(".concat.txt")
+        listing.write_text(
+            "".join(f"file '{Path(p).absolute()}'\n" for p in videos),
+            encoding="utf-8",
+        )
+        video_input = ["-f", "concat", "-safe", "0", "-i", str(listing)]
+    else:
+        video_input = ["-i", str(video_path)]
     video_args = ["-c:v", "copy"]
-    if saturation is not None:
+    if saturation is not None or videos is not None:
         video_args = [
-            "-vf",
-            f"eq=saturation={saturation}",
             "-c:v",
             "libx264",
             "-preset",
@@ -429,11 +444,12 @@ def mux_final(
             "-pix_fmt",
             "yuv420p",
         ]
+        if saturation is not None:
+            video_args = ["-vf", f"eq=saturation={saturation}", *video_args]
     cmd = [
         "ffmpeg",
         "-y",
-        "-i",
-        str(video_path),
+        *video_input,
         "-i",
         str(audio_path),
         "-map",
@@ -448,6 +464,98 @@ def mux_final(
     ]
     run_subprocess(cmd, timeout=timeout_seconds)
     return out_path
+
+
+def sheet_times(timing: dict, margin: float = 0.2) -> list[float]:
+    """Three timestamps per beat: just after its start, its middle, and just
+    before its end. The inset shrinks on a beat shorter than four margins."""
+    times = []
+    for beat in timing["beats"]:
+        start, end = float(beat["start"]), float(beat["end"])
+        inset = min(margin, (end - start) / 4)
+        times += [
+            round(start + inset, 3),
+            round((start + end) / 2, 3),
+            round(end - inset, 3),
+        ]
+    return times
+
+
+def contact_sheet(
+    video_path,
+    timing: dict,
+    out_png,
+    timeout_seconds: int = DEFAULT_RENDER_TIMEOUT_SECONDS,
+    width: int = 1280,
+) -> Path:
+    """Stills of every beat, tiled three per row, one row per beat
+    (docs/superpowers/specs/2026-10-23-chapter-lanes-design.md, section 6).
+    One ffmpeg grab per timestamp into a folder beside the sheet, then one
+    tile pass."""
+    out_png = Path(out_png)
+    frame_dir = out_png.with_suffix("")
+    frame_dir.mkdir(parents=True, exist_ok=True)
+    times = sheet_times(timing)
+    for i, at in enumerate(times):
+        run_subprocess(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                f"{at:.3f}",
+                "-i",
+                str(video_path),
+                "-frames:v",
+                "1",
+                "-vf",
+                f"scale={width // 3}:-2",
+                str(frame_dir / f"frame_{i:03d}.png"),
+            ],
+            timeout=timeout_seconds,
+        )
+    run_subprocess(
+        [
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            "1",
+            "-i",
+            str(frame_dir / "frame_%03d.png"),
+            "-vf",
+            f"tile=3x{len(times) // 3}",
+            "-frames:v",
+            "1",
+            str(out_png),
+        ],
+        timeout=timeout_seconds,
+    )
+    return out_png
+
+
+def stack_images(
+    paths: list[Path], out_png, timeout_seconds: int = DEFAULT_RENDER_TIMEOUT_SECONDS
+) -> Path:
+    """Chapter sheets stacked top to bottom into one image for Telegram.
+    ffmpeg's vstack needs two inputs or more, so one sheet is copied."""
+    out_png = Path(out_png)
+    if len(paths) == 1:
+        shutil.copy(paths[0], out_png)
+        return out_png
+    inputs = [arg for p in paths for arg in ("-i", str(p))]
+    run_subprocess(
+        [
+            "ffmpeg",
+            "-y",
+            *inputs,
+            "-filter_complex",
+            f"vstack=inputs={len(paths)}",
+            "-frames:v",
+            "1",
+            str(out_png),
+        ],
+        timeout=timeout_seconds,
+    )
+    return out_png
 
 
 def render_video(

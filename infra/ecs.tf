@@ -266,6 +266,8 @@ resource "aws_ecs_task_definition" "explain" {
         { name = "STORY_PRICE_MODEL", value = var.story_price_model },
         { name = "SCENE_PRICE_MODEL", value = var.scene_price_model },
         { name = "STORY_EFFORT", value = var.story_effort },
+        { name = "CHAPTER_LANES", value = var.chapter_lanes },
+        { name = "REVIEWER", value = var.reviewer_mode },
         { name = "HOME", value = "/tmp/home" },
         { name = "TMPDIR", value = "/tmp" },
         { name = "MPLCONFIGDIR", value = "/tmp/matplotlib" },

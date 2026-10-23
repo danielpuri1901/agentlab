@@ -12,8 +12,10 @@ the worker.py convention, so tests run against moto without patching boto3.
 
 import base64
 import json
+import logging
 import secrets
 import tempfile
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,6 +35,8 @@ PENDING_PARTITION = "pending_ping"
 # the queue with a note rather than risking a rejected put.
 MAX_QUEUED_PHOTO_BYTES = 250_000
 AMSTERDAM = ZoneInfo("Europe/Amsterdam")
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -138,6 +142,16 @@ def send_video(config: TelegramConfig, caption: str, video_path, buttons=None) -
 
 def _deliver(config: TelegramConfig, text: str, buttons, photo_png, video_path=None) -> None:
     if video_path is not None:
+        if photo_png is not None:
+            # A photo with a video is the video's contact sheet. It goes first,
+            # under the caption's headline, and a failed sheet never costs the
+            # video. An httpx error is logged by type only: its text could
+            # carry the request URL, and the URL carries the bot token.
+            try:
+                send_photo(config, text.split("\n", 1)[0], photo_png)
+            except (TelegramError, httpx.HTTPError) as exc:
+                reason = exc if isinstance(exc, TelegramError) else type(exc).__name__
+                logger.warning("contact sheet not sent, sending the video anyway: %s", reason)
         send_video(config, text, video_path, buttons=buttons)
     elif photo_png is not None:
         send_photo(config, text, photo_png)
@@ -147,7 +161,14 @@ def _deliver(config: TelegramConfig, text: str, buttons, photo_png, video_path=N
         send_message(config, text, buttons)
 
 
-def queue_ping(table, text: str, buttons, photo_png, video_s3_key: str | None = None) -> str:
+def queue_ping(
+    table,
+    text: str,
+    buttons,
+    photo_png,
+    video_s3_key: str | None = None,
+    photo_s3_key: str | None = None,
+) -> str:
     ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     sk = f"ping#{ts}#{secrets.token_hex(2)}"
     payload: dict = {"text": text, "buttons": buttons}
@@ -156,6 +177,9 @@ def queue_ping(table, text: str, buttons, photo_png, video_s3_key: str | None = 
         # item (unlike the photo path below); store the S3 key instead and
         # let flush_pending download it fresh at delivery time.
         payload["video_s3_key"] = video_s3_key
+    if photo_s3_key is not None:
+        # A photo already in S3 (a video's contact sheet) rides by key too.
+        payload["photo_s3_key"] = photo_s3_key
     elif photo_png is not None:
         if len(photo_png) <= MAX_QUEUED_PHOTO_BYTES:
             payload["photo_b64"] = base64.b64encode(photo_png).decode("ascii")
@@ -179,6 +203,7 @@ def notify(
     photo_png=None,
     video_path=None,
     video_s3_key: str | None = None,
+    photo_s3_key: str | None = None,
 ) -> str:
     """Send now, or queue during quiet hours. Returns "sent" or "queued".
 
@@ -187,9 +212,12 @@ def notify(
     for the quiet-hours queue: the caller (worker.py's explain_command)
     uploads to S3 before calling notify, so a queued ping can be flushed
     later even after the local temp file is gone.
+    `photo_png` with a video is the video's contact sheet, sent just before
+    it. `photo_s3_key` is the sheet's uploaded S3 key, used only for the
+    quiet-hours queue, the same way as `video_s3_key`.
     """
     if in_quiet_hours(now_amsterdam()):
-        queue_ping(table, text, buttons, photo_png, video_s3_key)
+        queue_ping(table, text, buttons, photo_png, video_s3_key, photo_s3_key)
         return "queued"
     config = load_config(ssm_client)
     _deliver(config, text, buttons, photo_png, video_path)
@@ -213,6 +241,8 @@ def flush_pending(table, ssm_client, s3_client=None, bucket: str | None = None) 
     object expired or was deleted), that one ping degrades to its text plus
     a "(video unavailable)" note instead of raising, and is still deleted
     like any other successful delivery, so later pings still flush.
+    A queued contact sheet ("photo_s3_key") downloads the same way; when it
+    cannot, the ping goes without the sheet and without a note.
     """
     # Accumulate items across pages
     items = []
@@ -241,6 +271,11 @@ def flush_pending(table, ssm_client, s3_client=None, bucket: str | None = None) 
             else None
         )
         text = payload["text"]
+        if "photo_s3_key" in payload and s3_client is not None and bucket is not None:
+            with suppress(ClientError):
+                photo = s3_client.get_object(Bucket=bucket, Key=payload["photo_s3_key"])[
+                    "Body"
+                ].read()
         video_path = None
         if "video_s3_key" in payload:
             if s3_client is None or bucket is None:

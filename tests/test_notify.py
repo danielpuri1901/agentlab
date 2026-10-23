@@ -4,6 +4,7 @@ a monkeypatched httpx.post captures every Telegram call."""
 import base64
 import json
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import boto3
@@ -474,3 +475,80 @@ def test_telegram_error_names_the_status_but_never_the_token(monkeypatch):
     assert "SECRET-TOKEN" not in message
     assert caught.value.__cause__ is None
     assert caught.value.__suppress_context__ is True
+
+
+# ---------------------------------------------------------------------------
+# A video's contact sheet: sent first, queued by S3 key, never costs the video
+# ---------------------------------------------------------------------------
+
+
+def _capture_photo_and_video(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        notify_mod, "send_photo", lambda config, caption, png: sent.append(("photo", caption, png))
+    )
+    monkeypatch.setattr(
+        notify_mod,
+        "send_video",
+        lambda config, caption, path, buttons=None: sent.append(
+            ("video", caption, Path(path).read_bytes())
+        ),
+    )
+    return sent
+
+
+def test_notify_sends_the_sheet_before_the_video(monkeypatch, tmp_path):
+    sent = _capture_photo_and_video(monkeypatch)
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"mp4")
+    notify_mod._deliver(_config(), "headline\n\nbody", [[("COOL", "x")]], b"png", video_path=video)
+    assert sent == [("photo", "headline", b"png"), ("video", "headline\n\nbody", b"mp4")]
+
+
+def test_a_failed_sheet_still_sends_the_video(monkeypatch, tmp_path):
+    sent = _capture_photo_and_video(monkeypatch)
+
+    def rejected_photo(config, caption, png):
+        raise notify_mod.TelegramError("Telegram sendPhoto failed: 400 PHOTO_INVALID_DIMENSIONS")
+
+    monkeypatch.setattr(notify_mod, "send_photo", rejected_photo)
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"mp4")
+    notify_mod._deliver(_config(), "headline", None, b"png", video_path=video)
+    assert sent == [("video", "headline", b"mp4")]
+
+
+def test_flush_downloads_the_queued_sheet_and_sends_it_first(fabric_with_s3, monkeypatch):
+    table, ssm, s3 = fabric_with_s3
+    _quiet(monkeypatch)
+    s3.put_object(Bucket=BUCKET, Key="videos/k6.mp4", Body=b"mp4")
+    s3.put_object(Bucket=BUCKET, Key="stories/k6/stills/all.png", Body=b"sheet")
+    notify(
+        table, ssm, "lost sheet", video_path="/tmp/gone.mp4",
+        video_s3_key="videos/k6.mp4", photo_s3_key="stories/k6/stills/missing.png",
+    )
+    notify(
+        table, ssm, "headline\n\nbody", buttons=[[("COOL", "vid:k6:cool")]], photo_png=b"sheet",
+        video_path="/tmp/gone.mp4", video_s3_key="videos/k6.mp4",
+        photo_s3_key="stories/k6/stills/all.png",
+    )
+    payloads = [
+        json.loads(i["payload"])
+        for i in table.scan()["Items"]
+        if i["experiment_id"] == PENDING_PARTITION
+    ]
+    assert all("photo_b64" not in payload for payload in payloads)
+    assert {payload["photo_s3_key"] for payload in payloads} == {
+        "stories/k6/stills/missing.png",
+        "stories/k6/stills/all.png",
+    }
+
+    sent = _capture_photo_and_video(monkeypatch)
+    _daytime(monkeypatch)
+    assert flush_pending(table, ssm, s3, BUCKET) == 2
+
+    assert sent == [
+        ("video", "lost sheet", b"mp4"),
+        ("photo", "headline", b"sheet"),
+        ("video", "headline\n\nbody", b"mp4"),
+    ]
