@@ -8,10 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from agentlab import story_video
+from agentlab import stages, story_scene, story_video
 from agentlab.scene_plan import ScenePlan
+from agentlab.stage_checkpoints import fingerprint
 from agentlab.story_video import StoryFailed
-from agentlab.storyboard import Storyboard, StoryboardInvalid
+from agentlab.storyboard import Storyboard, StoryboardInvalid, chapter_board
 from agentlab.video_render import NarrationClip
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -30,7 +31,11 @@ N = len(BOARD.beats)
 
 
 def _timing(overruns=None):
-    overruns = overruns or [0.0] * N
+    return _timing_n(N, overruns)
+
+
+def _timing_n(n, overruns=None):
+    overruns = overruns or [0.0] * n
     beats, cursor = [], 0.0
     for index, overrun in enumerate(overruns, start=1):
         length = 5.0 + overrun
@@ -47,9 +52,25 @@ def _timing(overruns=None):
     return {"beats": beats, "total": cursor, "layout_warnings": []}
 
 
+def _chapter_source(storyboard, durations):
+    """A scene file the guard accepts for a chapter board of any length."""
+    return story_scene.card_scene_source(storyboard, durations)
+
+
+def _chapter_of(scene_file):
+    """The chapter in a lane's attempt path (<work>/chapter_<k>/scene/
+    attempt_<n>/paper_story.py), or None on the monolithic path."""
+    folder = Path(scene_file).parents[2].name
+    return int(folder.removeprefix("chapter_")) if folder.startswith("chapter_") else None
+
+
 @pytest.fixture
 def seams(monkeypatch):
-    """Fake external steps while leaving the compose logic real."""
+    """Fake external steps while leaving the compose logic real.
+
+    Lanes run in threads, so a lane test scripts its lane by chapter number
+    (coder_for_chapter, timings_for_chapter) instead of through the shared
+    queues, whose order across threads is not fixed."""
     state = {
         "renders": [],
         "codes": [],
@@ -59,6 +80,9 @@ def seams(monkeypatch):
         "previous_sources": [],
         "edits": [],
         "edited": [],
+        "chapters": [],
+        "coder_for_chapter": {},
+        "timings_for_chapter": {},
     }
 
     monkeypatch.setattr(
@@ -85,19 +109,36 @@ def seams(monkeypatch):
         model,
         feedback=None,
         previous_source=None,
+        chapter=None,
     ):
         state["coder"].append(feedback)
         state["previous_sources"].append(previous_source)
-        result = state["codes"].pop(0) if state["codes"] else GOLDEN_SCENE
+        state["chapters"].append(chapter)
+        if chapter is not None and chapter.index in state["coder_for_chapter"]:
+            result = state["coder_for_chapter"][chapter.index]
+        elif state["codes"]:
+            result = state["codes"].pop(0)
+        elif chapter is not None:
+            result = _chapter_source(storyboard, durations)
+        else:
+            result = GOLDEN_SCENE
         if isinstance(result, Exception):
             raise result
         return result
 
     monkeypatch.setattr(story_video, "write_scene_code", fake_coder)
 
-    def fake_edit(storyboard, durations, source, feedback, complete, model):
+    def fake_edit(storyboard, durations, source, feedback, complete, model, chapter=None):
         state["edits"].append((source, feedback))
-        result = state["edited"].pop(0) if state["edited"] else EDITED_SCENE
+        state["chapters"].append(chapter)
+        if chapter is not None and chapter.index in state["coder_for_chapter"]:
+            result = state["coder_for_chapter"][chapter.index]
+        elif state["edited"]:
+            result = state["edited"].pop(0)
+        elif chapter is not None:
+            result = _chapter_source(storyboard, durations) + "\n# edited\n"
+        else:
+            result = EDITED_SCENE
         if isinstance(result, Exception):
             raise result
         return result
@@ -118,7 +159,9 @@ def seams(monkeypatch):
             error = state["render_errors"].pop(0)
             if error is not None:
                 raise error
-        timing = state["timings"].pop(0) if state["timings"] else _timing()
+        scripted = state["timings_for_chapter"].get(_chapter_of(scene_file))
+        scripted = scripted or state["timings"]
+        timing = scripted.pop(0) if scripted else _timing_n(len(spec["durations"]))
         Path(extra_env["SCENE_TIMING_OUT"]).write_text(
             json.dumps(timing), encoding="utf-8"
         )
@@ -137,7 +180,10 @@ def seams(monkeypatch):
     )
 
     def fake_mux(video, audio, out, timeout_seconds=None, saturation=None):
-        state["muxed_video"] = Path(video)
+        if isinstance(video, list):
+            state["mux_inputs"] = [Path(v) for v in video]
+        else:
+            state["muxed_video"] = Path(video)
         state["saturation"] = saturation
         output = Path(out)
         output.write_bytes(b"final")
@@ -567,26 +613,41 @@ def _compose_with(tmp_path, checkpoints, plan_fingerprint="plan-1"):
     )
 
 
-def test_a_new_storyboard_is_saved_for_the_next_run(seams, paper_checkpoints, tmp_path):
-    from agentlab.stage_checkpoints import fingerprint
+def _board_fingerprint(plan_fingerprint="plan-1"):
+    return fingerprint(
+        "storyboard",
+        "s",
+        plan_fingerprint,
+        story_video.STORYBOARD_SYSTEM,
+        stages.stage("storyboard").fingerprint,
+    )
 
+
+def _lane_fingerprint(chapter, beat_count):
+    return fingerprint(
+        "scene",
+        "c",
+        _board_fingerprint(),
+        story_video.SCENE_CODE_SYSTEM,
+        story_video.STORY_SCENE_API,
+        str(chapter),
+        str(beat_count),
+        stages.stage("scene").fingerprint,
+    )
+
+
+def test_a_new_storyboard_is_saved_for_the_next_run(seams, paper_checkpoints, tmp_path):
     _compose_with(tmp_path, paper_checkpoints)
 
-    saved = paper_checkpoints.load(
-        "storyboard", fingerprint("storyboard", "s", "plan-1", story_video.STORYBOARD_SYSTEM)
-    )
+    saved = paper_checkpoints.load("storyboard", _board_fingerprint())
     assert Storyboard.model_validate(saved) == BOARD
 
 
 def test_a_saved_storyboard_is_reused_without_a_model_call(
     seams, paper_checkpoints, monkeypatch, tmp_path
 ):
-    from agentlab.stage_checkpoints import fingerprint
-
     paper_checkpoints.save(
-        "storyboard",
-        fingerprint("storyboard", "s", "plan-1", story_video.STORYBOARD_SYSTEM),
-        BOARD.model_dump(mode="json"),
+        "storyboard", _board_fingerprint(), BOARD.model_dump(mode="json")
     )
 
     def no_model_call(*args, **kwargs):
@@ -602,13 +663,9 @@ def test_a_saved_storyboard_is_reused_without_a_model_call(
 def test_a_storyboard_from_another_deep_read_is_not_reused(
     seams, paper_checkpoints, monkeypatch, tmp_path
 ):
-    from agentlab.stage_checkpoints import fingerprint
-
     other = BOARD.model_copy(update={"title": "From an older deep read"})
     paper_checkpoints.save(
-        "storyboard",
-        fingerprint("storyboard", "s", "plan-0", story_video.STORYBOARD_SYSTEM),
-        other.model_dump(mode="json"),
+        "storyboard", _board_fingerprint("plan-0"), other.model_dump(mode="json")
     )
 
     result = _compose_with(tmp_path, paper_checkpoints, plan_fingerprint="plan-1")
@@ -635,14 +692,12 @@ def test_a_run_that_dies_mid_render_resumes_by_rendering_the_saved_file(
 def test_a_saved_render_error_resumes_as_an_edit_of_that_file(
     seams, paper_checkpoints, tmp_path
 ):
-    from agentlab.stage_checkpoints import fingerprint
-
     first = GOLDEN_SCENE + "\n# first attempt\n"
     error = "Manim failed with this traceback:\nNameError: z"
     scene_fingerprint = fingerprint(
         "scene",
         "c",
-        fingerprint("storyboard", "s", "plan-1", story_video.STORYBOARD_SYSTEM),
+        _board_fingerprint(),
         story_video.SCENE_CODE_SYSTEM,
         story_video.STORY_SCENE_API,
     )
@@ -734,7 +789,11 @@ def test_checkpoint_fingerprints_cover_the_prompts(seams, tmp_path, monkeypatch)
 
     _compose(tmp_path)
 
-    assert any(story_video.STORYBOARD_SYSTEM in parts for parts in seen)
+    assert any(
+        story_video.STORYBOARD_SYSTEM in parts
+        and stages.stage("storyboard").fingerprint in parts
+        for parts in seen
+    )
     assert any(
         story_video.SCENE_CODE_SYSTEM in parts and story_video.STORY_SCENE_API in parts
         for parts in seen
@@ -798,3 +857,114 @@ def test_render_feedback_leads_with_the_scene_frame():
     assert lines[1] == "❱ 364 self.play(LaggedStartMap(GrowArrow, arrows_in))"
     assert lines[-1].startswith("AttributeError: ArrowTriangleFilledTip")
     assert len(lines) == 2 + story_video.STDERR_TAIL_LINES
+
+
+def _compose_lanes(tmp_path, **kwargs):
+    return story_video.compose_story_video(
+        DIGEST,
+        PLAN,
+        None,
+        "Joanna",
+        lambda *a, **k: "",
+        tmp_path / "w",
+        tmp_path / "out.mp4",
+        story_model="s",
+        scene_model="c",
+        chapter_lanes=True,
+        **kwargs,
+    )
+
+
+def _lane_records(result, chapter):
+    return [record for record in result.attempt_records if record["chapter"] == chapter]
+
+
+def test_chapter_lanes_ship_a_card_for_a_lane_that_never_renders(seams, tmp_path):
+    seams["coder_for_chapter"] = {2: "import os\n"}  # the guard rejects it every time
+
+    result = _compose_lanes(tmp_path)
+
+    statuses = [chapter["status"] for chapter in result.chapters]
+    assert len(result.chapters) == 5 and statuses[1] == "card"
+    assert statuses.count("shipped") == 4
+    assert len(seams["mux_inputs"]) == 5
+    lane_two = _lane_records(result, 2)
+    assert [record["attempt"] for record in lane_two] == [
+        f"c2-{n}" for n in range(1, story_video.LANE_ATTEMPTS + 1)
+    ] + ["c2-card"]
+    assert "no renderable scene" in lane_two[-1]["failure"]
+    assert result.chapters[1]["attempts"] == story_video.LANE_ATTEMPTS
+    assert result.chapters[1]["source_path"].endswith("attempt_card/paper_story.py")
+
+
+def test_chapter_lanes_merge_timing_in_chapter_order(seams, tmp_path):
+    result = _compose_lanes(tmp_path)
+
+    beats = result.timing["beats"]
+    assert [b["beat"] for b in beats] == list(range(1, N + 1))
+    assert beats[0]["start"] == 0.0
+    assert all(beats[i]["start"] == beats[i - 1]["end"] for i in range(1, N))
+    assert result.timing["total"] == beats[-1]["end"] == 5.0 * N
+    assert seams["targets"] == [5.0] * N
+    assert result.scene_source.startswith("# chapter 1")
+    assert [chapter["beats"] for chapter in result.chapters] == [
+        [0, 1], [2, 3, 4], [5, 6], [7, 8], [9, 10]
+    ]
+
+
+def test_all_lanes_card_when_deadline_is_gone(seams, tmp_path):
+    # The deadline leaves only the card reserve, so no lane starts an attempt.
+    result = _compose_lanes(tmp_path, deadline_seconds=story_video.CARD_RESERVE_SECONDS)
+
+    assert all(chapter["status"] == "card" for chapter in result.chapters)
+    assert result.video_path.exists()
+    assert seams["coder"] == []
+    # The card render keeps its own cap, not what is left of the deadline.
+    assert seams["renders"] == [("m", story_video.CARD_RENDER_TIMEOUT)] * 5
+
+
+def test_lane_ships_layout_fallback_when_deadline_ends_the_round(seams, tmp_path, monkeypatch):
+    warned = _timing_n(2)
+    warned["layout_warnings"] = ["beat 1: text overlaps"]
+    seams["timings_for_chapter"] = {1: [warned]}
+    monkeypatch.setattr(story_video, "LAYOUT_ROUND_MIN_SECONDS", 10**9)  # no time for a layout round
+
+    result = _compose_lanes(tmp_path)
+
+    assert result.chapters[0]["status"] == "shipped"
+    assert result.timing["layout_warnings"] == ["chapter 1: beat 1: text overlaps"]
+
+
+def test_chapter_lanes_pass_a_note_with_the_previous_visual(seams, tmp_path):
+    _compose_lanes(tmp_path)
+
+    notes = sorted(seams["chapters"], key=lambda n: n.index)
+    assert notes[0].previous_visual is None and notes[0].first_beat == 1
+    assert notes[1].previous_visual == BOARD.beats[1].visual
+    assert notes[-1].last_beat == N
+
+
+def test_monolithic_path_is_unchanged_by_the_flag_default(seams, tmp_path):
+    result = story_video.compose_story_video(
+        DIGEST, PLAN, None, "Joanna", lambda *a, **k: "", tmp_path / "w", tmp_path / "out.mp4",
+        story_model="s", scene_model="c",
+    )
+
+    assert result.chapters == [] and isinstance(result.selected_attempt, int)
+    assert [record["attempt"] for record in result.attempt_records] == [1]
+    assert seams["chapters"] == [None]  # no chapter note in the prompt
+    assert "mux_inputs" not in seams  # one video, no join
+
+
+def test_a_chapter_lane_resumes_from_its_own_checkpoint(seams, paper_checkpoints, tmp_path):
+    saved = _chapter_source(chapter_board(BOARD, [2, 3, 4]), [5.0] * 3)
+    paper_checkpoints.save(
+        "scene-2", _lane_fingerprint(2, 3), {"source": saved, "feedback": None}
+    )
+
+    result = _compose_lanes(tmp_path, checkpoints=paper_checkpoints, plan_fingerprint="plan-1")
+
+    modes = [(r["attempt"], r["mode"], r["status"]) for r in _lane_records(result, 2)]
+    assert modes == [("c2-1", "resume", "shipped")]
+    assert sorted(note.index for note in seams["chapters"]) == [1, 3, 4, 5]
+    assert paper_checkpoints.load("scene-1", _lane_fingerprint(1, 2))["feedback"] is None
