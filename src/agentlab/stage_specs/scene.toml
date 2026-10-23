@@ -1,6 +1,8 @@
 # Scene code: one Manim file per chapter. attempts is the per-lane cap.
-model = "anthropic/claude-opus-4-6"
+# Opus 5.5 at medium: at high it used the full 32k output budget on every
+# scene. The scene attempt loop sends this effort (story_video.py).
+model = "anthropic/claude-opus-5-5"
 max_tokens = 32000
 timeout_seconds = 600
 attempts = 4
-effort = "high"
+effort = "medium"

@@ -43,7 +43,7 @@ from agentlab.scene_code import (
 )
 from agentlab.scene_plan import ScenePlan
 from agentlab.stage_checkpoints import NoCheckpoints, fingerprint
-from agentlab.stages import stage
+from agentlab.stages import setting, stage
 from agentlab.story_scene import (
     SCENE_CLASS,
     TIMING_ENV,
@@ -202,10 +202,14 @@ def _remaining_timeout(started: float, deadline_seconds: int, limit: int) -> int
     return max(1, min(limit, int(remaining)))
 
 
-def _deadline_bound_completion(complete, started: float, deadline_seconds: int):
+def _deadline_bound_completion(complete, started: float, deadline_seconds: int, **fixed):
+    """Each call gets what is left of the video deadline, up to the per-call
+    cap. `fixed` keyword arguments ride along on every call, such as the
+    scene stage's effort."""
+
     def bounded(model: str, messages: list[dict], **kwargs) -> str:
         timeout = _remaining_timeout(started, deadline_seconds, MODEL_CALL_TIMEOUT)
-        return complete(model, messages, timeout=timeout, **kwargs)
+        return complete(model, messages, timeout=timeout, **fixed, **kwargs)
 
     return bounded
 
@@ -589,7 +593,11 @@ def _attempt_loop(
     StoryFailed when no render ships. deadline_seconds is the lane's own
     deadline. Records go to chapter.records."""
     storyboard, durations, records = chapter.board, chapter.durations, chapter.records
-    bounded_complete = _deadline_bound_completion(complete, started, deadline_seconds)
+    # Scene files and their fixes run at the scene stage's effort, not the
+    # storyboard's: Opus 5.5 at high used the full 32k output on every scene.
+    bounded_complete = _deadline_bound_completion(
+        complete, started, deadline_seconds, effort=setting("scene", "effort", "SCENE_EFFORT")
+    )
 
     def label(attempt: int) -> int | str:
         return f"c{chapter.index}-{attempt}" if labelled else attempt

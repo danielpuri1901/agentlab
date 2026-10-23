@@ -653,6 +653,7 @@ def _complete_long(
     pricing_model: str | None = None,
     timeout: int = MODEL_CALL_TIMEOUT_SECONDS,
     max_tokens: int = LONG_COMPLETION_MAX_TOKENS,
+    effort: str | None = None,
 ) -> str:
     """The story path's model calls: storyboards, scene files, and scene edits.
 
@@ -664,7 +665,9 @@ def _complete_long(
     passes the timeout from the video's remaining budget. The lazy litellm
     import avoids the same circular import as `_complete`.
     """
-    effort = setting("storyboard", "effort", "STORY_EFFORT")
+    # The scene attempt loop passes the scene stage's effort; everything else
+    # runs at the storyboard's.
+    effort = effort or setting("storyboard", "effort", "STORY_EFFORT")
     response = _run_completion(
         model,
         messages,

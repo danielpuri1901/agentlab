@@ -541,6 +541,23 @@ def test_deadline_bound_completion_caps_each_model_call(monkeypatch, deadline, t
     assert calls == [{"timeout": timeout, "max_tokens": 8000}]
 
 
+def test_deadline_bound_completion_sends_fixed_arguments_on_every_call(monkeypatch):
+    calls = []
+    monkeypatch.setattr(story_video.time, "monotonic", lambda: 40.0)
+    bounded = story_video._deadline_bound_completion(
+        lambda model, messages, **kwargs: calls.append(kwargs) or "ok",
+        started=10.0,
+        deadline_seconds=story_video.VIDEO_DEADLINE_SECONDS,
+        effort="medium",
+    )
+
+    bounded("model", [])
+    bounded("model", [], max_tokens=8000)
+
+    assert [call["effort"] for call in calls] == ["medium", "medium"]
+    assert calls[1]["max_tokens"] == 8000
+
+
 def test_storyboard_invalid_becomes_story_failed(seams, monkeypatch, tmp_path):
     def bad_storyboard(digest, plan, complete, model, **kwargs):
         raise StoryboardInvalid("missing mechanism")
