@@ -76,10 +76,77 @@ def test_load_examples_takes_story_keys_from_the_ledger_not_a_bucket_listing():
             fetched.append(Key)
             return {"Body": SimpleNamespace(read=lambda: record)}
 
-    examples = opt.load_examples(FakeTable(), FakeS3(), "bucket", 2, seed=0)
+    examples = opt.load_examples(
+        FakeTable(), FakeS3(), "bucket", 2, seed=0, unit="video"
+    )
     assert sorted(e.key for e in examples) == sorted(keys[:2])
     assert fetched[0] == keys[0]  # newest first, each key once
     assert scans[1]["ExclusiveStartKey"] == {"k": 1}
+
+
+def test_chapter_examples_split_the_storyboard_like_the_lanes():
+    parts = opt.chapter_examples(_example())
+    assert [part.beats for part in parts] == [(0, 1), (2, 3), (4,), (5,)]
+    assert parts[0].durations == [4.0, 4.0] and parts[0].note["previous_visual"] is None
+    assert parts[1].note == {
+        "index": 2,
+        "count": 4,
+        "first_beat": 3,
+        "last_beat": 4,
+        "previous_visual": "Visual 2.",
+    }
+
+
+def test_a_chapter_rollout_prompts_checks_and_renders_only_its_beats(
+    tmp_path, monkeypatch
+):
+    chapter = opt.chapter_examples(_example())[1]
+    seen = {}
+
+    def check(source, beats):
+        seen["beats"] = beats
+        return []
+
+    def complete(model, messages, **kwargs):
+        seen["prompt"] = messages[1]["content"]
+        return "```python\nprint(1)\n```"
+
+    def render(scene_file, spec, timeout):
+        seen["spec"] = spec
+        return scene_file, {"beats": [], "layout_warnings": []}
+
+    monkeypatch.setattr(opt, "check_scene_code", check)
+    monkeypatch.setattr(opt, "_timing_error", lambda timing, durations: None)
+    rollout = opt.first_attempt(
+        chapter, "system", complete, "m", tmp_path, render=render
+    )
+    assert rollout.score == opt.SHIPS
+    assert "<chapter>" in seen["prompt"] and seen["beats"] == 2
+    assert seen["spec"]["subtitles"] == ["Narration 3.", "Narration 4."]
+    assert seen["spec"]["durations"] == [4.0, 4.0]
+
+
+def test_a_token_limit_failure_says_the_prompt_does_not_count(tmp_path):
+    def capped(model, messages, **kwargs):
+        raise ValueError(
+            "model output hit the token limit; return a shorter complete response"
+        )
+
+    rollout = opt.first_attempt(_example(), "system", capped, "m", tmp_path)
+    assert rollout.score == opt.REJECTED
+    assert "never this system prompt" in rollout.feedback
+
+
+def test_split_by_story_keeps_every_storyboard_on_one_side():
+    examples = [
+        opt.Example(key=f"stories/{s}.json#c{c}", storyboard=BOARD, durations=[4.0])
+        for s in "abcd"
+        for c in (1, 2, 3)
+    ]
+    train, val = opt.split_by_story(examples, val_count=4)
+    stories = lambda part: {e.key.split("#")[0] for e in part}
+    assert len(val) == 6 and len(train) == 6
+    assert not stories(train) & stories(val)
 
 
 def test_guard_rejection_scores_zero_with_the_guard_text(tmp_path):
