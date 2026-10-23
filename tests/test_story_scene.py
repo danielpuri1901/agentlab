@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from agentlab import story_scene
+from agentlab.scene_code import check_scene_code, visual_direction
 
 GOLDEN_SCENE = Path(story_scene.__file__).with_name("scene_coder_example.py")
 GOLDEN_BOARD = Path(__file__).parent / "fixtures" / "storyboard_example.json"
@@ -365,3 +367,73 @@ def test_lagged_start_map_hands_each_arrow_whole_to_grow_arrow(tmp_path):
     )
 
     assert video.exists()
+
+
+def _board(beats):
+    return SimpleNamespace(
+        title="Low-Rank Adaptation",
+        beats=[SimpleNamespace(narration=n, on_screen_text=labels) for n, labels in beats],
+    )
+
+
+def test_card_scene_source_uses_each_beat_duration():
+    board = _board([("The weight matrix is frozen.", ["W0 frozen"]), ("Two small matrices learn the update.", [])])
+    source = story_scene.card_scene_source(board, [6.0, 1.0])
+    assert "def beat_1(self)" in source and "def beat_2(self)" in source
+    assert "self.card('Low-Rank Adaptation', ['W0 frozen'], 6.000)" in source
+    # No label: the first words of the narration stand in.
+    assert "['Two small matrices learn the update.']" in source and "1.000)" in source
+    assert visual_direction(source) == story_scene.CARD_VISUAL_DIRECTION
+    assert check_scene_code(source, 2) == []
+
+
+def test_card_scene_source_escapes_quotes():
+    board = _board([("It's a \"test\".", ["O'Brien's \"law\""])])
+    source = story_scene.card_scene_source(board, [3.0])
+    compile(source, "card.py", "exec")
+
+
+def test_card_label_marks_a_cut_narration():
+    board = _board([("One two three four five six seven eight nine ten.", [])])
+    source = story_scene.card_scene_source(board, [3.0])
+    assert "['One two three four five six seven eight...']" in source
+
+
+@pytest.mark.render
+def test_card_scene_renders_two_beats_and_writes_timing(tmp_path):
+    """The fallback card renders through the same seam as a model scene. A
+    1.0 s beat is shorter than the card's fades, so it records an overrun."""
+    import shutil
+
+    from agentlab import video_render
+
+    board = _board([("The weight matrix is frozen.", ["W0 frozen"]), ("Short beat.", [])])
+    durations = [3.0, 1.0]
+    scene_dir = tmp_path / "scene"
+    scene_dir.mkdir()
+    (scene_dir / "paper_story.py").write_text(
+        story_scene.card_scene_source(board, durations), encoding="utf-8"
+    )
+    shutil.copy(Path(story_scene.__file__), scene_dir / "story_scene.py")
+    timing_path = tmp_path / "beat_times.json"
+
+    video = video_render.render_scene_video(
+        scene_dir / "paper_story.py",
+        story_scene.SCENE_CLASS,
+        {
+            "storyboard": {"beats": [{"narration": b.narration} for b in board.beats]},
+            "durations": durations,
+            "subtitles": [b.narration for b in board.beats],
+        },
+        tmp_path / "media",
+        quality="l",
+        timeout_seconds=300,
+        extra_env={story_scene.TIMING_ENV: str(timing_path)},
+    )
+
+    assert video.exists()
+    timing = json.loads(timing_path.read_text(encoding="utf-8"))
+    assert [b["beat"] for b in timing["beats"]] == [1, 2]
+    assert timing["beats"][0]["end"] - timing["beats"][0]["start"] >= 3.0
+    assert timing["beats"][1]["overrun"] > 0
+    assert timing["layout_warnings"] == []
