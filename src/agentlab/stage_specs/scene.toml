@@ -1,0 +1,6 @@
+# Scene code: one Manim file per chapter. attempts is the per-lane cap.
+model = "anthropic/claude-opus-4-6"
+max_tokens = 32000
+timeout_seconds = 600
+attempts = 4
+effort = "high"

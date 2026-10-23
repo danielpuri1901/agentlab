@@ -1,0 +1,5 @@
+# Reviewer: stills plus storyboard text, never code. One call per video.
+model = "anthropic/claude-haiku-4-5"
+max_tokens = 300
+timeout_seconds = 60
+attempts = 1
