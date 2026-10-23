@@ -11,7 +11,10 @@ system prompt with production's user prompt (build_scene_code_prompt), then
 check_scene_code, one render, the timing check and the layout audit, all
 imported from scene_code.py and story_video.py so the score cannot drift from
 what the video job does. A stored story supplies the storyboard and the beat
-durations its narration had, so no storyboard or Polly call is made.
+durations its narration had, so no storyboard or Polly call is made. By
+default one rollout is one chapter, built the way the chapter lanes build it
+(chapters(), chapter_board() and a ChapterNote, as in story_video._compose);
+unit="video" scores whole storyboards instead.
 
 Score per rollout, by what production would have to do next:
     1.0   ships as is: rendered, valid timing, clean layout
@@ -50,6 +53,7 @@ from botocore.exceptions import ClientError
 
 from agentlab.scene_code import (
     SCENE_CODE_SYSTEM,
+    ChapterNote,
     build_scene_code_prompt,
     check_scene_code,
     extract_python_block,
@@ -63,7 +67,7 @@ from agentlab.story_video import (
     _TimingInvalid,
     _write_attempt,
 )
-from agentlab.storyboard import Storyboard
+from agentlab.storyboard import Storyboard, chapter_board, chapters
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +88,14 @@ _STAMP_RE = re.compile(r"(\d{8}T\d{6}Z)")
 
 @dataclass(frozen=True)
 class Example:
+    """A whole stored storyboard, or one chapter of it when `beats` is set:
+    zero-based indexes into the storyboard, and durations are the chapter's."""
+
     key: str
     storyboard: dict
     durations: list[float]
+    beats: tuple[int, ...] = ()
+    note: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +126,44 @@ def story_example(key: str, record: dict) -> Example | None:
     return Example(key=key, storyboard=board, durations=durations)
 
 
+def chapter_examples(example: Example) -> list[Example]:
+    """The chapters of a whole-storyboard example, built the way the chapter
+    lanes build them in story_video._compose."""
+    storyboard = Storyboard.model_validate(example.storyboard)
+    groups = chapters(storyboard)
+    return [
+        Example(
+            key=f"{example.key}#c{k}",
+            storyboard=example.storyboard,
+            durations=[example.durations[i] for i in beats],
+            beats=tuple(beats),
+            note={
+                "index": k,
+                "count": len(groups),
+                "first_beat": beats[0] + 1,
+                "last_beat": beats[-1] + 1,
+                "previous_visual": (
+                    storyboard.beats[beats[0] - 1].visual if beats[0] else None
+                ),
+            },
+        )
+        for k, beats in enumerate(groups, start=1)
+    ]
+
+
+def split_by_story(examples: list[Example], val_count: int) -> tuple[list, list]:
+    """Train and validation sets that share no storyboard, so the held-out
+    score never sees a chapter whose sibling chapters trained the prompt."""
+    stories: dict[str, list[Example]] = {}
+    for example in examples:
+        stories.setdefault(example.key.split("#")[0], []).append(example)
+    train: list[Example] = []
+    val: list[Example] = []
+    for chapters_of_story in stories.values():
+        (val if len(val) < val_count else train).extend(chapters_of_story)
+    return train, val
+
+
 def _key_stamp(key: str) -> str:
     match = _STAMP_RE.search(key)
     return match.group(1) if match else ""
@@ -142,7 +189,7 @@ def story_keys(table) -> list[str]:
 
 
 def load_examples(
-    table, s3_client, bucket: str, count: int, seed: int
+    table, s3_client, bucket: str, count: int, seed: int, unit: str = "chapter"
 ) -> list[Example]:
     """`count` stored stories drawn from the newest 2 * count valid ones and
     shuffled with `seed`. Only top-level stories/<key>.json records count, so
@@ -172,7 +219,7 @@ def load_examples(
             continue
         example = story_example(key, record)
         if example is not None:
-            pool.append(example)
+            pool += chapter_examples(example) if unit == "chapter" else [example]
     random.Random(seed).shuffle(pool)
     return pool[:count]
 
@@ -187,12 +234,16 @@ def first_attempt(
 ) -> Rollout:
     """One first attempt scored like production would treat it."""
     storyboard = Storyboard.model_validate(example.storyboard)
+    note = None
+    if example.beats:
+        storyboard = chapter_board(storyboard, list(example.beats))
+        note = ChapterNote(**example.note)
     messages = [
         {"role": "system", "content": system_prompt},
         {
             "role": "user",
             "content": build_scene_code_prompt(
-                storyboard, example.durations, None, None
+                storyboard, example.durations, None, None, chapter=note
             ),
         },
     ]
@@ -201,9 +252,13 @@ def first_attempt(
     except BudgetExceeded:
         raise
     except Exception as exc:  # noqa: BLE001 - a failed call scores like a rejected file
-        return Rollout(
-            REJECTED, f"The scene coder call failed: {_failure_detail(exc)}", ""
-        )
+        detail = _failure_detail(exc)
+        if "token limit" in detail:
+            detail += (
+                " The limit counts only the model's own output, its thinking plus"
+                " the file, never this system prompt, which is cached."
+            )
+        return Rollout(REJECTED, f"The scene coder call failed: {detail}", "")
     findings = check_scene_code(source, len(storyboard.beats))
     if findings:
         return Rollout(
@@ -289,8 +344,14 @@ class SceneCodeAdapter:
         if capture_traces:
             trajectories = [
                 {
-                    "title": example.storyboard.get("title", example.key),
-                    "beats": len(example.storyboard.get("beats", [])),
+                    "title": example.storyboard.get("title", example.key)
+                    + (
+                        f", chapter {example.note['index']} of {example.note['count']}"
+                        if example.note
+                        else ""
+                    ),
+                    "beats": len(example.beats)
+                    or len(example.storyboard.get("beats", [])),
                     "score": rollout.score,
                     "feedback": rollout.feedback,
                     "source": rollout.source,
@@ -363,18 +424,21 @@ def run(
     workers: int,
     seed: int,
     work_root: Path,
+    unit: str = "chapter",
 ) -> dict:
     """Run GEPA once and upload its results. Returns the summary.
     reflect_complete, when given, serves the reflection model's calls, so
     they can run at a different effort than the scene calls."""
     import gepa
 
-    examples = load_examples(table, s3_client, bucket, train_count + val_count, seed)
+    examples = load_examples(
+        table, s3_client, bucket, train_count + val_count, seed, unit
+    )
     if len(examples) < train_count + val_count:
         raise ValueError(
             f"only {len(examples)} usable stories, {train_count + val_count} needed"
         )
-    train, val = examples[:train_count], examples[train_count:]
+    train, val = split_by_story(examples, val_count)
     budget = Budget(budget_usd, usage)
     guarded = budget.guard(complete)
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -399,6 +463,7 @@ def run(
         "baseline_model": baseline_model,
         "train": [example.key for example in train],
         "val": [example.key for example in val],
+        "unit": unit,
         "budget_usd": budget_usd,
         "max_metric_calls": max_metric_calls,
     }

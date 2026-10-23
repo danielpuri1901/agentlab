@@ -297,6 +297,15 @@ def optimize_scene_code_command(
         3, help="Rollouts rendered at once, as many as the chapter lanes."
     ),
     seed: int = typer.Option(0, help="Seed for the example draw and for GEPA."),
+    unit: str = typer.Option(
+        "chapter",
+        help="chapter: one chapter per rollout, as the lanes run; video: whole storyboards.",
+    ),
+    baseline: bool = typer.Option(
+        True,
+        "--baseline/--no-baseline",
+        help="Score today's prompt on today's scene model before the search.",
+    ),
 ) -> None:
     """Search a better scene-code prompt with GEPA (optimize_scene_code.py).
     Writes results to S3 and pings Telegram. Changes nothing in production."""
@@ -346,7 +355,7 @@ def optimize_scene_code_command(
         reflect_complete=reflect_complete,
         scene_model=scene_model,
         reflection_model=reflection_model,
-        baseline_model=production_scene_model,
+        baseline_model=production_scene_model if baseline else None,
         train_count=train,
         val_count=val,
         max_metric_calls=max_metric_calls,
@@ -354,6 +363,7 @@ def optimize_scene_code_command(
         workers=workers,
         seed=seed,
         work_root=Path(tempfile.mkdtemp(prefix="gepa-scene-code-")),
+        unit=unit,
     )
     text = telegram_summary(summary)
     typer.echo(text)
