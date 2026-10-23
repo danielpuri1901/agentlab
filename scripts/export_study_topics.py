@@ -26,7 +26,7 @@ BACKLOG_KEY = "topics/backlog.json"
 FILE_CHARS = 12_000
 PACK_CHARS = 120_000
 TEXT_SUFFIXES = frozenset(
-    {".py", ".md", ".lean", ".js", ".json", ".toml", ".yml", ".yaml", ".sh", ".txt", ".html"}
+    {".py", ".md", ".lean", ".js", ".json", ".toml", ".yml", ".yaml", ".sh", ".txt", ".html", ".tf"}
 )
 # A topic row: | **1. Name** | what to study | where it appears |
 # Some guides escape the dot: **1\. Name**.
