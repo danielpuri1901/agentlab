@@ -298,3 +298,57 @@ def test_telegram_summary_names_the_baseline_and_the_result():
     )
     assert "opus-4-6: score 0.30" in text and "0.40 -> 0.70" in text and "1/2" in text
     assert "Nothing changed in production" in text
+
+
+def test_compare_scores_both_prompts_on_the_same_unseen_examples(tmp_path, monkeypatch):
+    pytest.importorskip("gepa")
+    record = json.dumps({"storyboard": BOARD, "timing": TIMING}).encode()
+    keys = [
+        "stories/built-20261023T100000Z-a.json",
+        "stories/built-20261022T100000Z-b.json",
+    ]
+    puts = {}
+
+    class FakeTable:
+        def scan(self, **kwargs):
+            return {"Items": [{"story_key": k} for k in keys]}
+
+    class FakeS3:
+        def get_object(self, Bucket, Key):
+            return {"Body": SimpleNamespace(read=lambda: record)}
+
+        def put_object(self, Bucket, Key, Body):
+            puts[Key] = Body
+
+    seen = []
+
+    def fake_run(self, example, prompt):
+        seen.append((example.key, prompt == "CANDIDATE"))
+        if prompt != "CANDIDATE":
+            return opt.Rollout(0.75, "layout", "src")
+        return opt.Rollout(0.5 if example.key.endswith("#c4") else 1.0, "clean", "src")
+
+    monkeypatch.setattr(opt.SceneCodeAdapter, "_run", fake_run)
+    summary = opt.compare(
+        FakeTable(),
+        FakeS3(),
+        "bucket",
+        lambda *a, **k: "",
+        [],
+        scene_model="m",
+        candidate_prompt="CANDIDATE",
+        val_count=4,
+        budget_usd=5.0,
+        workers=2,
+        seed=0,
+        work_root=tmp_path,
+        exclude_stories=frozenset({keys[0]}),
+    )
+    assert all(not k.startswith(keys[0]) for k in summary["examples"])  # excluded story
+    assert sorted(k for k, cand in seen if cand) == sorted(
+        k for k, cand in seen if not cand
+    )
+    assert summary["today_score"] == 0.75 and summary["candidate_clean"] == 3
+    assert (summary["candidate_better"], summary["candidate_worse"]) == (3, 1)
+    assert any(k.endswith("candidate_prompt.txt") for k in puts)
+    assert "worse on 1" in opt.compare_summary(summary)

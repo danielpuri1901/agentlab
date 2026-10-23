@@ -306,6 +306,14 @@ def optimize_scene_code_command(
         "--baseline/--no-baseline",
         help="Score today's prompt on today's scene model before the search.",
     ),
+    compare_prompt_key: str = typer.Option(
+        "",
+        help="S3 key of a candidate prompt: score it and today's prompt on the same unseen examples instead of searching.",
+    ),
+    exclude_run: str = typer.Option(
+        "",
+        help="GEPA run id whose training and validation stories the check must not use.",
+    ),
 ) -> None:
     """Search a better scene-code prompt with GEPA (optimize_scene_code.py).
     Writes results to S3 and pings Telegram. Changes nothing in production."""
@@ -346,6 +354,40 @@ def optimize_scene_code_command(
 
     s3_client = boto3.client("s3")
     table = boto3.resource("dynamodb").Table(state_table)
+    if compare_prompt_key:
+        from agentlab.optimize_scene_code import (
+            RESULTS_PREFIX,
+            compare,
+            compare_summary,
+        )
+
+        def read(key):
+            return s3_client.get_object(Bucket=results_bucket, Key=key)["Body"].read()
+
+        exclude = frozenset()
+        if exclude_run:
+            seen = json.loads(read(f"{RESULTS_PREFIX}{exclude_run}/summary.json"))
+            exclude = frozenset(k.split("#")[0] for k in seen["train"] + seen["val"])
+        result = compare(
+            table,
+            s3_client,
+            results_bucket,
+            complete,
+            usage,
+            scene_model=scene_model,
+            candidate_prompt=read(compare_prompt_key).decode("utf-8"),
+            val_count=val,
+            budget_usd=budget_usd,
+            workers=workers,
+            seed=seed,
+            work_root=Path(tempfile.mkdtemp(prefix="gepa-compare-")),
+            unit=unit,
+            exclude_stories=exclude,
+        )
+        text = compare_summary(result)
+        typer.echo(text)
+        notify(table, boto3.client("ssm"), text)
+        return
     summary = run(
         table,
         s3_client,

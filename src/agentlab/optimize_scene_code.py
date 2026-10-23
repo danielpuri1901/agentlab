@@ -191,7 +191,13 @@ def story_keys(table) -> list[str]:
 
 
 def load_examples(
-    table, s3_client, bucket: str, count: int, seed: int, unit: str = "chapter"
+    table,
+    s3_client,
+    bucket: str,
+    count: int,
+    seed: int,
+    unit: str = "chapter",
+    exclude: frozenset[str] = frozenset(),
 ) -> list[Example]:
     """`count` stored stories drawn from the newest 2 * count valid ones and
     shuffled with `seed`. Only top-level stories/<key>.json records count, so
@@ -213,6 +219,8 @@ def load_examples(
     for key in keys:
         if len(pool) >= 2 * count:
             break
+        if key in exclude:
+            continue
         try:
             body = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read()
             record = json.loads(body)
@@ -581,3 +589,80 @@ def telegram_summary(summary: dict) -> str:
         "Nothing changed in production. Adopting the prompt is a PR.",
     ]
     return "\n".join(lines)
+
+
+def compare(
+    table,
+    s3_client,
+    bucket: str,
+    complete: Callable[..., str],
+    usage: list,
+    *,
+    scene_model: str,
+    candidate_prompt: str,
+    val_count: int,
+    budget_usd: float,
+    workers: int,
+    seed: int,
+    work_root: Path,
+    unit: str = "chapter",
+    exclude_stories: frozenset[str] = frozenset(),
+) -> dict:
+    """Score today's prompt and a candidate on the same held-out examples, no
+    search: the check before a GEPA prompt is adopted. Both prompts meet the
+    same examples, so the difference is paired. exclude_stories keeps out
+    the stories a search trained or selected on."""
+    examples = load_examples(
+        table, s3_client, bucket, val_count, seed, unit, exclude=exclude_stories
+    )
+    if len(examples) < val_count:
+        raise ValueError(f"only {len(examples)} usable examples, {val_count} needed")
+    budget = Budget(budget_usd, usage)
+    adapter = SceneCodeAdapter(
+        budget.guard(complete), scene_model, Path(work_root), workers
+    )
+    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    today = adapter.evaluate(examples, {COMPONENT: SCENE_CODE_SYSTEM}).scores
+    candidate = adapter.evaluate(examples, {COMPONENT: candidate_prompt}).scores
+    pairs = list(zip(today, candidate, strict=True))
+    summary = {
+        "run_id": f"compare-{run_id}",
+        "scene_model": scene_model,
+        "unit": unit,
+        "examples": [example.key for example in examples],
+        "excluded_stories": len(exclude_stories),
+        "today_score": sum(today) / len(today),
+        "candidate_score": sum(candidate) / len(candidate),
+        "today_clean": sum(1 for s in today if s >= SHIPS),
+        "candidate_clean": sum(1 for s in candidate if s >= SHIPS),
+        "candidate_better": sum(1 for t, c in pairs if c > t),
+        "candidate_worse": sum(1 for t, c in pairs if c < t),
+        "same": sum(1 for t, c in pairs if c == t),
+        "pairs": pairs,
+        "estimated_cost_usd": round(budget.spent(), 2),
+    }
+    prefix = f"{RESULTS_PREFIX}compare-{run_id}/"
+    for name, text in {
+        "summary.json": json.dumps(summary, indent=1),
+        "candidate_prompt.txt": candidate_prompt,
+    }.items():
+        s3_client.put_object(
+            Bucket=bucket, Key=prefix + name, Body=text.encode("utf-8")
+        )
+    summary["results"] = f"s3://{bucket}/{prefix}"
+    return summary
+
+
+def compare_summary(summary: dict) -> str:
+    n = len(summary["examples"])
+    return "\n".join(
+        [
+            f"Prompt check {summary['run_id']} on {n} unseen {summary['unit']}s ({summary['scene_model']})",
+            f"Today's prompt: {summary['today_score']:.2f}, clean first renders {summary['today_clean']}/{n}",
+            f"GEPA candidate: {summary['candidate_score']:.2f}, clean first renders {summary['candidate_clean']}/{n}",
+            f"Candidate better on {summary['candidate_better']}, worse on {summary['candidate_worse']}, same on {summary['same']}",
+            f"Estimated cost: ${summary['estimated_cost_usd']:.2f}",
+            f"Prompts and scores: {summary['results']}",
+            "Nothing changed in production. Adopting the candidate is a PR.",
+        ]
+    )
