@@ -15,7 +15,11 @@ durations its narration had, so no storyboard or Polly call is made.
 
 Score per rollout, by what production would have to do next:
     1.0   ships as is: rendered, valid timing, clean layout
-    0.6   rendered with layout warnings: production spends a layout round
+    0.5 to 1.0  rendered with layout warnings, graded by the share of beats
+          that are clean (1 - warned beats / beats); production spends a
+          layout round. A flat score here would hide progress: on 2026-10-23
+          the median monolithic video carried 9 warned beats of 12, and only
+          5 of 55 had none.
     0.25  passed the guard, then the render or its timing failed
     0.0   the guard rejected the file, or the coder call failed
 The feedback is the text production feeds its fix round, so GEPA's
@@ -65,7 +69,7 @@ COMPONENT = "scene_code_system"
 STORIES_PREFIX = "stories/"
 RESULTS_PREFIX = "checkpoints/gepa-scene-code/"
 SHIPS = 1.0
-LAYOUT_ROUND = 0.6
+LAYOUT_FLOOR = 0.5
 RENDER_FAILED = 0.25
 REJECTED = 0.0
 SOURCE_EXCERPT_CHARS = 4000
@@ -203,8 +207,11 @@ def first_attempt(
         return Rollout(RENDER_FAILED, f"The render timing is invalid: {error}.", source)
     warnings = timing.get("layout_warnings") or []
     if warnings:
+        clean_share = 1 - min(len(warnings), len(storyboard.beats)) / len(
+            storyboard.beats
+        )
         return Rollout(
-            LAYOUT_ROUND,
+            LAYOUT_FLOOR + (SHIPS - LAYOUT_FLOOR) * clean_share,
             "The video rendered, but the layout has problems at the end of these "
             "beats:\n- " + "\n- ".join(warnings),
             source,

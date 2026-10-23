@@ -94,8 +94,13 @@ def test_guard_rejection_scores_zero_with_the_guard_text(tmp_path):
             "The render did not finish",
         ),
         (
-            {"beats": [], "layout_warnings": ["beat 2 layout: 'x' runs off"]},
-            opt.LAYOUT_ROUND,
+            {"beats": [], "layout_warnings": ["beat 2 layout: 'x' runs off"] * 3},
+            0.75,
+            "The video rendered, but the layout",
+        ),
+        (
+            {"beats": [], "layout_warnings": ["beat 2 layout: 'x' runs off"] * 6},
+            opt.LAYOUT_FLOOR,
             "The video rendered, but the layout",
         ),
         ({"beats": [], "layout_warnings": []}, opt.SHIPS, "The first attempt rendered"),
@@ -171,7 +176,7 @@ def test_reflective_dataset_carries_the_file_and_the_feedback(tmp_path):
     def attempt(example, prompt, complete, model, work_dir):
         calls.append(prompt)
         return opt.Rollout(
-            opt.LAYOUT_ROUND, "beat 4 layout: off the bottom edge", "src" * 3000
+            opt.LAYOUT_FLOOR, "beat 4 layout: off the bottom edge", "src" * 3000
         )
 
     adapter = opt.SceneCodeAdapter(
@@ -181,7 +186,7 @@ def test_reflective_dataset_carries_the_file_and_the_feedback(tmp_path):
         [_example(), _example()], {opt.COMPONENT: "P"}, capture_traces=True
     )
     assert isinstance(batch, gepa.EvaluationBatch)
-    assert batch.scores == [opt.LAYOUT_ROUND] * 2 and calls == ["P", "P"]
+    assert batch.scores == [opt.LAYOUT_FLOOR] * 2 and calls == ["P", "P"]
     rows = adapter.make_reflective_dataset({opt.COMPONENT: "P"}, batch, [opt.COMPONENT])
     row = rows[opt.COMPONENT][0]
     assert len(row["Generated Outputs"]) == opt.SOURCE_EXCERPT_CHARS
