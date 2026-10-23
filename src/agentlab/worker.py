@@ -85,6 +85,7 @@ worker_app = typer.Typer()
 def _worker_setup() -> None:
     normalize_api_key_env()
 
+
 _ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5})")
 EXPLAIN_TRACKS = ("core", "classic", "novel", "built")
 BUILT_VIDEOS_PER_DAY = 2
@@ -269,6 +270,92 @@ def consolidate_command(
     typer.echo(result["text"])
     if result.get("candidate"):
         typer.echo("\n--- candidate profile ---\n" + result["candidate"])
+
+
+@worker_app.command("optimize-scene-code")
+def optimize_scene_code_command(
+    scene_model: str = typer.Option(
+        "anthropic/claude-opus-5-5",
+        help="Model that writes the scene files in the search.",
+    ),
+    scene_effort: str = typer.Option(
+        "medium",
+        help="Output effort for the scene model. Opus 5.5 at high used the full 32k "
+        "output budget on every scene.",
+    ),
+    train: int = typer.Option(24, help="Stored storyboards GEPA learns from."),
+    val: int = typer.Option(
+        12, help="Held-out storyboards every kept prompt is scored on."
+    ),
+    max_metric_calls: int = typer.Option(
+        60, help="Rollout cap. One rollout is one scene file written and rendered."
+    ),
+    budget_usd: float = typer.Option(
+        28.0, help="Estimated spend at which GEPA stops between iterations."
+    ),
+    workers: int = typer.Option(
+        3, help="Rollouts rendered at once, as many as the chapter lanes."
+    ),
+    seed: int = typer.Option(0, help="Seed for the example draw and for GEPA."),
+) -> None:
+    """Search a better scene-code prompt with GEPA (optimize_scene_code.py).
+    Writes results to S3 and pings Telegram. Changes nothing in production."""
+    from agentlab.optimize_scene_code import run, telegram_summary
+    from agentlab.story_video import MODEL_CALL_TIMEOUT
+
+    state_table = _require_env("STATE_TABLE")
+    results_bucket = _require_env("RESULTS_BUCKET")
+    reflection_model, production_scene_model = _story_models()
+    production_effort = setting("storyboard", "effort", "STORY_EFFORT")
+    usage: list[ModelCallUsage] = []
+
+    def completion(model, messages, effort, max_tokens):
+        response = _run_completion(
+            model,
+            messages,
+            max_tokens=max_tokens,
+            # The scene calls get the story path's timeout, not the paper path's.
+            timeout=MODEL_CALL_TIMEOUT,
+            stage="gepa",
+            usage_sink=usage,
+            extra_fields={"output_config": {"effort": effort}} if effort else None,
+        )
+        choice = response.choices[0]
+        if getattr(choice, "finish_reason", None) in {"length", "max_tokens"}:
+            raise ValueError(
+                "model output hit the token limit; return a shorter complete response"
+            )
+        return choice.message.content
+
+    def complete(model, messages, max_tokens=LONG_COMPLETION_MAX_TOKENS):
+        # The baseline runs the production model at the effort production uses.
+        effort = scene_effort if model == scene_model else production_effort
+        return completion(model, messages, effort, max_tokens)
+
+    def reflect_complete(model, messages, max_tokens=LONG_COMPLETION_MAX_TOKENS):
+        return completion(model, messages, "high", max_tokens)
+
+    s3_client = boto3.client("s3")
+    summary = run(
+        s3_client,
+        results_bucket,
+        complete,
+        usage,
+        reflect_complete=reflect_complete,
+        scene_model=scene_model,
+        reflection_model=reflection_model,
+        baseline_model=production_scene_model,
+        train_count=train,
+        val_count=val,
+        max_metric_calls=max_metric_calls,
+        budget_usd=budget_usd,
+        workers=workers,
+        seed=seed,
+        work_root=Path(tempfile.mkdtemp(prefix="gepa-scene-code-")),
+    )
+    text = telegram_summary(summary)
+    typer.echo(text)
+    notify(boto3.resource("dynamodb").Table(state_table), boto3.client("ssm"), text)
 
 
 @worker_app.command("run-arm")
@@ -613,7 +700,12 @@ def _complete_review(
 
 
 def _chapter_lanes_on() -> bool:
-    return os.environ.get("CHAPTER_LANES", "").strip().lower() in {"1", "true", "on", "yes"}
+    return os.environ.get("CHAPTER_LANES", "").strip().lower() in {
+        "1",
+        "true",
+        "on",
+        "yes",
+    }
 
 
 def _reviewer_mode() -> str:
@@ -651,7 +743,9 @@ def _warn_once(table, ssm_client, marker_id: str, size: int, text: str) -> bool:
     """Ping once per corpus size. The marker records the size it warned
     about, so a bigger corpus arms the warning again without a reset."""
     try:
-        item = table.get_item(Key={"experiment_id": marker_id, "sk": "marker"}).get("Item")
+        item = table.get_item(Key={"experiment_id": marker_id, "sk": "marker"}).get(
+            "Item"
+        )
         if item and int(item.get("corpus_size", 0)) >= size:
             return False
         table.put_item(
@@ -992,7 +1086,11 @@ def _run_explain_track(
     lesson = track == "built"
     study = lesson and candidate.get("kind") == "study"
     read_system = (
-        STUDY_READ_SYSTEM if study else LESSON_READ_SYSTEM if lesson else DEEP_READ_SYSTEM
+        STUDY_READ_SYSTEM
+        if study
+        else LESSON_READ_SYSTEM
+        if lesson
+        else DEEP_READ_SYSTEM
     )
     read_fingerprint = fingerprint("deep_read", deep_read_model, url, read_system)
     saved_read = checkpoints.load_parsed(
