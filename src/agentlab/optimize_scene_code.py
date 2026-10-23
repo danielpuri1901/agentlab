@@ -151,7 +151,9 @@ def load_examples(
         {
             key
             for key in story_keys(table)
-            if key.startswith(STORIES_PREFIX)
+            # Some ledger items store story_key as NULL.
+            if isinstance(key, str)
+            and key.startswith(STORIES_PREFIX)
             and key.endswith(".json")
             and "/" not in key[len(STORIES_PREFIX) :]
         },
