@@ -60,7 +60,7 @@ def test_load_examples_takes_story_keys_from_the_ledger_not_a_bucket_listing():
     ]
     pages = [
         {"Items": [{"story_key": k} for k in keys[:2]], "LastEvaluatedKey": {"k": 1}},
-        {"Items": [{"story_key": k} for k in keys[2:]]},
+        {"Items": [{"story_key": k} for k in keys[2:]] + [{"story_key": None}]},
     ]
     scans = []
 
