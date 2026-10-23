@@ -123,6 +123,11 @@ def test_a_chapter_rollout_prompts_checks_and_renders_only_its_beats(
     assert rollout.score == opt.SHIPS
     assert "<chapter>" in seen["prompt"] and seen["beats"] == 2
     assert seen["spec"]["subtitles"] == ["Narration 3.", "Narration 4."]
+    # story_scene's base class reads spec["storyboard"]; production's lane spec has it.
+    assert [b["narration"] for b in seen["spec"]["storyboard"]["beats"]] == [
+        "Narration 3.",
+        "Narration 4.",
+    ]
     assert seen["spec"]["durations"] == [4.0, 4.0]
 
 

@@ -210,6 +210,17 @@ def _deadline_bound_completion(complete, started: float, deadline_seconds: int):
     return bounded
 
 
+def render_spec(board: Storyboard, durations: list[float]) -> dict:
+    """The spec a scene file renders with: story_scene's base class reads the
+    storyboard, the beat durations and the subtitles. The GEPA optimizer
+    renders with the same spec, so the two cannot drift."""
+    return {
+        "storyboard": board.model_dump(),
+        "durations": durations,
+        "subtitles": [beat.narration for beat in board.beats],
+    }
+
+
 def _render(scene_file: Path, spec: dict, timeout: int) -> tuple[Path, dict]:
     timing_path = scene_file.parent / "beat_times.json"
     video = render_scene_video(
@@ -479,11 +490,7 @@ def _build_lane(
     StoryFailed as before.
     """
     k = chapter.index
-    spec = {
-        "storyboard": chapter.board.model_dump(),
-        "durations": chapter.durations,
-        "subtitles": [beat.narration for beat in chapter.board.beats],
-    }
+    spec = render_spec(chapter.board, chapter.durations)
     if fallback_card:
         scene_dir = work_dir / f"chapter_{k}" / "scene"
         stage_name = f"scene-{k}"
