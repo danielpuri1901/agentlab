@@ -336,7 +336,9 @@ def optimize_scene_code_command(
         return completion(model, messages, "high", max_tokens)
 
     s3_client = boto3.client("s3")
+    table = boto3.resource("dynamodb").Table(state_table)
     summary = run(
+        table,
         s3_client,
         results_bucket,
         complete,
@@ -355,7 +357,7 @@ def optimize_scene_code_command(
     )
     text = telegram_summary(summary)
     typer.echo(text)
-    notify(boto3.resource("dynamodb").Table(state_table), boto3.client("ssm"), text)
+    notify(table, boto3.client("ssm"), text)
 
 
 @worker_app.command("run-arm")
