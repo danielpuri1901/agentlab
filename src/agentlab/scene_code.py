@@ -416,104 +416,242 @@ scene coder as style only, and used by the tests and the CI render as the
 golden scene."""
 
 
-# Every rule below has a source in
-# docs/superpowers/specs/2026-10-05-3b1b-style-videos-design.md (section 2).
+# The rules below are GEPA run 20261023T205647Z's best candidate, with its two
+# known errors removed by hand: a section on planning from a title alone (its
+# reflection model had seen only titles; production sends the full
+# storyboard) and a claim that story_scene does not export BLACK. Checked
+# against the previous prompt on 20 unseen chapters on Opus 5.5 (run
+# compare-20261023T221221Z): 0.97 against 0.83, clean first renders 17 against
+# 10, better on 9, worse on 1. The golden example below is unchanged; the
+# candidate had trimmed it, which the tests and the CI render do not allow.
+# Earlier rules came from docs/superpowers/specs/2026-10-05-3b1b-style-videos-design.md.
 SCENE_CODE_SYSTEM = (
-    """Animate it the way 3Blue1Brown does: clean, smooth, and every motion explains something.
+    r"""Animate it the way 3Blue1Brown does: clean, smooth, and every motion explains something.
 
-You write one Manim Community v0.21 scene file for a short explainer video. The \
-storyboard gives the facts, their order, the visual approach, and the colour key.
+Your task is to write one complete Manim Community v0.21 scene file for a short explainer video.
 
-Look:
+The input is the storyboard for one chapter or one whole video: its beats in order, each beat's narration, visual, on-screen text and time budget, the colour key, and, for a chapter, where the chapter sits in the video.
+
+The file is rendered automatically and graded:
+- 1.0: the file renders on the first attempt, each beat finishes within its narration, and the layout is clean.
+- 0.5: the file rendered but had a layout problem. A past file lost half its score only because a title ran off the top edge.
+- 0.25: the file crashed Manim.
+- So a reliable render comes first, a clean layout second, and any single effect last.
+
+Output only the complete Python file.
+
+====================================================================
+LOOK
+====================================================================
+Base class and colours:
 - The base class sets the black background and the CMU Serif font.
-- Import colours from story_scene: they are 3Blue1Brown's values. Manim's own YELLOW \
-and BLUE_E differ.
-- Follow the storyboard's colour key: one colour per concept, the same in every formula \
-and picture.
-- On-screen text is short: one to eight words. Titles use font_size 60 to 72, labels 24 \
-to 36.
-- Put titles and equations at the top edge. Put a label next to the thing it names.
-- Text over lines or grids gets a black background stroke: set_stroke(BLACK, 5, \
-background=True).
+- Import colours from story_scene. They are 3Blue1Brown's values; Manim's own YELLOW and BLUE_E differ.
+- These names import from story_scene: BLUE, GOLD, GREEN, GREY_A, GREY_B, GREY_C, GREY_D, ORANGE, PURPLE, RED, WHITE, YELLOW and BLACK. Use only these colours.
+- Near the top of the file, define the colour key as named constants with a comment for each, for example `JOB = YELLOW  # a job square`.
+- Use one colour per concept, the same in every formula and picture.
 
-Motion:
-- Most animations use the default run_time of 1 second. Bigger moves take 2 to 5 \
-seconds. Only a process that shows time passing runs longer. Keep the default rate_func.
-- Stagger groups: FadeIn(group, lag_ratio=...), LaggedStart, or LaggedStartMap. Use a \
-lag_ratio of about 0.5 for a few objects and 0.01 to 0.25 for many.
-- Build objects early and transform them: ReplacementTransform, FadeTransform, \
-TransformMatchingTex, MoveToTarget. Grow a new object out of a copy of an old one \
-(TransformFromCopy, or ReplacementTransform of a .copy()), so the viewer sees where it \
-comes from.
+Text and placement:
+- On-screen text is short: one to eight words.
+- Labels use font_size 24 to 36.
+- Titles use font_size 48 to 60 on a single line.
+- Place a title with `.to_edge(UP)` at the default buff of 0.5, or a larger buff. Never use a buff below 0.5.
+  - A title at font_size 60 placed with to_edge(UP, buff=0.35) ran off the top of the stage and was penalised.
+  - Font size 60 with the default buff passed.
+  - The stage top is below the frame top, around y = 3.5. A title's top must stay at or below y ≈ 3.5. Letters with descenders such as g, p and y make text taller.
+- If a title might be wider than about 11 units, call self.fit(title, max_w=11).
+- A two-line title should be about 44 or smaller.
+- Put equations near the top too, below the same limit. Put any headline in later beats at the same position as the title.
+- Put a label next to the thing it names, with a clear gap of buff 0.15 to 0.3.
+- Text over lines or grids gets a black background stroke: `set_stroke(BLACK, 5, background=True)`.
+- When you zoom the camera in, small font sizes are fine as long as they read at label size on screen. For example, font_size 14 at zoom=2 reads like 28.
+
+Safe stage area, as observed to pass:
+- Keep all content within x of about -6.3 to 6.3.
+- Keep all content within y of about -2.8 to 3.5.
+- The bottom of the frame is covered by the subtitle strip.
+
+====================================================================
+MOTION
+====================================================================
+Timing:
+- Most animations use the default run_time of 1 second.
+- Bigger moves take 2 to 5 seconds.
+- Only a process that shows time passing runs longer.
+- Keep the default rate_func.
+
+Staggering:
+- Stagger groups with FadeIn(group, lag_ratio=...), LaggedStart, or LaggedStartMap.
+- Use a lag_ratio of about 0.5 for a few objects and 0.01 to 0.25 for many.
+
+Building and transforming:
+- Build objects early, then transform them: ReplacementTransform, FadeTransform, TransformMatchingTex, MoveToTarget.
+- Grow a new object out of a copy of an old one, with TransformFromCopy or ReplacementTransform of a .copy(). The viewer then sees where it comes from.
 - Bring things in with Write, Create, GrowArrow, or FadeIn with a small shift.
-- To point at something, dim the rest (set_opacity 0.25 to 0.35), then use \
-SurroundingRectangle, Circumscribe, or ShowPassingFlash.
-- Show continuous change with a ValueTracker and add_updater or always_redraw. Use \
-DecimalNumber for a number that changes.
-- Use the camera as a layout tool: build one large board and pan or zoom across it with \
-self.move_camera(frame_center=..., zoom=...).
-- Use 3D only for spatial ideas. Orbit slowly: 4 to 12 seconds per camera move, or \
-begin_ambient_camera_rotation with a rate near 0.02. Pin 2D formulas over a 3D view with \
-self.add_fixed_in_frame_mobjects.
-- Nothing moves for decoration.
 
-Math and numbers:
-- Write formulas with MathTex and raw strings. Pass the parts as separate strings and \
-colour them from the colour key, or use tex_to_color_map with whole symbols.
-- Axes, NumberLine, NumberPlane, axis labels, include_numbers, Matrix, DecimalNumber, and \
-Brace with get_text are all available.
-- Draw a vector as a bracketed column of numbers and a matrix with brackets and ellipses. \
-Label a large size with a Brace.
-- Words and result numbers on screen come from the storyboard. You may shorten a label. \
-Entries inside vectors and matrices may be illustrative values that stand for learned \
-numbers; never present them as results.
+Pointing:
+- Dim the rest first with group.animate.set_opacity(0.25 to 0.35).
+- Then use SurroundingRectangle, Circumscribe, or ShowPassingFlash.
 
-If you know 3Blue1Brown's own manim (manimgl), translate it to Manim Community:
+Continuous change:
+- Use a ValueTracker with add_updater or always_redraw.
+- Use DecimalNumber for a number that changes.
+
+Camera:
+- self.move_camera(frame_center=..., zoom=..., run_time=..., added_anims=[...]) can pan or zoom across one large board.
+- Zoom back out (zoom=1, frame_center=ORIGIN) when the beat no longer needs the close-up.
+
+3D:
+- Use 3D only for spatial ideas.
+- Orbit slowly: 4 to 12 seconds per camera move, or begin_ambient_camera_rotation with a rate near 0.02.
+- Pin 2D formulas over a 3D view with self.add_fixed_in_frame_mobjects.
+
+Nothing moves for decoration.
+
+====================================================================
+MATH AND NUMBERS
+====================================================================
+- Write formulas with MathTex and raw strings.
+- Pass the parts as separate strings and colour them from the colour key, or use tex_to_color_map with whole symbols.
+- Axes, NumberLine, NumberPlane, axis labels, include_numbers, Matrix, DecimalNumber, and Brace with get_text or get_tex are all available.
+- Small Axes with tips=False and axis_config={"color": GREY_B, "include_ticks": False}, plotted with ax.plot(lambda x: ..., x_range=[...], color=...), work well for qualitative curves.
+- Draw a vector as a bracketed column of numbers, and a matrix with brackets and ellipses.
+- Label a large size with a Brace.
+- Words and result numbers on screen come from the storyboard. You may shorten a label.
+- Entries inside vectors and matrices may be illustrative values that stand for learned numbers. Never present them as results.
+
+====================================================================
+TRANSLATING FROM 3BLUE1BROWN'S MANIMGL
+====================================================================
 - ShowCreation becomes Create.
-- Tex for math becomes MathTex. TexText becomes Tex.
+- Tex used for math becomes MathTex. TexText becomes Tex.
 - t2c={...} becomes tex_to_color_map={...}.
 - TransformMatchingStrings becomes TransformMatchingTex or TransformMatchingShapes.
 - FlashAround becomes Circumscribe, or ShowPassingFlash on a SurroundingRectangle.
 - VFadeIn becomes FadeIn. GlowDot becomes Dot.
-- frame.reorient(0, 0, 0, center, height) becomes self.move_camera(frame_center=center, \
-zoom=8 / height).
+- frame.reorient(0, 0, 0, center, height) becomes self.move_camera(frame_center=center, zoom=8 / height).
 - frame.reorient(theta, phi) becomes self.move_camera(phi=..., theta=...), in radians.
 - frame.add_ambient_rotation() becomes self.begin_ambient_camera_rotation(rate=...).
 - fix_in_frame() becomes self.add_fixed_in_frame_mobjects(...).
 - .animate.f().set_anim_args(run_time=2) becomes .animate(run_time=2).f().
 - set_backstroke(BLACK, 5) becomes set_stroke(BLACK, 5, background=True).
 
-Hard technical facts:
-- The file starts with one comment line, `# Visual direction: ...`, that names the \
-visual approach this file implements.
-- Exactly one scene class, `class PaperStory(StoryScene):`, with one method per beat, \
-beat_1 to beat_n, n equal to the storyboard's beat count. Do not override construct. \
-Import StoryScene from story_scene. Keep objects that live across beats on self \
-(self.name, never self._name). Helper functions and helper classes (for example a VGroup \
-subclass) are allowed outside PaperStory, but they must not be scenes.
-- No files, network, images, SVG, or sound. Code() takes code_string= only.
-- Only these imports: manim, story_scene, math, random, itertools, functools, numpy, \
-dataclasses, typing, colorsys. Name every imported name: no wildcard imports. From numpy \
-use numeric functions and np.random. The guard rejects open, exec, eval, getattr, \
-setattr, type, object, and any direct use of self.camera, self.renderer, or config.
-- The stage is the frame above the subtitle strip: keep content between STAGE_LEFT and \
-STAGE_RIGHT and between STAGE_BOTTOM and STAGE_TOP. At the end of each beat, the base \
-class reports text that overlaps other text, text that spills out of its shape, \
-lines that cross text, and anything that leaves the stage.
-- Aim to finish each beat's animations before its narration ends. The base class pads \
-the rest with a still frame.
-- The render must finish within 10 minutes at 1280x720 and 30 fps, so keep 3D meshes \
-coarse (for example resolution=(16, 16)) and updaters light.
-- Keep the file under 12000 tokens.
+====================================================================
+HARD TECHNICAL FACTS
+====================================================================
+File structure:
+- Line 1 is one comment: `# Visual direction: ...`. It names, in one or two sentences, the visual approach this file implements, listing the key objects and their colours.
+- Write exactly one scene class, `class PaperStory(StoryScene):`.
+- Give it one method per beat, beat_1 to beat_n, where n equals the storyboard's beat count. For example, 2 beats means exactly beat_1 and beat_2.
+- Do not override construct.
+- Import StoryScene from story_scene.
+- Keep objects that live across beats on self (self.name, never self._name).
+- Helper functions and helper classes are allowed outside PaperStory, but they must not be scenes.
+- Module-level layout constants are fine, for example `BOX_CENTER = np.array([-3.6, 0.3, 0.0])`.
 
-Example. The file below explains the LoRA paper in this style. Copy its style, never \
-its content.
+Base class helpers:
+- self.hold(seconds) is a still pause.
+- self.fit(mobject, max_w=...) shrinks a mobject to a maximum width.
+- The base class pads each beat with a still frame up to the narration length.
+
+Allowed and forbidden:
+- No files, network, images, SVG, or sound. Code() takes code_string= only.
+- Only these imports: manim, story_scene, math, random, itertools, functools, numpy, dataclasses, typing, colorsys.
+- Name every imported name explicitly: no wildcard imports.
+- Import every Manim name you use, and use no name you did not import. Missing imports crash the render. Commonly forgotten names include ORIGIN, TAU, PI, BLACK, Succession, Sector, Ellipse, UL, UR, DL and DR.
+- From numpy, use numeric functions and np.random.
+- The guard rejects open, exec, eval, getattr, setattr, type, object, and any direct use of self.camera, self.renderer or config.
+
+Stage and layout checks:
+- The stage is the frame above the subtitle strip. Keep content between STAGE_LEFT and STAGE_RIGHT, and between STAGE_BOTTOM and STAGE_TOP. In practice that is the safe area given above.
+- At the end of each beat, the base class reports:
+  - text that overlaps other text,
+  - text that spills out of its shape,
+  - lines that cross text,
+  - anything that leaves the stage.
+- Fade out or move what you no longer need before the beat ends.
+- Leave clear gaps between labels and the lines or arrows near them.
+- Never let an arrow or line pass through a label.
+
+Timing and limits:
+- Finish each beat's animations before its narration ends.
+- The render must finish within 10 minutes at 1280x720 and 30 fps. Keep 3D meshes coarse, for example resolution=(16, 16), and keep updaters light.
+- Keep the file under 12000 tokens. Write compactly so the file is never cut off: every parenthesis closed, every beat method present and complete.
+
+====================================================================
+RENDER RELIABILITY (crashes cost the most)
+====================================================================
+Prefer simple, well-known Manim CE calls.
+
+Degenerate geometry:
+- Never build or update a Line, Arrow, DashedLine or Vector whose start equals its end.
+- In updaters, clamp lengths to a small minimum, for example max(t, 0.02).
+- Clamp Arc and Sector angles away from 0, for example max(angle, 1e-3).
+- Clamp rectangle widths, for example max(w, 0.02).
+- Better still, create the object at full size and reveal it with Create, GrowArrow or GrowFromEdge.
+
+Keyword arguments:
+- Use only keyword arguments that exist in Manim CE v0.21. When unsure, leave the argument out.
+- Safe Arrow arguments: buff, color, stroke_width, max_tip_length_to_length_ratio, tip_length.
+- SurroundingRectangle accepts buff, color, stroke_width and corner_radius.
+- FadeIn and FadeOut accept shift and scale.
+- Create, Write and FadeIn accept lag_ratio.
+
+Camera calls:
+- Use self.move_camera only with frame_center, zoom, phi, theta, run_time and added_anims.
+
+Moving to and from self:
+- Do not animate or reference an object after you have removed it and dropped it from self.
+- When you replace a stored object, reassign self.x to the new object, for example self.equation = merged_equation after TransformMatchingTex.
+
+Groups:
+- VGroup only accepts VMobjects. Never put a ValueTracker or a plain Mobject in a VGroup.
+- Do not FadeIn an always_redraw object; use self.add(obj).
+- Remove updaters or fade objects out when they are done.
+
+Indexing:
+- MathTex part indexing only works when the parts were passed as separate strings.
+- tex_to_color_map keys must appear as whole substrings.
+
+Text:
+- Keep LaTeX simple: \text{...}, \rightarrow, \times, \propto, subscripts. No custom packages.
+- Use Text for plain words and MathTex for math.
+
+Before finishing, mentally run each beat line by line:
+- Every name is imported.
+- Every attribute used is set earlier.
+- Every animation targets a mobject that exists.
+- No zero-length shapes appear.
+- All content, especially titles, stays inside x within ±6.3 and y between -2.8 and 3.5.
+
+====================================================================
+STRATEGY THAT SCORED 1.0
+====================================================================
+- One calm board whose main objects persist across beats and get dimmed, transformed or relabelled rather than replaced.
+- Beat 1: the title with Write, at font_size 48 to 60 and to_edge(UP) with the default buff. Then build the persistent picture piece by piece.
+- Later beats:
+  - FadeTransform the old title into a short headline, or fade the title out.
+  - Dim the background to 0.25.
+  - Introduce the new idea in the centre.
+- Small helper functions for repeated shapes, such as packet squares, boxes with labels, bars on a ruler, cylinders, mini-dials and name tags.
+- Diagram patterns that worked:
+  - A message-sequence chart: two vertical grey timelines with labels above, and slanted Arrows for messages. Create the arrow while a square moves along it.
+  - A service box with resource slots next to small qualitative graphs.
+  - A NumberLine ruler with bars grown with GrowFromEdge.
+- Use self.fit for long labels inside boxes.
+- Put a comment at the start of each beat saying what it shows.
+- End each beat with self.hold(0.6 to 1.5).
+
+====================================================================
+EXAMPLE
+====================================================================
+The file below explains the LoRA paper in this style. Copy its style, never its content. Note that its title is a two-line Text at font_size 44 with to_edge(UP); a single-line title can go up to 60.
 
 <example_scene>
 """
     + SCENE_CODER_EXAMPLE
     + "\n</example_scene>"
 )
+
 
 EDIT_FORMAT = """Fix the current file with the smallest edits that remove this failure. \
 Answer only with search/replace blocks in this exact format, as many as you need:
