@@ -4,8 +4,9 @@
 # The laptop never builds images. .github/workflows/build-images.yml builds
 # and pushes app-<sha7> and video-<sha7> for every push to main. This script
 # checks that both tags exist in ECR, pins them in
-# infra/image_tag.auto.tfvars and infra/video_image_tag.auto.tfvars, and runs
-# terraform apply. Run it from the main checkout, where the Terraform state
+# infra/image_tag.auto.tfvars and infra/video_image_tag.auto.tfvars, runs
+# terraform apply, and then tags the pair live-app and live-video so the ECR
+# lifecycle policy cannot expire the images that are running. Run it from the main checkout, where the Terraform state
 # lives. Extra arguments go to terraform apply.
 #
 # Usage: AWS_PROFILE=agentlab scripts/deploy_ci_images.sh
@@ -29,3 +30,20 @@ printf 'image_tag = "app-%s"\n' "${SHA}" > "${REPO_ROOT}/infra/image_tag.auto.tf
 printf 'video_image_tag = "video-%s"\n' "${SHA}" > "${REPO_ROOT}/infra/video_image_tag.auto.tfvars"
 echo "Pinned app-${SHA} and video-${SHA}."
 terraform -chdir="${REPO_ROOT}/infra" apply "$@"
+
+# Only after a successful apply: move live-app and live-video to the images the
+# task definitions now use. The lifecycle policy never expires an image with a
+# live- tag (infra/ecr.tf), so ten more pushes to main cannot delete what is
+# running. A failed or cancelled apply exits above and leaves the tags on the
+# images that are still live.
+for prefix in app video; do
+    image=(--repository-name agentlab --image-ids "imageTag=${prefix}-${SHA}")
+    manifest="$(aws ecr batch-get-image "${image[@]}" --query 'images[0].imageManifest' --output text)"
+    media="$(aws ecr batch-get-image "${image[@]}" --query 'images[0].imageManifestMediaType' --output text)"
+    if ! out="$(aws ecr put-image --repository-name agentlab --image-tag "live-${prefix}" \
+        --image-manifest "${manifest}" --image-manifest-media-type "${media}" 2>&1)"; then
+        # Re-running a deploy of the same commit finds the tag already there.
+        [[ "${out}" == *ImageAlreadyExistsException* ]] || { echo "${out}" >&2; exit 1; }
+    fi
+done
+echo "Tagged ${SHA} as live-app and live-video."
