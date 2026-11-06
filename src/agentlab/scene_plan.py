@@ -26,8 +26,8 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from agentlab.source_text import prepare_source
 
-DEFAULT_DEEP_READ_MODEL = "bedrock/global.anthropic.claude-sonnet-4-6"
-DEFAULT_PICK_MODEL = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
+DEFAULT_DEEP_READ_MODEL = "anthropic/claude-sonnet-5-5"
+DEFAULT_PICK_MODEL = "anthropic/claude-haiku-4-5"
 
 MAX_TITLE = 70
 MAX_CLAIM = 200
