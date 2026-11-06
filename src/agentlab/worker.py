@@ -96,8 +96,8 @@ TOPICS_EXHAUSTED_ID = "explain-topics-exhausted"
 DIGEST_URL_EXPIRY_SECONDS = 7 * 24 * 3600
 MODEL_CALL_TIMEOUT_SECONDS = 180
 LONG_COMPLETION_MAX_TOKENS = 32000
-DEFAULT_DEEP_READ_PRICE_MODEL = "bedrock/global.anthropic.claude-sonnet-4-6"
-DEFAULT_PICK_PRICE_MODEL = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
+DEFAULT_DEEP_READ_PRICE_MODEL = "global.anthropic.claude-sonnet-5-5"
+DEFAULT_PICK_PRICE_MODEL = "claude-haiku-4-5"
 
 
 def _require_env(name: str) -> str:

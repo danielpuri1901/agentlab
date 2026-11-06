@@ -38,7 +38,7 @@ from agentlab.proposals import (
 from agentlab.repo_files import CLASSICS_PATH, INTERESTS_PATH
 from agentlab.sources import gather
 
-DEFAULT_PROPOSER_MODEL = "bedrock/global.anthropic.claude-sonnet-4-6"
+DEFAULT_PROPOSER_MODEL = "anthropic/claude-sonnet-4-6"
 MAX_TITLE = 80
 MAX_WHY = 300
 MAX_CITATION = 300

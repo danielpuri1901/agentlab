@@ -40,7 +40,7 @@ from agentlab.profile import (
 )
 from agentlab.taste_eval import EvalResult, decide_swap, evaluate
 
-DEFAULT_CONSOLIDATE_MODEL = "bedrock/global.anthropic.claude-sonnet-4-6"
+DEFAULT_CONSOLIDATE_MODEL = "anthropic/claude-sonnet-4-6"
 MAX_PING_CHANGES = 8
 PING_BULLET_CHARS = 160
 MIN_NEW_EPISODES = 5
